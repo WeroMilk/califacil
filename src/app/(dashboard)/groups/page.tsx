@@ -1,0 +1,339 @@
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/hooks/useAuth';
+import { useGroups, useStudents } from '@/hooks/useGroups';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { 
+  Users, 
+  Plus, 
+  Trash2, 
+  UserPlus, 
+  Upload,
+  Loader2,
+  GraduationCap,
+  Search
+} from 'lucide-react';
+import { toast } from 'sonner';
+import Papa from 'papaparse';
+
+export default function GroupsPage() {
+  const { user } = useAuth();
+  const { groups, loading, createGroup, deleteGroup } = useGroups(user?.id);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  const handleCreateGroup = async () => {
+    if (!newGroupName.trim()) {
+      toast.error('El nombre del grupo es requerido');
+      return;
+    }
+
+    const group = await createGroup(newGroupName.trim());
+    if (group) {
+      toast.success('Grupo creado exitosamente');
+      setNewGroupName('');
+      setIsCreateDialogOpen(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    setIsDeleting(groupId);
+    const success = await deleteGroup(groupId);
+    if (success) {
+      toast.success('Grupo eliminado');
+      if (selectedGroup === groupId) {
+        setSelectedGroup(null);
+      }
+    }
+    setIsDeleting(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Grupos</h1>
+          <p className="text-gray-600 mt-1">Gestiona tus grupos y estudiantes</p>
+        </div>
+        <Button onClick={() => setIsCreateDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700">
+          <Plus className="w-4 h-4 mr-2" />
+          Nuevo Grupo
+        </Button>
+      </div>
+
+      {/* Groups Grid */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-orange-600" />
+        </div>
+      ) : groups.length === 0 ? (
+        <Card className="p-12 text-center">
+          <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-xl font-medium text-gray-900 mb-2">No hay grupos aún</h3>
+          <p className="text-gray-500 mb-6">Crea tu primer grupo para comenzar a organizar tus estudiantes</p>
+          <Button onClick={() => setIsCreateDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700">
+            <Plus className="w-4 h-4 mr-2" />
+            Crear Grupo
+          </Button>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Groups List */}
+          <div className="lg:col-span-1 space-y-4">
+            <h2 className="text-lg font-semibold text-gray-900">Mis Grupos</h2>
+            <div className="space-y-3">
+              {groups.map((group) => (
+                <Card 
+                  key={group.id} 
+                  className={`cursor-pointer transition-all ${
+                    selectedGroup === group.id 
+                      ? 'ring-2 ring-orange-500 shadow-md' 
+                      : 'hover:shadow-md'
+                  }`}
+                  onClick={() => setSelectedGroup(group.id)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+                          <GraduationCap className="w-5 h-5 text-orange-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-gray-900">{group.name}</h3>
+                          <p className="text-sm text-gray-500">
+                            Creado el {new Date(group.created_at).toLocaleDateString('es-ES')}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteGroup(group.id);
+                        }}
+                        disabled={isDeleting === group.id}
+                      >
+                        {isDeleting === group.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+
+          {/* Students Management */}
+          <div className="lg:col-span-2">
+            {selectedGroup ? (
+              <StudentsManager 
+                groupId={selectedGroup} 
+                groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
+              />
+            ) : (
+              <Card className="h-full flex items-center justify-center p-12">
+                <div className="text-center">
+                  <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Selecciona un grupo</h3>
+                  <p className="text-gray-500">Haz clic en un grupo para ver y gestionar sus estudiantes</p>
+                </div>
+              </Card>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Create Group Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Crear Nuevo Grupo</DialogTitle>
+            <DialogDescription>
+              Ingresa el nombre del grupo que deseas crear
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="groupName">Nombre del grupo</Label>
+              <Input
+                id="groupName"
+                placeholder="Ej: 1º A, 2º B, etc."
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateGroup} className="bg-orange-600 hover:bg-orange-700">
+              Crear Grupo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function StudentsManager({ groupId, groupName }: { groupId: string; groupName: string }) {
+  const { students, loading, addStudent, addStudentsBatch, deleteStudent } = useStudents(groupId);
+  const [newStudentName, setNewStudentName] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const handleAddStudent = async () => {
+    if (!newStudentName.trim()) return;
+    
+    setIsAdding(true);
+    const student = await addStudent(newStudentName.trim());
+    if (student) {
+      toast.success('Estudiante agregado');
+      setNewStudentName('');
+    }
+    setIsAdding(false);
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: async (results) => {
+        const names = results.data
+          .map((row: any) => row.nombre || row.name || row.Nombre || row.Name)
+          .filter(Boolean);
+        
+        if (names.length > 0) {
+          const added = await addStudentsBatch(names);
+          toast.success(`${added.length} estudiantes importados`);
+        }
+      },
+      error: (error) => {
+        toast.error('Error al procesar el archivo: ' + error.message);
+      },
+    });
+  };
+
+  const filteredStudents = students.filter(s => 
+    s.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Estudiantes - {groupName}</CardTitle>
+        <CardDescription>
+          {students.length} estudiantes en este grupo
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Add Student */}
+        <div className="flex gap-2">
+          <Input
+            placeholder="Nombre del estudiante"
+            value={newStudentName}
+            onChange={(e) => setNewStudentName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
+          />
+          <Button 
+            onClick={handleAddStudent} 
+            disabled={isAdding}
+            className="bg-orange-600 hover:bg-orange-700"
+          >
+            {isAdding ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <UserPlus className="w-4 h-4" />
+            )}
+          </Button>
+        </div>
+
+        {/* Import CSV */}
+        <div className="flex items-center gap-2">
+          <Label htmlFor="csvUpload" className="cursor-pointer">
+            <div className="flex items-center gap-2 text-sm text-orange-600 hover:text-orange-700">
+              <Upload className="w-4 h-4" />
+              Importar desde CSV
+            </div>
+          </Label>
+          <input
+            id="csvUpload"
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
+          <span className="text-xs text-gray-500">
+            (Formato: columna &quot;nombre&quot;)
+          </span>
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Buscar estudiante..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+
+        {/* Students List */}
+        {loading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-orange-600" />
+          </div>
+        ) : filteredStudents.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            {searchTerm ? 'No se encontraron estudiantes' : 'No hay estudiantes en este grupo'}
+          </div>
+        ) : (
+          <div className="border rounded-lg divide-y">
+            {filteredStudents.map((student) => (
+              <div 
+                key={student.id} 
+                className="flex items-center justify-between p-3 hover:bg-gray-50"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
+                    <span className="text-sm font-medium text-gray-600">
+                      {student.name.charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+                  <span className="font-medium">{student.name}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                  onClick={() => deleteStudent(student.id)}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
