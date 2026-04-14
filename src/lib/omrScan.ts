@@ -10,10 +10,10 @@ export const CALIFACIL_OMR_SCAN = {
   titleStripRatioOfBand: 0.16,
   /** Ancho relativo reservado a la columna del número de pregunta */
   qnumWidthRatio: 0.09,
-  /** Oscuridad mínima para considerar que hubo marca real */
-  minMarkDarkness: 0.26,
+  /** Intensidad mínima de relleno real (centro más oscuro que el anillo impreso) */
+  minMarkDarkness: 0.06,
   /** Ventaja mínima de la mejor burbuja contra la segunda */
-  minBestVsSecondGap: 0.08,
+  minBestVsSecondGap: 0.03,
 } as const;
 
 type ScanThresholds = {
@@ -41,6 +41,35 @@ function sampleDiskDarkness(
   for (let dy = -radiusPx; dy <= radiusPx; dy++) {
     for (let dx = -radiusPx; dx <= radiusPx; dx++) {
       if (dx * dx + dy * dy > r2) continue;
+      const x = Math.round(cx + dx);
+      const y = Math.round(cy + dy);
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+      sum += 1 - lum;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+function sampleAnnulusDarkness(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  innerRadiusPx: number,
+  outerRadiusPx: number
+): number {
+  let sum = 0;
+  let n = 0;
+  const in2 = innerRadiusPx * innerRadiusPx;
+  const out2 = outerRadiusPx * outerRadiusPx;
+  for (let dy = -outerRadiusPx; dy <= outerRadiusPx; dy++) {
+    for (let dx = -outerRadiusPx; dx <= outerRadiusPx; dx++) {
+      const d2 = dx * dx + dy * dy;
+      if (d2 > out2 || d2 < in2) continue;
       const x = Math.round(cx + dx);
       const y = Math.round(cy + dy);
       if (x < 0 || y < 0 || x >= width || y >= height) continue;
@@ -154,7 +183,26 @@ function scanCalifacilOmrCanvasDetailed(
     const scores: number[] = [];
     for (let c = 0; c < cols; c++) {
       const cx = bubbleAreaLeft + (c + 0.5) * cellW;
-      scores.push(sampleDiskDarkness(data, width, height, cx, cy, radiusPx));
+      const fillDark = sampleDiskDarkness(
+        data,
+        width,
+        height,
+        cx,
+        cy,
+        Math.max(2, Math.round(radiusPx * 0.5))
+      );
+      const ringDark = sampleAnnulusDarkness(
+        data,
+        width,
+        height,
+        cx,
+        cy,
+        Math.max(1, Math.round(radiusPx * 0.62)),
+        Math.max(2, Math.round(radiusPx))
+      );
+      // Burbuja vacía: anillo oscuro y centro claro => score bajo/negativo.
+      // Burbuja rellena: centro oscuro y diferencia positiva => score alto.
+      scores.push(fillDark - ringDark * 0.9);
     }
     const sorted = [...scores].sort((a, b) => b - a);
     const best = sorted[0] ?? 0;
@@ -177,6 +225,25 @@ function scanCalifacilOmrCanvasDetailed(
     confidenceSum += best + gap;
   }
   return { picks: out, resolvedCount, confidenceSum };
+}
+
+function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return 0;
+  const w = canvas.width;
+  const h = canvas.height;
+  const y0 = Math.max(0, Math.floor(h * (1 - CALIFACIL_OMR_SCAN.bottomBandRatio)));
+  const hh = Math.max(1, h - y0);
+  const id = ctx.getImageData(0, y0, w, hh);
+  const d = id.data;
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+    sum += 1 - lum;
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
 }
 
 /**
@@ -216,10 +283,11 @@ export function autoOrientCalifacilSheet(
   for (const angle of candidates) {
     const rotated = rotateCanvas(base, angle);
     const detail = scanCalifacilOmrCanvasDetailed(rotated, columns, {
-      minMarkDarkness: 0.2,
-      minBestVsSecondGap: 0.045,
+      minMarkDarkness: 0.04,
+      minBestVsSecondGap: 0.02,
     });
-    const score = detail.resolvedCount * 100 + detail.confidenceSum * 10;
+    const bandInk = estimateBottomBandInk(rotated);
+    const score = bandInk * 2000 + detail.resolvedCount * 100 + detail.confidenceSum * 10;
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = rotated;
@@ -233,10 +301,11 @@ export function autoOrientCalifacilSheet(
     if (delta === 0) continue;
     const tilted = rotateCanvasByDegrees(bestCanvas, delta);
     const detail = scanCalifacilOmrCanvasDetailed(tilted, columns, {
-      minMarkDarkness: 0.2,
-      minBestVsSecondGap: 0.045,
+      minMarkDarkness: 0.04,
+      minBestVsSecondGap: 0.02,
     });
-    const score = detail.resolvedCount * 100 + detail.confidenceSum * 10;
+    const bandInk = estimateBottomBandInk(tilted);
+    const score = bandInk * 2000 + detail.resolvedCount * 100 + detail.confidenceSum * 10;
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = tilted;
