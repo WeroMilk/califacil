@@ -14,8 +14,7 @@ import {
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
-import { fileToVisionJpegDataUrl } from '@/lib/imageCompress';
-import { fileToImage, scanCalifacilOmrSheet } from '@/lib/omrScan';
+import { autoOrientCalifacilSheet, fileToImage, scanCalifacilOmrSheet } from '@/lib/omrScan';
 import {
   calculatePercentage,
   getGradeColor,
@@ -176,74 +175,36 @@ export default function CalificarPage() {
 
     setScanBusy(true);
     try {
-      setPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return URL.createObjectURL(file);
-      });
-
       const chunk = sheets[sheetIndex] ?? [];
       const img = await fileToImage(file);
-      const raw = scanCalifacilOmrSheet(img, omrCols);
-
-      let visionSelections: Record<string, string> = {};
-      let scanNote = 'Revisa las respuestas detectadas y confirma antes de guardar.';
-      try {
-        const dataUrl = await fileToVisionJpegDataUrl(file);
-        const vr = await fetch('/api/calificar/vision-omr', {
-          method: 'POST',
-          headers: await dashboardAuthJsonHeaders(),
-          body: JSON.stringify({
-            examId: exam.id,
-            imageBase64: dataUrl,
-            omrColumnCount: omrCols,
-            rows: chunk.map((q, i) => ({
-              questionId: q.id,
-              globalNumber: sheetIndex * 10 + i + 1,
-              options: q.options ?? [],
-            })),
-          }),
+      const oriented = autoOrientCalifacilSheet(img, omrCols) ?? img;
+      const raw = scanCalifacilOmrSheet(oriented, omrCols);
+      if (oriented instanceof HTMLCanvasElement) {
+        const blob = await new Promise<Blob | null>((resolve) => {
+          oriented.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
         });
-        if (vr.ok) {
-          const j = (await vr.json()) as { selections?: Record<string, string> };
-          visionSelections = j.selections ?? {};
-          scanNote = 'IA leyó la foto; revisa y confirma antes de guardar.';
-        } else if (vr.status === 503) {
-          scanNote = 'Sin OPENAI_API_KEY en el servidor: solo lectura local del recuadro. Revisa y confirma.';
-        } else {
-          console.warn('vision-omr', await vr.json().catch(() => ({})));
-          scanNote = 'La IA no respondió bien; se usó lectura local. Revisa y confirma.';
-        }
-      } catch (visionErr) {
-        console.warn(visionErr);
-        scanNote = 'Sin conexión a la IA; lectura local. Revisa y confirma.';
+        setPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          if (!blob) return URL.createObjectURL(file);
+          return URL.createObjectURL(blob);
+        });
+      } else {
+        setPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return URL.createObjectURL(file);
+        });
       }
+      const scanNote = 'Lectura local del recuadro realizada. Revisa y confirma antes de guardar.';
 
       const nextDraft: Record<string, string> = {};
-      let disagreementCount = 0;
       let unresolvedCount = 0;
       for (let i = 0; i < chunk.length; i++) {
         const q = chunk[i];
         const opts = q.options ?? [];
-        let fromVision = visionSelections[q.id]?.trim() ?? '';
-        if (fromVision && !opts.includes(fromVision)) {
-          const hit = opts.find(
-            (o) => o.trim().toLowerCase() === fromVision.toLowerCase()
-          );
-          if (hit) fromVision = hit;
-        }
         const col = raw[i];
         const fromLocal = col !== null && col < opts.length ? opts[col] : '';
-
-        // Preferimos lectura local del recuadro porque es más estable con la plantilla.
-        // IA solo ayuda cuando local no logró detectar una burbuja clara.
         if (fromLocal) {
           nextDraft[q.id] = fromLocal;
-          if (fromVision && fromVision !== fromLocal) disagreementCount++;
-          continue;
-        }
-
-        if (fromVision && opts.includes(fromVision)) {
-          nextDraft[q.id] = fromVision;
           continue;
         }
 
@@ -251,12 +212,20 @@ export default function CalificarPage() {
         unresolvedCount++;
       }
 
+      const resolvedCount = chunk.length - unresolvedCount;
+      const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
+      if (resolvedCount < minResolved) {
+        setDraftSelections({});
+        setPhase('capturar');
+        toast.error(
+          'La foto no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y encuadra solo la banda CaliFacil.'
+        );
+        return;
+      }
+
       setDraftSelections(nextDraft);
       setPhase('revisar_hoja');
       const detailParts: string[] = [];
-      if (disagreementCount > 0) {
-        detailParts.push(`${disagreementCount} con diferencia IA/local`);
-      }
       if (unresolvedCount > 0) {
         detailParts.push(`${unresolvedCount} sin lectura clara`);
       }
