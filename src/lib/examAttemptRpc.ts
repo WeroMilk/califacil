@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 
+/** Intentos (exam_attempts). La API /api/grade/open-answer valida con `validate_open_answer_attempt` (migración 20250413100000). */
+
 export type AttemptGetResult = {
   ok?: boolean;
   error?: string;

@@ -65,16 +65,16 @@ export default function LoginPage() {
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
       <div className="flex min-h-0 flex-1 items-center justify-center px-2 py-1 sm:px-4 sm:py-3 lg:px-8">
-        <div className="flex h-full max-h-full w-full max-w-md flex-col justify-center gap-2 min-[900px]:max-h-[min(100dvh,36rem)] min-[900px]:max-w-4xl min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-center min-[900px]:gap-10">
-          <div className="flex shrink-0 justify-center min-[900px]:w-[40%] min-[900px]:py-2">
+        <div className="flex h-full max-h-full w-full max-w-md flex-col justify-center gap-2 sm:max-w-lg sm:gap-3 md:max-w-xl">
+          <div className="flex shrink-0 justify-center">
             <BrandWordmark
               priority
-              className="min-[900px]:justify-center"
-              imgClassName="h-11 w-auto max-w-[min(92vw,24rem)] object-contain sm:h-14 min-[900px]:h-24 min-[900px]:max-w-[28rem]"
+              className="justify-center"
+              imgClassName="h-[4.25rem] w-auto max-w-[min(94vw,26rem)] object-contain sm:h-14 md:h-16"
             />
           </div>
 
-          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-xl min-[900px]:max-h-[min(100dvh-2rem,34rem)] min-[900px]:w-[min(100%,24rem)] min-[900px]:flex-none min-[900px]:overflow-visible">
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-xl">
             <CardHeader className="space-y-0.5 px-4 pb-2 pt-3 sm:px-6 sm:pb-3 sm:pt-5">
               <CardTitle className="text-center text-lg font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
               <CardDescription className="text-center text-xs sm:text-sm">
@@ -82,8 +82,8 @@ export default function LoginPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2.5 px-4 pb-3 pt-0 sm:space-y-3 sm:px-6 sm:pb-5">
-              <form onSubmit={handleSubmit} className="space-y-2.5 sm:space-y-3 min-[900px]:grid min-[900px]:grid-cols-2 min-[900px]:gap-4">
-                <div className="space-y-1 min-[900px]:col-span-1">
+              <form onSubmit={handleSubmit} className="space-y-2.5 sm:space-y-3">
+                <div className="space-y-1">
                   <Label htmlFor="email" className="text-xs sm:text-sm">
                     Correo electrónico
                   </Label>
@@ -100,7 +100,7 @@ export default function LoginPage() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1 min-[900px]:col-span-1">
+                <div className="space-y-1">
                   <Label htmlFor="password" className="text-xs sm:text-sm">
                     Contraseña
                   </Label>
@@ -119,7 +119,7 @@ export default function LoginPage() {
                 </div>
                 <Button
                   type="submit"
-                  className="h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 min-[900px]:col-span-2 sm:h-10"
+                  className="h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 sm:h-10"
                   disabled={loading}
                 >
                   {loading ? (

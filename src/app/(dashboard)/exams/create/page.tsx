@@ -79,7 +79,7 @@ export default function CreateExamPage() {
     try {
       const response = await fetch('/api/generate-questions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await dashboardAuthJsonHeaders(),
         body: JSON.stringify({
           topics: topics.trim(),
           count: questionCount,
@@ -90,7 +90,11 @@ export default function CreateExamPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Error al generar preguntas');
+        if (response.status === 401) {
+          throw new Error('Sesión expirada. Inicia sesión de nuevo.');
+        }
+        const errBody = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new Error(errBody.message || errBody.error || 'Error al generar preguntas');
       }
 
       const data = await response.json();

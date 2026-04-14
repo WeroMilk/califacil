@@ -177,7 +177,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="hidden min-h-0 flex-1 flex-col overflow-hidden sm:flex">
         <div className="mb-2 flex shrink-0 items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-900 sm:text-base">Recientes</h2>
           <Link href="/exams">

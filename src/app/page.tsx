@@ -25,7 +25,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-between gap-1 overflow-hidden px-3 py-2 sm:justify-center sm:gap-3 sm:px-6 sm:py-4 lg:px-10 lg:py-5">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-center gap-3 overflow-hidden px-3 py-2 sm:gap-4 sm:px-6 sm:py-4 lg:px-10 lg:py-5">
           <div className="shrink-0">
             <div className="mx-auto w-full max-w-3xl text-center lg:max-w-4xl">
               <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
@@ -61,8 +61,8 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-1.5 sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
-            <div className="flex flex-row items-start gap-2 rounded-lg border border-orange-100/80 bg-white/80 p-2 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
                 <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
@@ -75,7 +75,7 @@ export default function LandingPage() {
                 </p>
               </div>
             </div>
-            <div className="flex flex-row items-start gap-2 rounded-lg border border-orange-100/80 bg-white/80 p-2 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
                 <QrCode className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
@@ -87,7 +87,7 @@ export default function LandingPage() {
                 </p>
               </div>
             </div>
-            <div className="flex flex-row items-start gap-2 rounded-lg border border-orange-100/80 bg-white/80 p-2 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-200/70 text-orange-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
                 <BarChart3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>

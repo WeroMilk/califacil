@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 
 export const maxDuration = 60;
 
@@ -14,6 +15,9 @@ type RowMeta = {
  */
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ('response' in auth) return auth.response;
+
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
       return NextResponse.json(
@@ -23,15 +27,47 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
+    const examId: string = body.examId;
     const imageBase64: string = body.imageBase64;
     const rows: RowMeta[] = body.rows;
     const omrColumnCount: number = Number(body.omrColumnCount) || 4;
 
+    if (!examId || typeof examId !== 'string') {
+      return NextResponse.json({ error: 'Falta examId' }, { status: 400 });
+    }
     if (!imageBase64 || typeof imageBase64 !== 'string') {
       return NextResponse.json({ error: 'Falta imageBase64' }, { status: 400 });
     }
     if (!Array.isArray(rows) || rows.length === 0 || rows.length > 10) {
       return NextResponse.json({ error: 'rows inválido (1–10)' }, { status: 400 });
+    }
+
+    const questionIds = Array.from(new Set(rows.map((r) => r.questionId).filter(Boolean)));
+    if (questionIds.length !== rows.length) {
+      return NextResponse.json({ error: 'Filas de preguntas duplicadas o inválidas' }, { status: 400 });
+    }
+
+    const { data: examRow, error: examErr } = await auth.supabase
+      .from('exams')
+      .select('id')
+      .eq('id', examId)
+      .single();
+
+    if (examErr || !examRow) {
+      return NextResponse.json({ error: 'Examen no encontrado o sin permiso' }, { status: 404 });
+    }
+
+    const { data: qRows, error: qErr } = await auth.supabase
+      .from('questions')
+      .select('id')
+      .eq('exam_id', examId)
+      .in('id', questionIds);
+
+    if (qErr || !qRows || qRows.length !== questionIds.length) {
+      return NextResponse.json(
+        { error: 'Las preguntas no coinciden con el examen' },
+        { status: 400 }
+      );
     }
 
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.slice(0, Math.min(5, Math.max(2, omrColumnCount)));

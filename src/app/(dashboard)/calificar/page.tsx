@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import {
   chunkQuestions,
   califacilOmrColumnCount,
@@ -28,6 +29,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { Exam, Question, Student } from '@/types';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 type Phase =
   | 'elegir'
@@ -174,8 +176,9 @@ export default function CalificarPage() {
         const dataUrl = await fileToVisionJpegDataUrl(file);
         const vr = await fetch('/api/calificar/vision-omr', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await dashboardAuthJsonHeaders(),
           body: JSON.stringify({
+            examId: exam.id,
             imageBase64: dataUrl,
             omrColumnCount: omrCols,
             rows: chunk.map((q, i) => ({
@@ -282,15 +285,8 @@ export default function CalificarPage() {
     try {
       const studentId = selectedStudentId;
 
-      const { error: delErr } = await supabase
-        .from('answers')
-        .delete()
-        .eq('exam_id', examId)
-        .eq('student_id', studentId);
-      if (delErr) throw delErr;
-
       let correctCount = 0;
-      const answersToInsert = questions.map((question: Question) => {
+      const rows = questions.map((question: Question) => {
         const answerText = merged[question.id];
         const isCorrect =
           question.type === 'multiple_choice' ? answerText === question.correct_answer : null;
@@ -306,7 +302,9 @@ export default function CalificarPage() {
         };
       });
 
-      const { error: answersError } = await supabase.from('answers').insert(answersToInsert);
+      const { error: answersError } = await supabase.from('answers').upsert(rows, {
+        onConflict: 'exam_id,student_id,question_id',
+      });
       if (answersError) throw answersError;
 
       const mcTotal = questions.filter((q) => q.type === 'multiple_choice').length;
@@ -316,8 +314,14 @@ export default function CalificarPage() {
       setResultPct(pct);
       setPhase('resultado');
       toast.success('Calificación guardada. Ya aparece en resultados.');
-    } catch {
-      toast.error('No se pudo guardar. Revisa tu conexión y permisos.');
+       } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message: string }).message)
+          : '';
+      toast.error('No se pudo guardar', {
+        description: msg ? toSpanishAuthMessage(msg) : 'Revisa tu conexión y permisos.',
+      });
       setPhase('revisar_hoja');
     }
   };

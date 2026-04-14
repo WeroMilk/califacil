@@ -79,8 +79,12 @@ export default function ExamResultsPage() {
       }, {} as Record<string, Answer[]>);
 
       const results: StudentResult[] = Object.entries(answersByStudent).map(([studentId, studentAnswers]) => {
-        const totalScore = studentAnswers.reduce((sum, a) => sum + (a.score || 0), 0);
         const maxScore = exam.questions.length;
+        const totalScore = exam.questions.reduce((sum, q) => {
+          const a = studentAnswers.find((x) => x.question_id === q.id);
+          const sc = a?.score;
+          return sum + (typeof sc === 'number' ? sc : 0);
+        }, 0);
         const name = studentNamesById[studentId]?.trim();
         return {
           studentId,

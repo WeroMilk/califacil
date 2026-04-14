@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 
 const DIFFICULTY_LEVELS = ['easy', 'medium', 'hard', 'extreme'] as const;
 type Difficulty = (typeof DIFFICULTY_LEVELS)[number];
@@ -23,6 +24,9 @@ function difficultyInstructions(level: string): string {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireSessionUser(request);
+    if ('response' in auth) return auth.response;
+
     const {
       topics,
       count,

@@ -80,25 +80,25 @@ export default function RegisterPage() {
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
       <div className="flex min-h-0 flex-1 items-center justify-center px-2 py-1 sm:px-4 sm:py-3 lg:px-8">
-        <div className="flex h-full max-h-full w-full max-w-md flex-col justify-center gap-2 min-[900px]:max-h-[min(100dvh,44rem)] min-[900px]:max-w-5xl min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-center min-[900px]:gap-10">
-          <div className="flex shrink-0 justify-center min-[900px]:w-[40%] min-[900px]:shrink min-[900px]:py-2">
+        <div className="flex h-full max-h-full w-full max-w-md flex-col justify-center gap-2 sm:max-w-lg sm:gap-3 md:max-w-xl">
+          <div className="flex shrink-0 justify-center">
             <BrandWordmark
               priority
-              className="min-[900px]:justify-center"
-              imgClassName="h-11 w-auto max-w-[min(92vw,24rem)] object-contain sm:h-14 min-[900px]:h-24 min-[900px]:max-w-[28rem]"
+              className="justify-center"
+              imgClassName="h-[4.25rem] w-auto max-w-[min(94vw,26rem)] object-contain sm:h-14 md:h-16"
             />
           </div>
 
-          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-xl min-[900px]:max-h-[min(100dvh-2rem,40rem)] min-[900px]:w-[min(100%,28rem)] min-[900px]:flex-none min-[900px]:overflow-visible">
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-xl">
             <CardHeader className="space-y-0.5 px-4 pb-2 pt-3 sm:px-6 sm:pb-3 sm:pt-5">
               <CardTitle className="text-center text-lg font-bold sm:text-2xl">Crear Cuenta</CardTitle>
               <CardDescription className="text-center text-xs sm:text-sm">
                 Regístrate como maestro para comenzar
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-0 sm:px-6 sm:pb-5 min-[900px]:flex-none">
-              <form onSubmit={handleSubmit} className="flex flex-col gap-2.5 sm:gap-3 min-[900px]:grid min-[900px]:grid-cols-2 min-[900px]:gap-x-4 min-[900px]:gap-y-3">
-                <div className="space-y-1 min-[900px]:col-span-1">
+            <CardContent className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-0 sm:px-6 sm:pb-5">
+              <form onSubmit={handleSubmit} className="flex flex-col gap-2.5 sm:gap-3">
+                <div className="space-y-1">
                   <Label htmlFor="name" className="text-xs sm:text-sm">
                     Nombre completo
                   </Label>
@@ -115,7 +115,7 @@ export default function RegisterPage() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1 min-[900px]:col-span-1">
+                <div className="space-y-1">
                   <Label htmlFor="email" className="text-xs sm:text-sm">
                     Correo electrónico
                   </Label>
@@ -132,7 +132,7 @@ export default function RegisterPage() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1 min-[900px]:col-span-1">
+                <div className="space-y-1">
                   <Label htmlFor="password" className="text-xs sm:text-sm">
                     Contraseña
                   </Label>
@@ -149,7 +149,7 @@ export default function RegisterPage() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1 min-[900px]:col-span-1">
+                <div className="space-y-1">
                   <Label htmlFor="confirmPassword" className="text-xs sm:text-sm">
                     Confirmar contraseña
                   </Label>
@@ -168,7 +168,7 @@ export default function RegisterPage() {
                 </div>
                 <Button
                   type="submit"
-                  className="mt-1 h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 min-[900px]:col-span-2 sm:h-10"
+                  className="mt-1 h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 sm:h-10"
                   disabled={loading}
                 >
                   {loading ? (

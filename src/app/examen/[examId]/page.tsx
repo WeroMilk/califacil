@@ -417,12 +417,22 @@ export default function StudentExamPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                examId,
+                studentId,
+                clientSession: clientSessionToken,
+                questionId: question.id,
                 questionText: question.text,
                 referenceAnswer: question.correct_answer,
                 studentAnswer: answerText,
               }),
             });
-            if (res.status === 503) {
+            const payload = (await res.json().catch(() => ({}))) as {
+              code?: string;
+              score?: number;
+              is_correct?: boolean;
+            };
+
+            if (res.status === 503 && payload.code === 'NO_KEY') {
               openSkippedAi = true;
               return {
                 exam_id: examId,
@@ -445,8 +455,7 @@ export default function StudentExamPage() {
                 _points: 0,
               };
             }
-            const j = (await res.json()) as { score?: number; is_correct?: boolean };
-            const sc = j.score === 1 ? 1 : 0;
+            const sc = payload.score === 1 ? 1 : 0;
             return {
               exam_id: examId,
               student_id: studentId,
