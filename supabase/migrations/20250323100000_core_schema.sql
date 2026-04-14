@@ -1,4 +1,5 @@
 -- Esquema principal CaliFácil + RLS (ejecutar antes de 20250323120000_exam_attempts.sql en BD nueva).
+-- Si el navegador muestra 404 en .../rest/v1/groups o .../rest/v1/exams, estas tablas no existen: pega este archivo en Supabase → SQL Editor → Run.
 -- En proyectos ya existentes: revisar conflictos con tablas/políticas creadas a mano.
 
 -- ---------------------------------------------------------------------------

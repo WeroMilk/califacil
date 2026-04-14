@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroups } from '@/hooks/useGroups';
@@ -40,11 +40,14 @@ export default function CreateExamPage() {
   const router = useRouter();
   const { user } = useAuth();
   const { groups } = useGroups(user?.id);
-  const { createExam } = useExams(user?.id);
+  const { createExam, deleteExam } = useExams(user?.id);
   
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  /** Evita varios createExam antes de que React re-renderice con loading=true (doble toque / triple clic). */
+  const saveExamLockRef = useRef(false);
+  const generateLockRef = useRef(false);
   
   // Step 1: General Info
   const [title, setTitle] = useState('');
@@ -68,6 +71,8 @@ export default function CreateExamPage() {
       toast.error('Describe los temas para generar preguntas');
       return;
     }
+    if (generateLockRef.current) return;
+    generateLockRef.current = true;
 
     setGenerating(true);
     try {
@@ -96,6 +101,7 @@ export default function CreateExamPage() {
         description: error.message,
       });
     } finally {
+      generateLockRef.current = false;
       setGenerating(false);
     }
   };
@@ -110,6 +116,8 @@ export default function CreateExamPage() {
       toast.error('Debes generar al menos una pregunta');
       return;
     }
+    if (saveExamLockRef.current) return;
+    saveExamLockRef.current = true;
 
     setLoading(true);
     try {
@@ -122,7 +130,9 @@ export default function CreateExamPage() {
       });
 
       if (!exam) {
-        throw new Error('Error al crear el examen');
+        throw new Error(
+          'No se pudo crear el examen. En Supabase, ejecuta las migraciones del proyecto (supabase/migrations), especialmente 20250323100000_core_schema.sql.'
+        );
       }
 
       // Add questions
@@ -140,20 +150,37 @@ export default function CreateExamPage() {
         body: JSON.stringify({ questions: questionsToAdd }),
       });
 
+      const resBody = (await response.json().catch(() => ({}))) as {
+        message?: string;
+        error?: string;
+        hint?: string;
+      };
+
       if (!response.ok) {
+        await deleteExam(exam.id);
         if (response.status === 401) {
           throw new Error('Sesión expirada. Inicia sesión de nuevo.');
         }
-        throw new Error('Error al guardar las preguntas');
+        if (response.status === 404) {
+          throw new Error(
+            'No se encontró el examen o no tienes permiso. Revisa Supabase y las migraciones.'
+          );
+        }
+        const detail = [resBody.message, resBody.hint].filter(Boolean).join(' — ');
+        throw new Error(detail || resBody.error || 'Error al guardar las preguntas');
       }
 
       toast.success('Examen creado exitosamente');
       router.push(`/exams/${exam.id}`);
     } catch (error: any) {
+      const msg = error?.message ?? 'Error desconocido';
+      const longHint = /migraciones|Supabase|schema|relation/i.test(msg);
       toast.error('Error al guardar el examen', {
-        description: error.message,
+        description: msg,
+        duration: longHint ? 14_000 : 6_000,
       });
     } finally {
+      saveExamLockRef.current = false;
       setLoading(false);
     }
   };
@@ -384,8 +411,8 @@ export default function CreateExamPage() {
           )}
 
           {currentStep === 3 && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
+            <div className="flex min-h-0 flex-col gap-4">
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
                 <h3 className="text-lg font-semibold">
                   Preguntas Generadas ({generatedQuestions.length})
                 </h3>
@@ -399,9 +426,9 @@ export default function CreateExamPage() {
                 </Button>
               </div>
 
-              <div className="space-y-4 max-h-96 overflow-y-auto">
+              <div className="min-h-[12rem] max-h-[min(70vh,32rem)] space-y-4 overflow-y-auto overscroll-y-contain scroll-pt-2 py-2 pl-0.5 pr-2 [scrollbar-gutter:stable]">
                 {generatedQuestions.map((question, index) => (
-                  <Card key={index} className="border-l-4 border-l-orange-500">
+                  <Card key={index} className="scroll-mt-2 border-l-4 border-l-orange-500">
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1">
@@ -463,13 +490,14 @@ export default function CreateExamPage() {
                 ))}
               </div>
 
-              <div className="flex justify-between">
+              <div className="flex shrink-0 justify-between gap-2 border-t border-gray-100 pt-4">
                 <Button variant="outline" onClick={() => setCurrentStep(2)}>
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Anterior
                 </Button>
                 <Button 
-                  onClick={handleSaveExam}
+                  type="button"
+                  onClick={() => void handleSaveExam()}
                   disabled={loading || generatedQuestions.length === 0}
                   className="bg-orange-600 hover:bg-orange-700"
                 >
