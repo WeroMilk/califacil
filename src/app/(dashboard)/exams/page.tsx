@@ -55,23 +55,25 @@ export default function ExamsPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Exámenes</h1>
-          <p className="text-gray-600 mt-1">Gestiona tus exámenes y visualiza los resultados</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Exámenes</h1>
+          <p className="mt-0.5 text-sm text-gray-600 sm:mt-1 sm:text-base">
+            Gestiona tus exámenes y visualiza los resultados
+          </p>
         </div>
-        <Link href="/exams/create">
-          <Button className="bg-orange-600 hover:bg-orange-700">
-            <Plus className="w-4 h-4 mr-2" />
+        <Link href="/exams/create" className="shrink-0">
+          <Button className="h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 sm:h-10 sm:w-auto">
+            <Plus className="mr-2 h-4 w-4" />
             Nuevo Examen
           </Button>
         </Link>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
@@ -81,14 +83,14 @@ export default function ExamsPage() {
             className="pl-10"
           />
         </div>
-        <div className="flex gap-2">
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto pb-1 pt-0.5 sm:mx-0 sm:flex-wrap sm:gap-2 sm:overflow-visible sm:pb-0">
           {(['all', 'draft', 'published', 'closed'] as const).map((status) => (
             <Button
               key={status}
               variant={filterStatus === status ? 'default' : 'outline'}
               size="sm"
               onClick={() => setFilterStatus(status)}
-              className={filterStatus === status ? 'bg-orange-600 hover:bg-orange-700' : ''}
+              className={`shrink-0 text-xs sm:text-sm ${filterStatus === status ? 'bg-orange-600 hover:bg-orange-700' : ''}`}
             >
               {status === 'all' ? 'Todos' : 
                status === 'draft' ? 'Borradores' : 

@@ -12,6 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/hooks/useAuth';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { Mail, Lock, Loader2 } from 'lucide-react';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -28,14 +29,16 @@ export default function LoginPage() {
       const { error } = await signIn(email, password);
       if (error) {
         toast.error('Error al iniciar sesión', {
-          description: error.message,
+          description: toSpanishAuthMessage(error.message),
         });
       } else {
         toast.success('¡Bienvenido de vuelta!');
         router.push('/dashboard');
       }
-    } catch (err) {
-      toast.error('Error inesperado');
+    } catch {
+      toast.error('Error inesperado', {
+        description: 'Inténtalo de nuevo en unos momentos.',
+      });
     } finally {
       setLoading(false);
     }
@@ -47,126 +50,136 @@ export default function LoginPage() {
       const { error } = await signInWithGoogle();
       if (error) {
         toast.error('Error al iniciar sesión con Google', {
-          description: error.message,
+          description: toSpanishAuthMessage(error.message),
         });
       }
-    } catch (err) {
-      toast.error('Error inesperado');
+    } catch {
+      toast.error('Error inesperado', {
+        description: 'Inténtalo de nuevo en unos momentos.',
+      });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex h-full min-h-0 items-start justify-center overflow-y-auto bg-white/35 p-3 pb-6 pt-4 backdrop-blur-[2px] app-scroll sm:p-4 sm:pb-8 sm:pt-6 md:pt-8 lg:pt-10">
-      <div className="w-full max-w-md">
-        <div className="mb-6 flex justify-center px-1 sm:mb-7">
-          <BrandWordmark
-            priority
-            imgClassName="h-20 w-auto max-w-[min(100%,28rem)] object-contain sm:h-24 sm:max-w-[32rem] lg:h-28 lg:max-w-[36rem]"
-          />
-        </div>
+    <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-2 py-1 sm:px-4 sm:py-3 lg:px-8">
+        <div className="flex h-full max-h-full w-full max-w-md flex-col justify-center gap-2 min-[900px]:max-h-[min(100dvh,36rem)] min-[900px]:max-w-4xl min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-center min-[900px]:gap-10">
+          <div className="flex shrink-0 justify-center min-[900px]:w-[40%] min-[900px]:py-2">
+            <BrandWordmark
+              priority
+              className="min-[900px]:justify-center"
+              imgClassName="h-11 w-auto max-w-[min(92vw,24rem)] object-contain sm:h-14 min-[900px]:h-24 min-[900px]:max-w-[28rem]"
+            />
+          </div>
 
-        <Card className="border-0 shadow-xl">
-          <CardHeader className="space-y-1 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
-            <CardTitle className="text-2xl font-bold text-center">Iniciar Sesión</CardTitle>
-            <CardDescription className="text-center">
-              Ingresa tus credenciales para acceder a tu cuenta
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 px-5 pb-5 sm:px-6 sm:pb-6">
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Correo electrónico</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="maestro@escuela.edu"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="pl-10"
-                    required
-                  />
+          <Card className="flex min-h-0 flex-1 flex-col overflow-hidden border-0 shadow-xl min-[900px]:max-h-[min(100dvh-2rem,34rem)] min-[900px]:w-[min(100%,24rem)] min-[900px]:flex-none min-[900px]:overflow-visible">
+            <CardHeader className="space-y-0.5 px-4 pb-2 pt-3 sm:px-6 sm:pb-3 sm:pt-5">
+              <CardTitle className="text-center text-lg font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
+              <CardDescription className="text-center text-xs sm:text-sm">
+                Ingresa tus credenciales para acceder a tu cuenta
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2.5 px-4 pb-3 pt-0 sm:space-y-3 sm:px-6 sm:pb-5">
+              <form onSubmit={handleSubmit} className="space-y-2.5 sm:space-y-3 min-[900px]:grid min-[900px]:grid-cols-2 min-[900px]:gap-4">
+                <div className="space-y-1 min-[900px]:col-span-1">
+                  <Label htmlFor="email" className="text-xs sm:text-sm">
+                    Correo electrónico
+                  </Label>
+                  <div className="relative">
+                    <Mail className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="maestro@escuela.edu"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="h-9 pl-9 text-sm sm:h-10"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1 min-[900px]:col-span-1">
+                  <Label htmlFor="password" className="text-xs sm:text-sm">
+                    Contraseña
+                  </Label>
+                  <div className="relative">
+                    <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
+                    <Input
+                      id="password"
+                      type="password"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="h-9 pl-9 text-sm sm:h-10"
+                      required
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="submit"
+                  className="h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 min-[900px]:col-span-2 sm:h-10"
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Iniciando sesión...
+                    </>
+                  ) : (
+                    'Iniciar Sesión'
+                  )}
+                </Button>
+              </form>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <Separator className="w-full" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase sm:text-xs">
+                  <span className="bg-white px-2 text-gray-500">O continúa con</span>
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Contraseña</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="pl-10"
-                    required
-                  />
-                </div>
-              </div>
+
               <Button
-                type="submit"
-                className="w-full bg-orange-600 hover:bg-orange-700"
+                type="button"
+                variant="outline"
+                className="h-9 w-full text-sm sm:h-10"
+                onClick={handleGoogleSignIn}
                 disabled={loading}
               >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Iniciando sesión...
-                  </>
-                ) : (
-                  'Iniciar Sesión'
-                )}
+                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                  <path
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    fill="#4285F4"
+                  />
+                  <path
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    fill="#34A853"
+                  />
+                  <path
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                    fill="#FBBC05"
+                  />
+                  <path
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                    fill="#EA4335"
+                  />
+                </svg>
+                Google
               </Button>
-            </form>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator className="w-full" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-gray-500">O continúa con</span>
-              </div>
-            </div>
-
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={handleGoogleSignIn}
-              disabled={loading}
-            >
-              <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                <path
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  fill="#4285F4"
-                />
-                <path
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  fill="#34A853"
-                />
-                <path
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                  fill="#FBBC05"
-                />
-                <path
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                  fill="#EA4335"
-                />
-              </svg>
-              Google
-            </Button>
-          </CardContent>
-          <CardFooter className="flex justify-center px-5 pb-5 pt-0 sm:px-6 sm:pb-6">
-            <p className="text-center text-sm text-gray-600">
-              ¿No tienes cuenta?{' '}
-              <Link href="/register" className="text-orange-600 hover:underline font-medium">
-                Regístrate aquí
-              </Link>
-            </p>
-          </CardFooter>
-        </Card>
+            </CardContent>
+            <CardFooter className="flex justify-center px-4 pb-3 pt-0 sm:px-6 sm:pb-4">
+              <p className="text-center text-xs text-gray-600 sm:text-sm">
+                ¿No tienes cuenta?{' '}
+                <Link href="/register" className="font-medium text-orange-600 hover:underline">
+                  Regístrate aquí
+                </Link>
+              </p>
+            </CardFooter>
+          </Card>
+        </div>
       </div>
     </div>
   );

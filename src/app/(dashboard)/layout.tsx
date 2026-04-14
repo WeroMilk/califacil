@@ -17,6 +17,7 @@ import {
 import { LayoutDashboard, Users, FileText, LogOut, UserRound, Camera } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 function navActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') return pathname === '/dashboard';
@@ -42,7 +43,9 @@ export default function DashboardLayout({
   const handleSignOut = async () => {
     const { error } = await signOut();
     if (error) {
-      toast.error('Error al cerrar sesión');
+      toast.error('Error al cerrar sesión', {
+        description: toSpanishAuthMessage(error.message),
+      });
     } else {
       toast.success('Sesión cerrada');
       router.push('/login');
@@ -116,11 +119,13 @@ export default function DashboardLayout({
             className="flex items-center justify-between gap-2 px-3 py-2"
             style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
           >
-            <BrandWordmark
-              href="/dashboard"
-              priority
-              imgClassName="h-12 w-auto max-w-[min(58vw,14rem)] object-contain sm:h-[3.25rem]"
-            />
+            <span className="inline-flex max-h-10 origin-left scale-[1.14] items-center overflow-hidden sm:max-h-11 sm:scale-100">
+              <BrandWordmark
+                href="/dashboard"
+                priority
+                imgClassName="h-11 w-auto max-w-[min(64vw,15rem)] object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
+              />
+            </span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="ghost" size="icon" className="shrink-0 rounded-full" aria-label="Cuenta">

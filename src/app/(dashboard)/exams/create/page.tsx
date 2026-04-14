@@ -27,6 +27,7 @@ import {
 import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 const NO_GROUP_VALUE = '__none__';
 
@@ -98,7 +99,7 @@ export default function CreateExamPage() {
       toast.success(`${data.questions.length} preguntas generadas`);
     } catch (error: any) {
       toast.error('Error al generar preguntas', {
-        description: error.message,
+        description: toSpanishAuthMessage(error?.message),
       });
     } finally {
       generateLockRef.current = false;
@@ -173,7 +174,7 @@ export default function CreateExamPage() {
       toast.success('Examen creado exitosamente');
       router.push(`/exams/${exam.id}`);
     } catch (error: any) {
-      const msg = error?.message ?? 'Error desconocido';
+      const msg = toSpanishAuthMessage(error?.message ?? 'Error desconocido');
       const longHint = /migraciones|Supabase|schema|relation/i.test(msg);
       toast.error('Error al guardar el examen', {
         description: msg,

@@ -17,10 +17,12 @@ import {
   Upload,
   Loader2,
   GraduationCap,
-  Search
+  Search,
+  Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseStudentNamesFromImportFile } from '@/lib/studentImport';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 export default function GroupsPage() {
   const { user } = useAuth();
@@ -57,16 +59,18 @@ export default function GroupsPage() {
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-3 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-3xl font-bold text-gray-900">Grupos</h1>
-          <p className="mt-1 text-gray-600">Gestiona tus grupos y estudiantes</p>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Grupos</h1>
+          <p className="mt-0.5 text-sm text-gray-600 sm:mt-1 sm:text-base">
+            Gestiona tus grupos y estudiantes
+          </p>
         </div>
         <Button
           onClick={() => setIsCreateDialogOpen(true)}
-          className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
+          className="h-9 w-full bg-orange-600 text-sm hover:bg-orange-700 sm:h-10 sm:w-auto"
         >
           <Plus className="mr-2 h-4 w-4" />
           Nuevo Grupo
@@ -220,14 +224,18 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     try {
       const names = await parseStudentNamesFromImportFile(file);
       if (names.length === 0) {
-        toast.error('No se encontraron nombres. Usa una columna "nombre" (o la primera columna).');
+        toast.error(
+          'No se encontraron nombres. Descarga la plantilla, complétala con un nombre por fila y súbela de nuevo.'
+        );
         return;
       }
       const added = await addStudentsBatch(names);
       toast.success(`${added.length} estudiantes importados`);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Error desconocido';
-      toast.error('Error al procesar el archivo: ' + msg);
+      const msg = error instanceof Error ? error.message : '';
+      toast.error('Error al procesar el archivo', {
+        description: toSpanishAuthMessage(msg) || 'Revisa que sea la plantilla de CaliFácil y vuelve a intentarlo.',
+      });
     }
   };
 
@@ -268,24 +276,37 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
           </Button>
         </div>
 
-        {/* Import Excel / CSV */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Label htmlFor="studentImportUpload" className="cursor-pointer">
-            <div className="flex items-center gap-2 text-sm text-orange-600 hover:text-orange-700">
-              <Upload className="w-4 h-4" />
-              Importar Excel o CSV
-            </div>
-          </Label>
-          <input
-            id="studentImportUpload"
-            type="file"
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-          <span className="text-xs text-gray-500">
-            Columna &quot;nombre&quot; (o primera columna). En Excel: guardar como .xlsx o exportar CSV.
-          </span>
+        {/* Plantilla + importación */}
+        <div className="flex flex-col gap-2 rounded-lg border border-orange-100 bg-orange-50/50 p-3">
+          <p className="text-xs text-gray-700 sm:text-sm">
+            <span className="font-medium text-orange-900">Lista de alumnos:</span> descarga la plantilla,
+            escribe un nombre por fila (columna <span className="font-mono text-xs">nombre</span>) y súbela
+            aquí.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="border-orange-200 bg-white" asChild>
+              <a href="/plantilla-alumnos-califacil.csv" download>
+                <Download className="mr-2 h-4 w-4" />
+                Descargar plantilla
+              </a>
+            </Button>
+            <Label htmlFor="studentImportUpload" className="cursor-pointer">
+              <div className="flex items-center gap-2 rounded-md border border-orange-200 bg-white px-3 py-1.5 text-sm text-orange-700 hover:bg-orange-50">
+                <Upload className="h-4 w-4" />
+                Subir lista completada
+              </div>
+            </Label>
+            <input
+              id="studentImportUpload"
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
+          <p className="text-[11px] text-gray-500">
+            Aceptamos la plantilla en Excel (.xlsx) o CSV tras descargarla y rellenarla.
+          </p>
         </div>
 
         {/* Search */}

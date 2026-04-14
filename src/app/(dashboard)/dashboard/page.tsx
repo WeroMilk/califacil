@@ -74,15 +74,15 @@ export default function DashboardPage() {
   }, [examsLoading, recentExams.length]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden sm:gap-3">
       <div className="shrink-0">
-        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Dashboard</h1>
-        <p className="mt-0.5 text-sm text-gray-600 sm:text-base">
+        <h1 className="text-xl font-bold text-gray-900 sm:text-3xl">Dashboard</h1>
+        <p className="mt-0.5 text-xs text-gray-600 sm:text-base">
           Bienvenido de vuelta, {user?.email?.split('@')[0]}
         </p>
       </div>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-3">
+      <div className="grid shrink-0 grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-4 lg:gap-3">
         <Card className="shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
@@ -143,14 +143,16 @@ export default function DashboardPage() {
       </div>
 
       <div className="shrink-0">
-        <h2 className="mb-2 text-sm font-semibold text-gray-900 sm:text-base">Acciones rápidas</h2>
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <h2 className="mb-1.5 text-xs font-semibold text-gray-900 sm:mb-2 sm:text-base">
+          Acciones rápidas
+        </h2>
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-3">
           <Link href="/exams/create" className="min-w-0">
             <Button
               variant="outline"
-              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:bg-orange-50 hover:border-orange-300 sm:h-20 sm:text-sm"
+              className="h-14 w-full flex-col gap-0.5 px-1 py-1.5 text-[10px] hover:bg-orange-50 hover:border-orange-300 sm:h-20 sm:gap-1 sm:py-2 sm:text-sm"
             >
-              <Plus className="h-5 w-5 text-orange-600 sm:h-6 sm:w-6" />
+              <Plus className="h-4 w-4 text-orange-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Nuevo examen</span>
             </Button>
           </Link>
@@ -159,7 +161,7 @@ export default function DashboardPage() {
               variant="outline"
               className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:bg-purple-50 hover:border-purple-300 sm:h-20 sm:text-sm"
             >
-              <Users className="h-5 w-5 text-purple-600 sm:h-6 sm:w-6" />
+              <Users className="h-4 w-4 text-purple-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Grupos</span>
             </Button>
           </Link>
@@ -168,7 +170,7 @@ export default function DashboardPage() {
               variant="outline"
               className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:bg-green-50 hover:border-green-300 sm:h-20 sm:text-sm"
             >
-              <TrendingUp className="h-5 w-5 text-green-600 sm:h-6 sm:w-6" />
+              <TrendingUp className="h-4 w-4 text-green-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Resultados</span>
             </Button>
           </Link>

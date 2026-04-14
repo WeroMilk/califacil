@@ -327,23 +327,23 @@ export default function CalificarPage() {
   if (!user) return null;
 
   return (
-    <div className="mx-auto flex max-w-lg flex-col gap-4 pb-8">
+    <div className="mx-auto flex max-w-lg flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Calificar</h1>
+        <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).
         </p>
       </div>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Examen y alumno</CardTitle>
-          <CardDescription>
+        <CardHeader className="space-y-1 pb-2 sm:pb-3">
+          <CardTitle className="text-base sm:text-lg">Examen y alumno</CardTitle>
+          <CardDescription className="text-xs sm:text-sm">
             El examen debe estar publicado, impreso con la zona CaliFacil y ser solo opción múltiple
             (2–5 opciones).
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-3 sm:space-y-4">
           <div className="space-y-2">
             <Label>Examen</Label>
             <Select
