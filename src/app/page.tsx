@@ -25,7 +25,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col">
-        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-start gap-2 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-evenly gap-2 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
           <div className="shrink-0">
             <div className="mx-auto w-full max-w-3xl text-center lg:max-w-4xl">
               <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
