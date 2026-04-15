@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { CheckCircle, LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
+import { LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -25,6 +25,14 @@ import {
 import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { StudentCombobox } from '@/components/student-combobox';
 import {
@@ -38,22 +46,19 @@ import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
 
-type Phase =
-  | 'elegir'
-  | 'capturar'
-  | 'revisar_hoja'
-  | 'guardando'
-  | 'resultado';
-
-type ResultBreakdownItem = {
-  questionId: string;
-  questionNumber: number;
-  studentAnswer: string;
-  correctAnswer: string;
-  isCorrect: boolean;
-};
+type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
 
 const MIN_AUTO_READ_RATIO = 0.8;
+
+/** Letra de inciso (A–E) a partir del texto de opción elegido; vacío si no hay lectura. */
+function optionAnswerToLetter(q: Question, answerText: string): string {
+  const t = answerText.trim();
+  if (!t) return '';
+  const opts = q.options ?? [];
+  const idx = opts.findIndex((o) => o.trim() === t);
+  if (idx < 0) return '';
+  return String.fromCharCode(65 + idx);
+}
 
 export default function CalificarPage() {
   const router = useRouter();
@@ -75,10 +80,6 @@ export default function CalificarPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
 
-  const [resultPct, setResultPct] = useState(0);
-  const [resultCorrect, setResultCorrect] = useState(0);
-  const [resultTotal, setResultTotal] = useState(0);
-  const [resultBreakdown, setResultBreakdown] = useState<ResultBreakdownItem[]>([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState('Abre la cámara para detectar respuestas en vivo.');
   const [liveResolvedCount, setLiveResolvedCount] = useState(0);
@@ -90,10 +91,22 @@ export default function CalificarPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
-  const stableReadyTicksRef = useRef(0);
+  const stableFullDetectionTicksRef = useRef(0);
+  const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const confirmedAnswersRef = useRef<Record<string, string>>({});
+  const sheetIndexRef = useRef(0);
+  const autoScanPipelineLockRef = useRef(false);
+
+  const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
+  const [autoGradeStats, setAutoGradeStats] = useState<{
+    pct: number;
+    correct: number;
+    wrong: number;
+    total: number;
+  } | null>(null);
 
   const publishedExams = useMemo(
     () => (exams as Exam[]).filter((e) => e.status === 'published'),
@@ -119,6 +132,14 @@ export default function CalificarPage() {
     [students]
   );
 
+  useEffect(() => {
+    confirmedAnswersRef.current = confirmedByQuestionId;
+  }, [confirmedByQuestionId]);
+
+  useEffect(() => {
+    sheetIndexRef.current = sheetIndex;
+  }, [sheetIndex]);
+
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
 
@@ -142,7 +163,7 @@ export default function CalificarPage() {
   }, []);
 
   const resetLiveReadings = useCallback(() => {
-    stableReadyTicksRef.current = 0;
+    stableFullDetectionTicksRef.current = 0;
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     setLiveStatus(
@@ -165,7 +186,7 @@ export default function CalificarPage() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-    stableReadyTicksRef.current = 0;
+    stableFullDetectionTicksRef.current = 0;
     setFlashSupported(false);
     setFlashOn(false);
     setCameraOpen(false);
@@ -229,8 +250,12 @@ export default function CalificarPage() {
   );
 
   const finalizeCapturedSheet = useCallback(
-    async (source: HTMLImageElement | HTMLCanvasElement, fallbackFile?: File) => {
-      const chunk = sheets[sheetIndex] ?? [];
+    async (
+      source: HTMLImageElement | HTMLCanvasElement,
+      fallbackFile?: File,
+      opts?: { skipReviewUi?: boolean }
+    ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
+      const chunk = sheets[sheetIndexRef.current] ?? [];
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols);
       const raw = [...meta.picks];
@@ -239,10 +264,11 @@ export default function CalificarPage() {
         .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
         .filter((i) => i >= 0);
 
+      const si = sheetIndexRef.current;
       if (ambiguousIdx.length > 0 && examId) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
-          globalNumber: sheetIndex * 10 + i + 1,
+          globalNumber: si * 10 + i + 1,
           options: chunk[i].options ?? [],
         }));
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
@@ -274,7 +300,7 @@ export default function CalificarPage() {
                 raw[i] = opts.indexOf(text);
               }
             }
-            if (ambiguousIdx.length > 0) {
+            if (ambiguousIdx.length > 0 && !opts?.skipReviewUi) {
               toast.message('Filas dudosas revisadas con visión asistida.');
             }
           } else if (res.status === 503 && payload.code === 'NO_KEY') {
@@ -301,27 +327,33 @@ export default function CalificarPage() {
             ? 'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
             : 'La imagen no tiene calidad suficiente para leer el recuadro. Prueba con otra foto más clara.'
         );
-        return false;
+        return { success: false };
       }
 
-      await setPreviewFromSource(oriented, fallbackFile);
       setDraftSelections(mapped.draft);
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
-      setPhase('revisar_hoja');
-      setLiveStatus(
-        mapped.unresolvedCount > 0
-          ? `Lectura parcial: ${mapped.unresolvedCount} sin lectura clara.`
-          : 'Lectura completa lista para confirmar.'
-      );
-      const scanNote =
-        mapped.unresolvedCount > 0
-          ? `Lectura realizada (${mapped.unresolvedCount} sin lectura clara). Revisa y confirma.`
-          : 'Lectura realizada. Revisa y confirma.';
-      toast.message(scanNote);
-      return true;
+
+      if (!opts?.skipReviewUi) {
+        await setPreviewFromSource(oriented, fallbackFile);
+        setPhase('revisar_hoja');
+        setLiveStatus(
+          mapped.unresolvedCount > 0
+            ? `Lectura parcial: ${mapped.unresolvedCount} sin lectura clara.`
+            : 'Lectura completa lista para confirmar.'
+        );
+        const scanNote =
+          mapped.unresolvedCount > 0
+            ? `Lectura realizada (${mapped.unresolvedCount} sin lectura clara). Revisa y confirma.`
+            : 'Lectura realizada. Revisa y confirma.';
+        toast.message(scanNote);
+      } else {
+        setLiveStatus('Hoja guardada automáticamente.');
+      }
+
+      return { success: true, chunkDraft: mapped.draft };
     },
-    [examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheetIndex, sheets]
+    [examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheets]
   );
 
   useEffect(() => {
@@ -389,10 +421,6 @@ export default function CalificarPage() {
       if (u) URL.revokeObjectURL(u);
       return null;
     });
-    setResultPct(0);
-    setResultCorrect(0);
-    setResultTotal(0);
-    setResultBreakdown([]);
     setSelectedStudentId('');
   }, [stopLiveCamera, isMobile]);
 
@@ -501,7 +529,7 @@ export default function CalificarPage() {
           if (!ctx) return;
           ctx.drawImage(video, 0, 0, frame.width, frame.height);
 
-          const chunk = sheets[sheetIndex] ?? [];
+          const chunk = sheets[sheetIndexRef.current] ?? [];
           const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
           const raw = scanCalifacilOmrSheet(oriented, omrCols);
           const mapped = mapRawToDraft(raw, chunk);
@@ -510,7 +538,7 @@ export default function CalificarPage() {
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
           if (mapped.resolvedCount >= chunk.length) {
-            setLiveStatus('Detección completa. Captura lista.');
+            setLiveStatus('Detección completa. Guardando…');
           } else if (mapped.resolvedCount >= minResolved) {
             setLiveStatus('Detección estable. Guarda calificación o escanea otra vez.');
           } else if (mapped.resolvedCount >= Math.ceil(chunk.length * 0.3)) {
@@ -519,18 +547,49 @@ export default function CalificarPage() {
             setLiveStatus('Ajusta cámara: acerca la banda CaliFacil y evita sombras.');
           }
 
-          if (mapped.resolvedCount >= minResolved) {
-            stableReadyTicksRef.current += 1;
+          if (mapped.resolvedCount >= chunk.length && chunk.length > 0) {
+            stableFullDetectionTicksRef.current += 1;
           } else {
-            stableReadyTicksRef.current = 0;
+            stableFullDetectionTicksRef.current = 0;
           }
 
-          if (stableReadyTicksRef.current >= 3 && !scanBusyRef.current) {
-            stableReadyTicksRef.current = -999;
+          if (
+            stableFullDetectionTicksRef.current >= 2 &&
+            !scanBusyRef.current &&
+            !autoScanPipelineLockRef.current &&
+            mapped.resolvedCount >= chunk.length &&
+            chunk.length > 0
+          ) {
+            autoScanPipelineLockRef.current = true;
+            stableFullDetectionTicksRef.current = 0;
             setScanBusy(true);
-            const ok = await finalizeCapturedSheet(oriented);
-            setScanBusy(false);
-            if (ok) stopLiveCamera();
+            try {
+              const res = await finalizeCapturedSheet(oriented, undefined, { skipReviewUi: true });
+              if (!res.success || !res.chunkDraft) {
+                return;
+              }
+              const si = sheetIndexRef.current;
+              const mergedAll = { ...confirmedAnswersRef.current, ...res.chunkDraft };
+              confirmedAnswersRef.current = mergedAll;
+              setConfirmedByQuestionId(mergedAll);
+
+              const isLastSheet = si >= sheets.length - 1;
+              if (!isLastSheet) {
+                setSheetIndex(si + 1);
+                setPreviewUrl((u) => {
+                  if (u) URL.revokeObjectURL(u);
+                  return null;
+                });
+                setDraftSelections({});
+                resetLiveReadings();
+                toast.success(`Hoja ${si + 1} guardada. Escanea la hoja ${si + 2}.`);
+              } else {
+                await submitAllRef.current(mergedAll);
+              }
+            } finally {
+              autoScanPipelineLockRef.current = false;
+              setScanBusy(false);
+            }
           }
         } finally {
           liveBusyRef.current = false;
@@ -571,8 +630,8 @@ export default function CalificarPage() {
         return;
       }
       ctx.drawImage(video, 0, 0, frame.width, frame.height);
-      const ok = await finalizeCapturedSheet(frame);
-      if (ok) stopLiveCamera();
+      const res = await finalizeCapturedSheet(frame);
+      if (res.success) stopLiveCamera();
     } catch {
       toast.error('No se pudo capturar desde la cámara.');
     } finally {
@@ -637,7 +696,6 @@ export default function CalificarPage() {
       const studentId = selectedStudentId;
 
       let correctCount = 0;
-      const breakdown: ResultBreakdownItem[] = [];
       const rows = questions.map((question: Question) => {
         const answerText = (merged[question.id] ?? '').trim();
         const key = virtualKeyByQuestionId.get(question.id);
@@ -649,16 +707,6 @@ export default function CalificarPage() {
               : false
             : null;
         if (isCorrect) correctCount++;
-
-        if (question.type === 'multiple_choice') {
-          breakdown.push({
-            questionId: question.id,
-            questionNumber: questions.findIndex((x) => x.id === question.id) + 1,
-            studentAnswer: answerText || '',
-            correctAnswer: key?.correctOption ?? question.correct_answer ?? '',
-            isCorrect: Boolean(isCorrect),
-          });
-        }
 
         return {
           exam_id: examId,
@@ -677,13 +725,28 @@ export default function CalificarPage() {
 
       const mcTotal = virtualKey.rows.length;
       const pct = calculatePercentage(correctCount, mcTotal);
-      setResultCorrect(correctCount);
-      setResultTotal(mcTotal);
-      setResultPct(pct);
-      setResultBreakdown(breakdown);
-      setPhase('resultado');
-      toast.success('Calificación guardada. Ya aparece en resultados.');
-       } catch (err: unknown) {
+      const wrong = Math.max(0, mcTotal - correctCount);
+      setAutoGradeStats({
+        pct,
+        correct: correctCount,
+        wrong,
+        total: mcTotal,
+      });
+      setAutoGradeDialogOpen(true);
+      toast.success('Calificación guardada.');
+      stopLiveCamera();
+      setPhase('elegir');
+      setSheetIndex(0);
+      setConfirmedByQuestionId({});
+      confirmedAnswersRef.current = {};
+      setDraftSelections({});
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setLiveDraftSelections({});
+      setLiveResolvedCount(0);
+    } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: string }).message)
@@ -695,6 +758,8 @@ export default function CalificarPage() {
     }
   };
 
+  submitAllRef.current = submitAll;
+
   const scanAgainInLive = () => {
     resetLiveReadings();
   };
@@ -703,6 +768,75 @@ export default function CalificarPage() {
 
   return (
     <div className="flex w-full flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
+      <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Calificación guardada</DialogTitle>
+            <DialogDescription>
+              Resultados para {selectedStudentName.trim() || 'el alumno seleccionado'}.
+            </DialogDescription>
+          </DialogHeader>
+          {autoGradeStats && (
+            <div className="space-y-3 py-2">
+              <div className={`text-center text-4xl font-bold ${getGradeColor(autoGradeStats.pct)}`}>
+                {autoGradeStats.pct}%
+              </div>
+              <p className="text-center text-sm text-gray-600">{getGradeLabel(autoGradeStats.pct)}</p>
+              <div className="grid grid-cols-2 gap-3 text-center text-sm">
+                <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+                  <div className="text-xs text-green-800">Correctas</div>
+                  <div className="text-xl font-semibold text-green-900">{autoGradeStats.correct}</div>
+                </div>
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                  <div className="text-xs text-red-800">Incorrectas</div>
+                  <div className="text-xl font-semibold text-red-900">{autoGradeStats.wrong}</div>
+                </div>
+              </div>
+              <p className="text-center text-xs text-gray-500">Total de preguntas: {autoGradeStats.total}</p>
+            </div>
+          )}
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            {examId ? (
+              <Button type="button" variant="outline" className="w-full" asChild>
+                <Link href={`/exams/results/${examId}`}>
+                  <LayoutDashboard className="mr-2 h-4 w-4" />
+                  Ver en panel de resultados
+                </Link>
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              className="w-full bg-orange-600 hover:bg-orange-700"
+              onClick={() => {
+                setSelectedStudentId('');
+                setAutoGradeDialogOpen(false);
+              }}
+            >
+              Elegir otro alumno
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => setAutoGradeDialogOpen(false)}
+            >
+              Cerrar
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full text-gray-600"
+              onClick={() => {
+                setAutoGradeDialogOpen(false);
+                router.push('/dashboard');
+              }}
+            >
+              Ir al inicio del dashboard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div>
         <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
@@ -868,11 +1002,11 @@ export default function CalificarPage() {
                         </p>
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                           {currentChunk.map((q, idx) => {
-                            const detected = liveDraftSelections[q.id] || '';
+                            const letter = optionAnswerToLetter(q, liveDraftSelections[q.id] || '');
                             return (
                               <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
                                 <span className="font-medium">P{sheetIndex * 10 + idx + 1}</span>:{' '}
-                                <span className="font-semibold">{detected || '—'}</span>
+                                <span className="font-semibold">{letter || '—'}</span>
                               </div>
                             );
                           })}
@@ -989,104 +1123,6 @@ export default function CalificarPage() {
           <Loader2 className="h-10 w-10 animate-spin text-orange-600" />
           <p className="text-sm text-gray-600">Guardando en resultados…</p>
         </div>
-      )}
-
-      {phase === 'resultado' && exam && (
-        <Card>
-          <CardContent className="space-y-6 pt-6 text-center">
-            <CheckCircle className="mx-auto h-16 w-16 text-green-500" />
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">Calificación registrada</h2>
-              <p className="mt-1 text-gray-600">{selectedStudentName}</p>
-            </div>
-            <div className="rounded-xl bg-orange-50/80 p-6">
-              <p className="text-sm text-gray-600">Aciertos</p>
-              <p className="text-3xl font-bold text-gray-900">
-                {resultCorrect} / {resultTotal}
-              </p>
-              <p className="mt-3 text-sm text-gray-600">Calificación</p>
-              <p className={`text-5xl font-bold ${getGradeColor(resultPct)}`}>{resultPct}%</p>
-              <p className={`mt-2 text-lg font-medium ${getGradeColor(resultPct)}`}>
-                {getGradeLabel(resultPct)}
-              </p>
-            </div>
-            {resultBreakdown.length > 0 && (
-              <div className="space-y-2 text-left">
-                <p className="text-sm font-semibold text-gray-800">
-                  Comparación de respuestas (alumno vs clave)
-                </p>
-                <div className="max-h-56 space-y-2 overflow-y-auto rounded-lg border p-3">
-                  {resultBreakdown.map((item) => (
-                    <div
-                      key={item.questionId}
-                      className={`rounded-md border p-2 text-sm ${
-                        item.isCorrect
-                          ? 'border-green-200 bg-green-50'
-                          : 'border-red-200 bg-red-50'
-                      }`}
-                    >
-                      <p className="font-medium text-gray-900">Pregunta {item.questionNumber}</p>
-                      <p className="text-gray-700">
-                        Alumno: <span className="font-medium">{item.studentAnswer || 'Sin respuesta'}</span>
-                      </p>
-                      <p className="text-gray-700">
-                        Correcta: <span className="font-medium">{item.correctAnswer || '—'}</span>
-                      </p>
-                      <p className={item.isCorrect ? 'text-green-700' : 'text-red-700'}>
-                        {item.isCorrect ? 'Correcta' : 'Incorrecta'}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
-              <Button
-                variant="outline"
-                className="flex-1 sm:flex-none"
-                onClick={() => {
-                  setPhase('elegir');
-                  setSheetIndex(0);
-                  setConfirmedByQuestionId({});
-                  setDraftSelections({});
-                  setPreviewUrl((u) => {
-                    if (u) URL.revokeObjectURL(u);
-                    return null;
-                  });
-                  setResultPct(0);
-                  setResultCorrect(0);
-                  setResultTotal(0);
-                  setResultBreakdown([]);
-                  setSelectedStudentId('');
-                }}
-              >
-                Calificar otro alumno (mismo examen)
-              </Button>
-              <Button
-                variant="outline"
-                className="flex-1 sm:flex-none"
-                onClick={() => {
-                  resetFlow();
-                  setExamId('');
-                }}
-              >
-                Escanear otro examen
-              </Button>
-              <Button
-                className="flex-1 bg-orange-600 hover:bg-orange-700 sm:flex-none"
-                asChild
-              >
-                <Link href={`/exams/results/${examId}`}>
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
-                  Ver en panel
-                </Link>
-              </Button>
-            </div>
-            <Button variant="ghost" className="w-full text-gray-600" onClick={() => router.push('/dashboard')}>
-              Ir al inicio del dashboard
-            </Button>
-          </CardContent>
-        </Card>
       )}
     </div>
   );

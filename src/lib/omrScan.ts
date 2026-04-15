@@ -414,93 +414,6 @@ function sampleBilinear(data: Uint8ClampedArray, width: number, height: number, 
   return out;
 }
 
-/**
- * Cuadrilátero de la hoja usando marcadores negros impresos en las 4 esquinas (ver printExam).
- */
-function detectFiducialPageQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  const { width: W, height: H } = canvas;
-  if (W < 160 || H < 160) return null;
-
-  const id = ctx.getImageData(0, 0, W, H);
-  const d = id.data;
-  const roi = 0.28;
-
-  type Roi = { x0: number; x1: number; y0: number; y1: number; tag: 'tl' | 'tr' | 'br' | 'bl' };
-  const rois: Roi[] = [
-    { x0: 0, x1: W * roi, y0: 0, y1: H * roi, tag: 'tl' },
-    { x0: W * (1 - roi), x1: W, y0: 0, y1: H * roi, tag: 'tr' },
-    { x0: W * (1 - roi), x1: W, y0: H * (1 - roi), y1: H, tag: 'br' },
-    { x0: 0, x1: W * roi, y0: H * (1 - roi), y1: H, tag: 'bl' },
-  ];
-
-  const centroids: Point[] = [];
-  for (const r of rois) {
-    let darkSum = 0;
-    let nDark = 0;
-    const xa = Math.max(0, Math.floor(r.x0));
-    const xb = Math.min(W - 1, Math.ceil(r.x1));
-    const ya = Math.max(0, Math.floor(r.y0));
-    const yb = Math.min(H - 1, Math.ceil(r.y1));
-    for (let y = ya; y <= yb; y++) {
-      for (let x = xa; x <= xb; x++) {
-        const i = (y * W + x) * 4;
-        const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
-        darkSum += 1 - lum;
-        nDark++;
-      }
-    }
-    const avgD = nDark > 0 ? darkSum / nDark : 0;
-    const thresh = Math.min(0.55, Math.max(0.28, avgD + 0.14));
-
-    let sx = 0;
-    let sy = 0;
-    let mass = 0;
-    for (let y = ya; y <= yb; y++) {
-      for (let x = xa; x <= xb; x++) {
-        const i = (y * W + x) * 4;
-        const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
-        if (1 - lum >= thresh) {
-          sx += x;
-          sy += y;
-          mass++;
-        }
-      }
-    }
-    if (mass < Math.max(12, (xb - xa) * (yb - ya) * 0.002)) {
-      return null;
-    }
-    centroids.push({ x: sx / mass, y: sy / mass });
-  }
-
-  if (centroids.length !== 4) return null;
-  const quad: [Point, Point, Point, Point] = [
-    centroids[0],
-    centroids[1],
-    centroids[2],
-    centroids[3],
-  ];
-
-  const topLen = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y);
-  const bottomLen = Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y);
-  const leftLen = Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y);
-  const rightLen = Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y);
-  const area =
-    Math.abs(
-      quad[0].x * quad[1].y +
-        quad[1].x * quad[2].y +
-        quad[2].x * quad[3].y +
-        quad[3].x * quad[0].y -
-        (quad[1].x * quad[0].y + quad[2].x * quad[1].y + quad[3].x * quad[2].y + quad[0].x * quad[3].y)
-    ) * 0.5;
-  if (area < W * H * 0.12) return null;
-  const ar = (topLen + bottomLen) / Math.max(1e-6, leftLen + rightLen);
-  if (ar < 0.45 || ar > 2.2) return null;
-
-  return quad;
-}
-
 function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
@@ -714,11 +627,6 @@ function warpPerspectiveToRect(
 }
 
 function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElement {
-  const fid = detectFiducialPageQuad(canvas);
-  if (fid) {
-    const warped = warpPerspectiveToRect(canvas, fid);
-    if (warped) return warped;
-  }
   const quad = detectCalifacilQuad(canvas);
   if (!quad) return canvas;
   return warpPerspectiveToRect(canvas, quad) ?? canvas;

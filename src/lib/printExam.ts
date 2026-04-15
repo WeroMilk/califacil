@@ -160,29 +160,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .print-page {
       max-width: 7in;
       margin: 0 auto;
-      position: relative;
     }
-    /* Marcadores fiduciales para alinear la foto (detección de hoja en CaliFacil OMR) */
-    .califacil-fiducials {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      z-index: 3;
-    }
-    .cf-fid {
-      position: absolute;
-      width: 8pt;
-      height: 8pt;
-      min-width: 8pt;
-      min-height: 8pt;
-      background: #000;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .cf-fid-tl { left: 5pt; top: 5pt; }
-    .cf-fid-tr { right: 5pt; top: 5pt; }
-    .cf-fid-br { right: 5pt; bottom: 5pt; }
-    .cf-fid-bl { left: 5pt; bottom: 5pt; }
     .print-page--break {
       page-break-after: always;
       break-after: page;
@@ -393,12 +371,6 @@ export function buildPrintExamHtml(
 
       return `
   <section class="print-page${breakClass}">
-    <div class="califacil-fiducials" aria-hidden="true">
-      <span class="cf-fid cf-fid-tl"></span>
-      <span class="cf-fid cf-fid-tr"></span>
-      <span class="cf-fid cf-fid-br"></span>
-      <span class="cf-fid cf-fid-bl"></span>
-    </div>
     <header class="sheet-header">
       <div class="sheet-banner-wrap">
         <img class="sheet-banner" src="${headerBannerUrl}" alt="" crossorigin="anonymous" />
