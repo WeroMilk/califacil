@@ -27,6 +27,12 @@ type ScanDetailedResult = {
   confidenceSum: number;
 };
 
+type OmrGeometryProfile = {
+  bottomBandRatio: number;
+  titleStripRatioOfBand: number;
+  qnumWidthRatio: number;
+};
+
 type Point = { x: number; y: number };
 
 type LineXFromY = { m: number; b: number }; // x = m*y + b
@@ -511,6 +517,20 @@ function scanCalifacilOmrCanvasDetailed(
   columns: number,
   thresholds: ScanThresholds
 ): ScanDetailedResult {
+  return scanCalifacilOmrCanvasDetailedWithProfile(
+    canvas,
+    columns,
+    thresholds,
+    CALIFACIL_OMR_SCAN
+  );
+}
+
+function scanCalifacilOmrCanvasDetailedWithProfile(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  thresholds: ScanThresholds,
+  profile: OmrGeometryProfile
+): ScanDetailedResult {
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const out: (number | null)[] = Array(10).fill(null);
   const ctx = canvas.getContext('2d');
@@ -518,13 +538,13 @@ function scanCalifacilOmrCanvasDetailed(
   const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { data, width, height } = id;
 
-  const bandH = height * CALIFACIL_OMR_SCAN.bottomBandRatio;
+  const bandH = height * profile.bottomBandRatio;
   const bandTop = height - bandH;
-  const dataTop = bandTop + bandH * CALIFACIL_OMR_SCAN.titleStripRatioOfBand;
-  const dataHeight = bandH * (1 - CALIFACIL_OMR_SCAN.titleStripRatioOfBand);
+  const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
+  const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
   const rowH = dataHeight / 10;
 
-  const qNumW = width * CALIFACIL_OMR_SCAN.qnumWidthRatio;
+  const qNumW = width * profile.qnumWidthRatio;
   const bubbleAreaLeft = qNumW;
   const bubbleAreaW = width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
@@ -611,10 +631,41 @@ export function scanCalifacilOmrSheet(
   if (typeof document === 'undefined') return Array(10).fill(null);
   const canvas = drawSourceToCanvas(source);
   if (!canvas) return Array(10).fill(null);
-  return scanCalifacilOmrCanvasDetailed(canvas, columns, {
+
+  const thresholds: ScanThresholds = {
     minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
     minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
-  }).picks;
+  };
+
+  const fullSheetProfile: OmrGeometryProfile = {
+    bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
+    titleStripRatioOfBand: CALIFACIL_OMR_SCAN.titleStripRatioOfBand,
+    qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+  };
+  const croppedBoxProfiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.12, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+  ];
+
+  const corrected = applyPerspectiveCorrection(canvas);
+  const canvases = corrected === canvas ? [canvas] : [canvas, corrected];
+
+  let best: ScanDetailedResult = { picks: Array(10).fill(null), resolvedCount: 0, confidenceSum: Number.NEGATIVE_INFINITY };
+
+  for (const c of canvases) {
+    const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
+    for (const profile of profiles) {
+      const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
+      const score = detail.resolvedCount * 100 + detail.confidenceSum * 10;
+      const bestScore = best.resolvedCount * 100 + best.confidenceSum * 10;
+      if (score > bestScore) {
+        best = detail;
+      }
+    }
+  }
+
+  return best.picks;
 }
 
 /**

@@ -791,16 +791,10 @@ export default function CalificarPage() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                       {currentChunk.map((q, idx) => {
                         const detected = liveDraftSelections[q.id] || '';
-                        const key = virtualKeyByQuestionId.get(q.id);
-                        const liveCorrect =
-                          detected && key
-                            ? key.options.findIndex((opt) => opt === detected.trim()) === key.correctIndex
-                            : null;
                         return (
                           <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
                             <span className="font-medium">P{sheetIndex * 10 + idx + 1}</span>:{' '}
-                            <span className="font-semibold">{detected || '—'}</span>{' '}
-                            {liveCorrect === true ? '✅' : liveCorrect === false ? '❌' : '•'}
+                            <span className="font-semibold">{detected || '—'}</span>
                           </div>
                         );
                       })}
