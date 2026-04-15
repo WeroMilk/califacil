@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { cn } from '@/lib/utils';
 
 type BrandWordmarkProps = {
@@ -11,7 +10,7 @@ type BrandWordmarkProps = {
 };
 
 /**
- * Logo horizontal CALIFÁCIL + ícono (PNG con transparencia).
+ * Logo horizontal CALIFÁCIL + marca (SVG vectorial para nitidez en retina / móvil).
  */
 export function BrandWordmark({
   href,
@@ -22,13 +21,15 @@ export function BrandWordmark({
   const to = href === false ? null : href ?? '/';
 
   const img = (
-    <Image
-      src="/califacil-wordmark.png"
+    <img
+      src="/califacil-wordmark.svg"
       alt=""
-      width={320}
-      height={80}
-      className={cn('w-auto object-contain', imgClassName)}
-      priority={priority}
+      width={400}
+      height={72}
+      aria-hidden
+      decoding="async"
+      fetchPriority={priority ? 'high' : 'low'}
+      className={cn('block h-auto w-auto max-w-full object-contain object-left', imgClassName)}
     />
   );
 
@@ -36,7 +37,7 @@ export function BrandWordmark({
     return (
       <Link
         href={to}
-        className={cn('inline-flex items-center', className)}
+        className={cn('inline-flex max-w-full items-center', className)}
         aria-label="CaliFácil, inicio"
       >
         {img}
@@ -46,7 +47,7 @@ export function BrandWordmark({
 
   return (
     <span
-      className={cn('inline-flex items-center', className)}
+      className={cn('inline-flex max-w-full items-center', className)}
       role="img"
       aria-label="CaliFácil"
     >
