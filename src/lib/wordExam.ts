@@ -45,23 +45,6 @@ function addQuestionContent(docx: Docx, children: FileChild[], q: Question, inde
     })
   );
 
-  if (q.illustration) {
-    children.push(
-      new Paragraph({
-        spacing: { after: 40 },
-        children: [
-          new TextRun({
-            text: `Figura / referencia: ${q.illustration}`,
-            italics: true,
-            font: FONT,
-            size: SZ_SMALL,
-            color: '444444',
-          }),
-        ],
-      })
-    );
-  }
-
   if (q.type === 'multiple_choice' && q.options?.length) {
     for (let i = 0; i < q.options.length; i++) {
       const letter = String.fromCharCode(65 + i);
@@ -73,21 +56,7 @@ function addQuestionContent(docx: Docx, children: FileChild[], q: Question, inde
             new TableRow({
               children: [
                 new TableCell({
-                  width: { size: 260, type: WidthType.DXA },
-                  margins: { top: 20, bottom: 20, left: 20, right: 40 },
-                  children: [
-                    new Paragraph({
-                      children: [
-                        new TextRun({
-                          text: '\u25cb ',
-                          font: FONT,
-                          size: SZ_SMALL,
-                        }),
-                      ],
-                    }),
-                  ],
-                }),
-                new TableCell({
+                  margins: { top: 20, bottom: 20, left: 20, right: 20 },
                   children: [
                     new Paragraph({
                       alignment: AlignmentType.JUSTIFIED,
@@ -121,8 +90,8 @@ function addQuestionContent(docx: Docx, children: FileChild[], q: Question, inde
 }
 
 /**
- * Genera un .docx alineado con la hoja de impresión (cartas, hasta 10 preguntas por hoja,
- * banner, nombre/grupo/fecha, opciones con círculo, pie).
+ * Genera un .docx alineado con la hoja de impresión (carta, hasta 10 preguntas por hoja,
+ * banner, nombre/grupo/fecha y opciones de respuesta en texto).
  */
 export async function downloadExamWord(
   exam: ExamWithQuestions,

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
@@ -37,8 +38,16 @@ import { toast } from 'sonner';
 export default function ExamsPage() {
   const { user } = useAuth();
   const { exams, loading, deleteExam } = useExams(user?.id);
+  const searchParams = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'draft' | 'published' | 'closed'>('all');
+
+  useEffect(() => {
+    const status = searchParams.get('status');
+    if (status === 'all' || status === 'draft' || status === 'published' || status === 'closed') {
+      setFilterStatus(status);
+    }
+  }, [searchParams]);
 
   const filteredExams = exams.filter(exam => {
     const matchesSearch = exam.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -124,7 +133,7 @@ export default function ExamsPage() {
           )}
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-4 sm:gap-5 xl:grid-cols-2 2xl:grid-cols-3">
           {filteredExams.map((exam) => (
             <ExamCard key={exam.id} exam={exam} onDelete={handleDelete} />
           ))}

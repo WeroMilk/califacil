@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroups, useStudents } from '@/hooks/useGroups';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -31,6 +31,16 @@ export default function GroupsPage() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (groups.length === 0) {
+      setSelectedGroup(null);
+      return;
+    }
+    if (!selectedGroup || !groups.some((g) => g.id === selectedGroup)) {
+      setSelectedGroup(groups[0].id);
+    }
+  }, [groups, selectedGroup]);
 
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) {
@@ -199,19 +209,26 @@ export default function GroupsPage() {
 }
 
 function StudentsManager({ groupId, groupName }: { groupId: string; groupName: string }) {
-  const { students, loading, addStudent, addStudentsBatch, deleteStudent } = useStudents(groupId);
+  const { students, loading, addStudent, addStudentsBatch, deleteStudent, error } = useStudents(groupId);
   const [newStudentName, setNewStudentName] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
   const handleAddStudent = async () => {
-    if (!newStudentName.trim()) return;
+    if (!newStudentName.trim()) {
+      toast.error('Escribe el nombre del estudiante');
+      return;
+    }
     
     setIsAdding(true);
     const student = await addStudent(newStudentName.trim());
     if (student) {
       toast.success('Estudiante agregado');
       setNewStudentName('');
+    } else {
+      toast.error('No se pudo agregar el estudiante', {
+        description: toSpanishAuthMessage(error || ''),
+      });
     }
     setIsAdding(false);
   };
@@ -261,6 +278,7 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
             onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
           />
           <Button 
+            type="button"
             onClick={handleAddStudent} 
             disabled={isAdding}
             className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"

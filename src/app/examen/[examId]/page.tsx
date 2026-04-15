@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -162,9 +162,53 @@ export default function StudentExamPage() {
     };
   }, [hasStarted, submitted, forfeitReason]);
 
-  useEffect(() => {
-    fetchExam();
+  const fetchExam = useCallback(async () => {
+    try {
+      setLoading(true);
+
+      const { data: examData, error: examError } = await supabase
+        .from('exams')
+        .select('*')
+        .eq('id', examId)
+        .eq('status', 'published')
+        .single();
+
+      if (examError || !examData) {
+        toast.error('Examen no encontrado o no está disponible');
+        return;
+      }
+
+      setExam(examData);
+
+      const { data: questionsData, error: questionsError } = await supabase
+        .from('questions')
+        .select('*')
+        .eq('exam_id', examId)
+        .order('created_at', { ascending: true });
+
+      if (questionsError) throw questionsError;
+      setQuestions(questionsData || []);
+
+      if (examData.group_id) {
+        const { data: studentsData, error: studentsError } = await supabase
+          .from('students')
+          .select('*')
+          .eq('group_id', examData.group_id);
+
+        if (!studentsError) {
+          setStudents(studentsData || []);
+        }
+      }
+    } catch {
+      toast.error('Error al cargar el examen');
+    } finally {
+      setLoading(false);
+    }
   }, [examId]);
+
+  useEffect(() => {
+    void fetchExam();
+  }, [fetchExam]);
 
   useEffect(() => {
     setClientSessionToken(null);
@@ -244,50 +288,6 @@ export default function StudentExamPage() {
     window.addEventListener('beforeunload', fn);
     return () => window.removeEventListener('beforeunload', fn);
   }, [hasStarted, submitted, forfeitReason]);
-
-  const fetchExam = async () => {
-    try {
-      setLoading(true);
-
-      const { data: examData, error: examError } = await supabase
-        .from('exams')
-        .select('*')
-        .eq('id', examId)
-        .eq('status', 'published')
-        .single();
-
-      if (examError || !examData) {
-        toast.error('Examen no encontrado o no está disponible');
-        return;
-      }
-
-      setExam(examData);
-
-      const { data: questionsData, error: questionsError } = await supabase
-        .from('questions')
-        .select('*')
-        .eq('exam_id', examId)
-        .order('created_at', { ascending: true });
-
-      if (questionsError) throw questionsError;
-      setQuestions(questionsData || []);
-
-      if (examData.group_id) {
-        const { data: studentsData, error: studentsError } = await supabase
-          .from('students')
-          .select('*')
-          .eq('group_id', examData.group_id);
-
-        if (!studentsError) {
-          setStudents(studentsData || []);
-        }
-      }
-    } catch {
-      toast.error('Error al cargar el examen');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),

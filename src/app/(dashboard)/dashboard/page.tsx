@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { useExams } from '@/hooks/useExams';
@@ -26,8 +26,6 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const { exams, loading: examsLoading } = useExams(user?.id);
   const { groups, loading: groupsLoading } = useGroups(user?.id);
-  const recentsScrollRef = useRef<HTMLDivElement>(null);
-  const didInitialRecentsAlignRef = useRef(false);
   const [stats, setStats] = useState({
     totalExams: 0,
     publishedExams: 0,
@@ -46,32 +44,8 @@ export default function DashboardPage() {
     }
   }, [exams, groups]);
 
-  /** Más recientes a la derecha: API trae descendente; invertimos el tramo mostrado. */
-  const recentExams = [...exams].slice(0, RECENTS_MAX).reverse();
-
-  useEffect(() => {
-    const el = recentsScrollRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth) return;
-      if (e.deltaY === 0) return;
-      e.preventDefault();
-      el.scrollLeft += e.deltaY;
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [recentExams.length, examsLoading]);
-
-  useEffect(() => {
-    if (examsLoading || recentExams.length === 0 || didInitialRecentsAlignRef.current) return;
-    const el = recentsScrollRef.current;
-    if (!el) return;
-    const id = requestAnimationFrame(() => {
-      el.scrollLeft = el.scrollWidth - el.clientWidth;
-      didInitialRecentsAlignRef.current = true;
-    });
-    return () => cancelAnimationFrame(id);
-  }, [examsLoading, recentExams.length]);
+  /** Más recientes primero (ya vienen desc). */
+  const recentExams = [...exams].slice(0, RECENTS_MAX);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden sm:gap-3">
@@ -83,7 +57,8 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid shrink-0 grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-4 lg:gap-3">
-        <Card className="shadow-sm">
+        <Link href="/exams?status=all" className="block">
+        <Card className="shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Total Exámenes
@@ -97,8 +72,10 @@ export default function DashboardPage() {
             <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Creados hasta la fecha</p>
           </CardContent>
         </Card>
+        </Link>
 
-        <Card className="shadow-sm">
+        <Link href="/exams?status=published" className="block">
+        <Card className="shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Activos
@@ -112,8 +89,10 @@ export default function DashboardPage() {
             <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Publicados</p>
           </CardContent>
         </Card>
+        </Link>
 
-        <Card className="shadow-sm">
+        <Link href="/groups" className="block">
+        <Card className="shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Grupos
@@ -127,8 +106,10 @@ export default function DashboardPage() {
             <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Registrados</p>
           </CardContent>
         </Card>
+        </Link>
 
-        <Card className="shadow-sm">
+        <Link href="/promedios" className="block">
+        <Card className="shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Promedio
@@ -140,6 +121,7 @@ export default function DashboardPage() {
             <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">General</p>
           </CardContent>
         </Card>
+        </Link>
       </div>
 
       <div className="shrink-0">
@@ -150,7 +132,7 @@ export default function DashboardPage() {
           <Link href="/exams/create" className="min-w-0">
             <Button
               variant="outline"
-              className="h-14 w-full flex-col gap-0.5 px-1 py-1.5 text-[10px] hover:bg-orange-50 hover:border-orange-300 sm:h-20 sm:gap-1 sm:py-2 sm:text-sm"
+              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:border-orange-300 hover:bg-orange-50 sm:h-20 sm:text-sm"
             >
               <Plus className="h-4 w-4 text-orange-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Nuevo examen</span>
@@ -159,16 +141,16 @@ export default function DashboardPage() {
           <Link href="/groups" className="min-w-0">
             <Button
               variant="outline"
-              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:bg-purple-50 hover:border-purple-300 sm:h-20 sm:text-sm"
+              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:border-purple-300 hover:bg-purple-50 sm:h-20 sm:text-sm"
             >
               <Users className="h-4 w-4 text-purple-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Grupos</span>
             </Button>
           </Link>
-          <Link href="/exams" className="min-w-0">
+          <Link href="/promedios" className="min-w-0">
             <Button
               variant="outline"
-              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:bg-green-50 hover:border-green-300 sm:h-20 sm:text-sm"
+              className="h-16 w-full flex-col gap-1 px-1 py-2 text-xs hover:border-green-300 hover:bg-green-50 sm:h-20 sm:text-sm"
             >
               <TrendingUp className="h-4 w-4 text-green-600 sm:h-6 sm:w-6" />
               <span className="font-medium leading-tight">Resultados</span>
@@ -205,14 +187,11 @@ export default function DashboardPage() {
             </Link>
           </Card>
         ) : (
-          <div
-            ref={recentsScrollRef}
-            className="flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden pb-1 [-ms-overflow-style:none] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300"
-          >
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto pr-1 app-scroll xl:grid-cols-2 2xl:grid-cols-3">
             {recentExams.map((exam) => (
               <Card
                 key={exam.id}
-                className="flex w-[min(100%,280px)] shrink-0 flex-col shadow-sm sm:w-72"
+                className="flex w-full flex-col shadow-sm"
               >
                 <CardHeader className="space-y-1 pb-2 pt-3">
                   <div className="flex items-start justify-between gap-2">

@@ -85,6 +85,10 @@ export function StudentCombobox({
         className="z-[100] w-[var(--radix-popover-trigger-width)] max-w-[min(100vw-1.5rem,calc(var(--radix-popover-trigger-width)+2rem))] overflow-hidden p-0 shadow-lg"
         align="start"
         sideOffset={6}
+        onOpenAutoFocus={(e) => {
+          // En móvil evita abrir teclado al desplegar; solo al tocar el buscador.
+          e.preventDefault();
+        }}
       >
         <Command
           filter={filter}

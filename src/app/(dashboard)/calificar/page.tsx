@@ -49,6 +49,8 @@ type ResultBreakdownItem = {
   isCorrect: boolean;
 };
 
+const MIN_AUTO_READ_RATIO = 0.8;
+
 export default function CalificarPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -171,7 +173,7 @@ export default function CalificarPage() {
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
       const raw = scanCalifacilOmrSheet(oriented, omrCols);
       const mapped = mapRawToDraft(raw, chunk);
-      const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
+      const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
       if (mapped.resolvedCount < minResolved) {
         setDraftSelections({});
         setLiveDraftSelections(mapped.draft);
@@ -317,10 +319,24 @@ export default function CalificarPage() {
   const startLiveCamera = async () => {
     if (cameraOpen) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      });
+      const attempts: MediaStreamConstraints[] = [
+        { video: { facingMode: { exact: 'environment' } }, audio: false },
+        { video: { facingMode: { ideal: 'environment' } }, audio: false },
+        { video: { facingMode: 'user' }, audio: false },
+        { video: true, audio: false },
+      ];
+      let stream: MediaStream | null = null;
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (stream) break;
+        } catch {
+          // Intentamos el siguiente perfil de cámara.
+        }
+      }
+      if (!stream) {
+        throw new Error('camera_unavailable');
+      }
       streamRef.current = stream;
       setCameraOpen(true);
       setLiveStatus('Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.');
@@ -329,6 +345,8 @@ export default function CalificarPage() {
       stableReadyTicksRef.current = 0;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.playsInline = true;
         await videoRef.current.play().catch(() => undefined);
       }
 
@@ -352,7 +370,7 @@ export default function CalificarPage() {
           setLiveDraftSelections(mapped.draft);
           setLiveResolvedCount(mapped.resolvedCount);
 
-          const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
+          const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
           if (mapped.resolvedCount >= chunk.length) {
             setLiveStatus('Detección completa. Captura lista.');
           } else if (mapped.resolvedCount >= minResolved) {
@@ -528,7 +546,7 @@ export default function CalificarPage() {
   if (!user) return null;
 
   return (
-    <div className="mx-auto flex max-w-lg flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
+    <div className="flex w-full flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
       <div>
         <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
@@ -678,9 +696,15 @@ export default function CalificarPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <div className="relative overflow-hidden rounded-lg border bg-black">
+                    <div className="relative overflow-hidden rounded-lg border bg-black/90">
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                      <video ref={videoRef} autoPlay playsInline muted className="w-full object-cover" />
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="aspect-[4/3] min-h-[12rem] w-full bg-black object-cover"
+                      />
                       <div className="pointer-events-none absolute inset-[12%] rounded-xl border-2 border-orange-400/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]" />
                     </div>
                     <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
