@@ -14,11 +14,17 @@ export const CALIFACIL_OMR_SCAN = {
   minMarkDarkness: 0.06,
   /** Ventaja mínima de la mejor burbuja contra la segunda */
   minBestVsSecondGap: 0.03,
+  /** Relación mínima entre mejor y segunda para evitar dobles marcas */
+  minBestVsSecondRatio: 1.28,
+  /** Diferencia mínima centro-anillo para confirmar relleno real */
+  minCenterVsRingDelta: 0.03,
 } as const;
 
 type ScanThresholds = {
   minMarkDarkness: number;
   minBestVsSecondGap: number;
+  minBestVsSecondRatio?: number;
+  minCenterVsRingDelta?: number;
 };
 
 type ScanDetailedResult = {
@@ -555,6 +561,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   for (let row = 0; row < 10; row++) {
     const cy = dataTop + (row + 0.5) * rowH;
     const scores: number[] = [];
+    const fills: number[] = [];
+    const rings: number[] = [];
     for (let c = 0; c < cols; c++) {
       const cx = bubbleAreaLeft + (c + 0.5) * cellW;
       const fillDark = sampleDiskDarkness(
@@ -574,25 +582,49 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
         Math.max(1, Math.round(radiusPx * 0.62)),
         Math.max(2, Math.round(radiusPx))
       );
+      fills.push(fillDark);
+      rings.push(ringDark);
       // Burbuja vacía: anillo oscuro y centro claro => score bajo/negativo.
       // Burbuja rellena: centro oscuro y diferencia positiva => score alto.
       scores.push(fillDark - ringDark * 0.9);
     }
-    const sorted = [...scores].sort((a, b) => b - a);
-    const best = sorted[0] ?? 0;
-    const second = sorted[1] ?? 0;
-    const gap = best - second;
-    if (best < thresholds.minMarkDarkness) {
-      out[row] = null;
-      continue;
-    }
-    if (cols >= 2 && gap < thresholds.minBestVsSecondGap) {
-      out[row] = null;
-      continue;
-    }
     let bestIdx = 0;
     for (let c = 1; c < cols; c++) {
       if (scores[c] > scores[bestIdx]) bestIdx = c;
+    }
+    let secondIdx = bestIdx === 0 ? 1 : 0;
+    for (let c = 0; c < cols; c++) {
+      if (c === bestIdx) continue;
+      if (scores[c] > scores[secondIdx]) secondIdx = c;
+    }
+
+    const best = scores[bestIdx] ?? 0;
+    const second = scores[secondIdx] ?? -1;
+    const gap = best - second;
+    const rowMean = scores.reduce((sum, s) => sum + s, 0) / Math.max(1, scores.length);
+    const dynamicMin = Math.max(thresholds.minMarkDarkness, rowMean + 0.012);
+    const dynamicGap = Math.max(thresholds.minBestVsSecondGap, Math.abs(best) * 0.26);
+    const ratio = best / Math.max(0.001, second + 0.001);
+    const centerVsRing = (fills[bestIdx] ?? 0) - (rings[bestIdx] ?? 0);
+    const minRatio = thresholds.minBestVsSecondRatio ?? CALIFACIL_OMR_SCAN.minBestVsSecondRatio;
+    const minCenterVsRingDelta =
+      thresholds.minCenterVsRingDelta ?? CALIFACIL_OMR_SCAN.minCenterVsRingDelta;
+    if (best < dynamicMin) {
+      out[row] = null;
+      continue;
+    }
+    if (cols >= 2 && (gap < dynamicGap || ratio < minRatio)) {
+      out[row] = null;
+      continue;
+    }
+    // Si segunda opción también parece marcada, rechazamos por ambigüedad.
+    if (second > dynamicMin * 0.92 && gap < dynamicGap * 1.25) {
+      out[row] = null;
+      continue;
+    }
+    if (centerVsRing < minCenterVsRingDelta) {
+      out[row] = null;
+      continue;
     }
     out[row] = bestIdx;
     resolvedCount++;
@@ -635,6 +667,8 @@ export function scanCalifacilOmrSheet(
   const thresholds: ScanThresholds = {
     minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
     minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
+    minBestVsSecondRatio: CALIFACIL_OMR_SCAN.minBestVsSecondRatio,
+    minCenterVsRingDelta: CALIFACIL_OMR_SCAN.minCenterVsRingDelta,
   };
 
   const fullSheetProfile: OmrGeometryProfile = {
@@ -657,8 +691,12 @@ export function scanCalifacilOmrSheet(
     const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
       const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
-      const score = detail.resolvedCount * 100 + detail.confidenceSum * 10;
-      const bestScore = best.resolvedCount * 100 + best.confidenceSum * 10;
+      const avgConfidence =
+        detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+      const bestAvgConfidence =
+        best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+      const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+      const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
       if (score > bestScore) {
         best = detail;
       }
