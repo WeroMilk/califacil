@@ -57,7 +57,11 @@ interface QuestionAnalysis {
   question: Question;
   totalAnswers: number;
   correctAnswers: number;
+  incorrectAnswers: number;
+  blankAnswers: number;
   percentageCorrect: number;
+  /** Opción múltiple: respuestas elegidas (texto) y frecuencia. */
+  optionCounts: { label: string; count: number; isCorrectOption: boolean }[];
 }
 
 type StudentQuestionBreakdown = {
@@ -127,11 +131,51 @@ export default function ExamResultsPage() {
                 isMultipleChoiceAnswerCorrect(question.options, a.answer_text, question.correct_answer)
               ).length
             : questionAnswers.filter((a) => a.is_correct).length;
+
+        let incorrectAnswers = 0;
+        let blankAnswers = 0;
+        const optTally: Record<string, number> = {};
+
+        for (const a of questionAnswers) {
+          const text = (a.answer_text ?? '').trim();
+          if (question.type === 'multiple_choice') {
+            if (!text) {
+              blankAnswers++;
+              continue;
+            }
+            const ok = isMultipleChoiceAnswerCorrect(
+              question.options,
+              a.answer_text,
+              question.correct_answer
+            );
+            if (!ok) incorrectAnswers++;
+            optTally[text] = (optTally[text] ?? 0) + 1;
+          } else {
+            if (!text) blankAnswers++;
+            else if (a.is_correct === false) incorrectAnswers++;
+          }
+        }
+
+        const correctOpt = (question.correct_answer ?? '').trim();
+        const optionCounts: { label: string; count: number; isCorrectOption: boolean }[] =
+          question.type === 'multiple_choice'
+            ? Object.entries(optTally)
+                .map(([label, count]) => ({
+                  label,
+                  count,
+                  isCorrectOption: label === correctOpt,
+                }))
+                .sort((x, y) => y.count - x.count)
+            : [];
+
         return {
           question,
           totalAnswers: questionAnswers.length,
           correctAnswers,
+          incorrectAnswers,
+          blankAnswers,
           percentageCorrect: calculatePercentage(correctAnswers, questionAnswers.length),
+          optionCounts,
         };
       });
 
@@ -377,7 +421,7 @@ export default function ExamResultsPage() {
           </TabsTrigger>
           <TabsTrigger value="questions">
             <CheckCircle className="w-4 h-4 mr-2" />
-            Por Pregunta
+            Ítems (por pregunta)
           </TabsTrigger>
         </TabsList>
 
@@ -571,32 +615,46 @@ export default function ExamResultsPage() {
         <TabsContent value="questions">
           <Card>
             <CardHeader>
-              <CardTitle>Análisis por Pregunta</CardTitle>
+              <CardTitle>Análisis agregado por ítem</CardTitle>
               <CardDescription>
-                Porcentaje de aciertos en cada pregunta
+                Aciertos, distractores más elegidos y respuestas en blanco (similar a informe por pregunta tipo ZipGrade).
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {questionAnalysis.map((analysis, index) => (
                   <div key={analysis.question.id} className="border rounded-lg p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex-1">
-                        <span className="text-sm font-medium text-gray-500">Pregunta {index + 1}</span>
-                        <p className="font-medium mt-1">{analysis.question.text}</p>
+                    <div className="flex items-start justify-between mb-2 gap-2">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-gray-500">Ítem {index + 1}</span>
+                        <p className="font-medium mt-1 text-sm sm:text-base">{analysis.question.text}</p>
                       </div>
                       <Badge className={analysis.percentageCorrect >= 70 
-                        ? 'bg-green-100 text-green-700' 
+                        ? 'bg-green-100 text-green-700 shrink-0' 
                         : analysis.percentageCorrect >= 50 
-                          ? 'bg-yellow-100 text-yellow-700' 
-                          : 'bg-red-100 text-red-700'
+                          ? 'bg-yellow-100 text-yellow-700 shrink-0' 
+                          : 'bg-red-100 text-red-700 shrink-0'
                       }>
                         {analysis.percentageCorrect}% aciertos
                       </Badge>
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                      <span>
+                        Correctas: <strong className="text-gray-900">{analysis.correctAnswers}</strong>
+                      </span>
+                      <span>
+                        Incorrectas: <strong className="text-gray-900">{analysis.incorrectAnswers}</strong>
+                      </span>
+                      <span>
+                        En blanco: <strong className="text-gray-900">{analysis.blankAnswers}</strong>
+                      </span>
+                      <span>
+                        N: <strong className="text-gray-900">{analysis.totalAnswers}</strong>
+                      </span>
+                    </div>
                     <div className="mt-3">
                       <div className="flex items-center justify-between text-sm text-gray-500 mb-1">
-                        <span>{analysis.correctAnswers} de {analysis.totalAnswers} correctas</span>
+                        <span>Proporción de aciertos sobre calificados</span>
                         <span>{analysis.totalAnswers} respuestas</span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2">
@@ -612,6 +670,48 @@ export default function ExamResultsPage() {
                         />
                       </div>
                     </div>
+                    {analysis.optionCounts.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                          Distractores (respuestas elegidas)
+                        </p>
+                        <div className="space-y-2">
+                          {analysis.optionCounts.map((oc) => {
+                            const pct = analysis.totalAnswers
+                              ? Math.round((oc.count / analysis.totalAnswers) * 100)
+                              : 0;
+                            return (
+                              <div key={oc.label} className="text-sm">
+                                <div className="flex justify-between gap-2 mb-0.5">
+                                  <span
+                                    className={
+                                      oc.isCorrectOption
+                                        ? 'font-medium text-green-800 truncate'
+                                        : 'text-gray-800 truncate'
+                                    }
+                                    title={oc.label}
+                                  >
+                                    {oc.isCorrectOption ? '✓ ' : ''}
+                                    {oc.label.length > 80 ? `${oc.label.slice(0, 80)}…` : oc.label}
+                                  </span>
+                                  <span className="text-gray-500 shrink-0">
+                                    {oc.count} ({pct}%)
+                                  </span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                                  <div
+                                    className={
+                                      oc.isCorrectOption ? 'h-1.5 rounded-full bg-green-500' : 'h-1.5 rounded-full bg-orange-400'
+                                    }
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

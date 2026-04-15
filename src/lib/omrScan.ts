@@ -26,6 +26,12 @@ export const CALIFACIL_OMR_SCAN = {
   minCenterVsRingDelta: 0.03,
   /** Si el disco interior es tan oscuro, damos por válida una marca aunque centro≈anillo (tinta llena). */
   minSolidCenterDarkness: 0.19,
+  /** Tras binarizar (Otsu por fila), fracción mínima de píxeles oscuros en disco para considerar marca. */
+  minBubbleInkFraction: 0.34,
+  /** Diferencia mínima entre la mayor y la segunda fracción de tinta en la fila. */
+  minInkFractionGap: 0.11,
+  /** Dos columnas por encima de esto (binario) ⇒ posible doble marca / ambigüedad. */
+  ambiguousInkTwinFloor: 0.3,
 } as const;
 
 type ScanThresholds = {
@@ -37,10 +43,26 @@ type ScanThresholds = {
   ringDarknessWeight?: number;
 };
 
+export type OmrScanRowDetail = {
+  pick: number | null;
+  /** Lectura dudosa: conviene segunda opinión (p. ej. visión). */
+  ambiguous: boolean;
+  /** Fracción de píxeles "tinta" por columna (0–1), tras umbral Otsu en la franja de la fila. */
+  inkFractions: number[];
+};
+
+export type OmrScanMetaResult = {
+  picks: (number | null)[];
+  rows: OmrScanRowDetail[];
+  /** Hay filas ambiguas donde la visión puede ayudar. */
+  needsVisionAssist: boolean;
+};
+
 type ScanDetailedResult = {
   picks: (number | null)[];
   resolvedCount: number;
   confidenceSum: number;
+  rows: OmrScanRowDetail[];
 };
 
 type OmrGeometryProfile = {
@@ -107,6 +129,88 @@ function sampleAnnulusDarkness(
     }
   }
   return n > 0 ? sum / n : 0;
+}
+
+function pixelGray255(data: Uint8ClampedArray, idx: number): number {
+  return Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+}
+
+function buildRowGrayHistogram(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  step: number
+): { hist: Uint32Array; total: number } {
+  const hist = new Uint32Array(256);
+  let total = 0;
+  const xa = Math.max(0, Math.floor(x0));
+  const xb = Math.min(width - 1, Math.ceil(x1));
+  const ya = Math.max(0, Math.floor(y0));
+  const yb = Math.min(height - 1, Math.ceil(y1));
+  for (let y = ya; y <= yb; y += step) {
+    for (let x = xa; x <= xb; x += step) {
+      const i = (y * width + x) * 4;
+      const g = pixelGray255(data, i);
+      hist[g]++;
+      total++;
+    }
+  }
+  return { hist, total };
+}
+
+function otsuThreshold256(hist: Uint32Array, total: number): number {
+  if (total < 8) return 140;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0;
+  let wB = 0;
+  let maxVar = 0;
+  let threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > maxVar) {
+      maxVar = between;
+      threshold = t;
+    }
+  }
+  return threshold;
+}
+
+function sampleDiskInkFractionAtThreshold(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  radiusPx: number,
+  grayThreshold: number
+): number {
+  let ink = 0;
+  let n = 0;
+  const r2 = radiusPx * radiusPx;
+  for (let dy = -radiusPx; dy <= radiusPx; dy++) {
+    for (let dx = -radiusPx; dx <= radiusPx; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = Math.round(cx + dx);
+      const y = Math.round(cy + dy);
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const i = (y * width + x) * 4;
+      if (pixelGray255(data, i) < grayThreshold) ink++;
+      n++;
+    }
+  }
+  return n > 0 ? ink / n : 0;
 }
 
 function drawSourceToCanvas(
@@ -308,6 +412,93 @@ function sampleBilinear(data: Uint8ClampedArray, width: number, height: number, 
     out[c] = v0 * (1 - ty) + v1 * ty;
   }
   return out;
+}
+
+/**
+ * Cuadrilátero de la hoja usando marcadores negros impresos en las 4 esquinas (ver printExam).
+ */
+function detectFiducialPageQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const { width: W, height: H } = canvas;
+  if (W < 160 || H < 160) return null;
+
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  const roi = 0.28;
+
+  type Roi = { x0: number; x1: number; y0: number; y1: number; tag: 'tl' | 'tr' | 'br' | 'bl' };
+  const rois: Roi[] = [
+    { x0: 0, x1: W * roi, y0: 0, y1: H * roi, tag: 'tl' },
+    { x0: W * (1 - roi), x1: W, y0: 0, y1: H * roi, tag: 'tr' },
+    { x0: W * (1 - roi), x1: W, y0: H * (1 - roi), y1: H, tag: 'br' },
+    { x0: 0, x1: W * roi, y0: H * (1 - roi), y1: H, tag: 'bl' },
+  ];
+
+  const centroids: Point[] = [];
+  for (const r of rois) {
+    let darkSum = 0;
+    let nDark = 0;
+    const xa = Math.max(0, Math.floor(r.x0));
+    const xb = Math.min(W - 1, Math.ceil(r.x1));
+    const ya = Math.max(0, Math.floor(r.y0));
+    const yb = Math.min(H - 1, Math.ceil(r.y1));
+    for (let y = ya; y <= yb; y++) {
+      for (let x = xa; x <= xb; x++) {
+        const i = (y * W + x) * 4;
+        const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+        darkSum += 1 - lum;
+        nDark++;
+      }
+    }
+    const avgD = nDark > 0 ? darkSum / nDark : 0;
+    const thresh = Math.min(0.55, Math.max(0.28, avgD + 0.14));
+
+    let sx = 0;
+    let sy = 0;
+    let mass = 0;
+    for (let y = ya; y <= yb; y++) {
+      for (let x = xa; x <= xb; x++) {
+        const i = (y * W + x) * 4;
+        const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+        if (1 - lum >= thresh) {
+          sx += x;
+          sy += y;
+          mass++;
+        }
+      }
+    }
+    if (mass < Math.max(12, (xb - xa) * (yb - ya) * 0.002)) {
+      return null;
+    }
+    centroids.push({ x: sx / mass, y: sy / mass });
+  }
+
+  if (centroids.length !== 4) return null;
+  const quad: [Point, Point, Point, Point] = [
+    centroids[0],
+    centroids[1],
+    centroids[2],
+    centroids[3],
+  ];
+
+  const topLen = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y);
+  const bottomLen = Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y);
+  const leftLen = Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y);
+  const rightLen = Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y);
+  const area =
+    Math.abs(
+      quad[0].x * quad[1].y +
+        quad[1].x * quad[2].y +
+        quad[2].x * quad[3].y +
+        quad[3].x * quad[0].y -
+        (quad[1].x * quad[0].y + quad[2].x * quad[1].y + quad[3].x * quad[2].y + quad[0].x * quad[3].y)
+    ) * 0.5;
+  if (area < W * H * 0.12) return null;
+  const ar = (topLen + bottomLen) / Math.max(1e-6, leftLen + rightLen);
+  if (ar < 0.45 || ar > 2.2) return null;
+
+  return quad;
 }
 
 function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
@@ -523,6 +714,11 @@ function warpPerspectiveToRect(
 }
 
 function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const fid = detectFiducialPageQuad(canvas);
+  if (fid) {
+    const warped = warpPerspectiveToRect(canvas, fid);
+    if (warped) return warped;
+  }
   const quad = detectCalifacilQuad(canvas);
   if (!quad) return canvas;
   return warpPerspectiveToRect(canvas, quad) ?? canvas;
@@ -549,8 +745,14 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
 ): ScanDetailedResult {
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const out: (number | null)[] = Array(10).fill(null);
+  const rowMetas: OmrScanRowDetail[] = [];
   const ctx = canvas.getContext('2d');
-  if (!ctx) return { picks: out, resolvedCount: 0, confidenceSum: 0 };
+  if (!ctx) {
+    for (let i = 0; i < 10; i++) {
+      rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
+    }
+    return { picks: out, resolvedCount: 0, confidenceSum: 0, rows: rowMetas };
+  }
   const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { data, width, height } = id;
 
@@ -565,14 +767,35 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const bubbleAreaW = width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
   const radiusPx = Math.max(2, Math.min(cellW, rowH) * 0.22);
+  const diskRInk = Math.max(2, Math.round(radiusPx * 0.9));
+
+  const minInkFrac = CALIFACIL_OMR_SCAN.minBubbleInkFraction;
+  const minInkGap = CALIFACIL_OMR_SCAN.minInkFractionGap;
+  const twinFloor = CALIFACIL_OMR_SCAN.ambiguousInkTwinFloor;
 
   let resolvedCount = 0;
   let confidenceSum = 0;
   for (let row = 0; row < 10; row++) {
     const cy = dataTop + (row + 0.5) * rowH;
+    const yRowTop = dataTop + row * rowH;
+    const yRowBot = dataTop + (row + 1) * rowH;
+
+    const { hist, total } = buildRowGrayHistogram(
+      data,
+      width,
+      height,
+      bubbleAreaLeft,
+      width - 1,
+      yRowTop,
+      yRowBot,
+      2
+    );
+    const otsuT = otsuThreshold256(hist, Math.max(1, total));
+
     const scores: number[] = [];
     const fills: number[] = [];
     const rings: number[] = [];
+    const inkFracs: number[] = [];
     for (let c = 0; c < cols; c++) {
       const cx = bubbleAreaLeft + (c + 0.5) * cellW;
       const fillDark = sampleDiskDarkness(
@@ -594,11 +817,13 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       );
       fills.push(fillDark);
       rings.push(ringDark);
-      // Burbuja vacía: anillo oscuro y centro claro => score bajo/negativo.
-      // Burbuja rellena: centro oscuro; si está muy llena, anillo también oscuro (sigue ganando vs vacías).
       const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
       scores.push(fillDark - ringDark * rw);
+      inkFracs.push(
+        sampleDiskInkFractionAtThreshold(data, width, height, cx, cy, diskRInk, otsuT)
+      );
     }
+
     let bestIdx = 0;
     for (let c = 1; c < cols; c++) {
       if (scores[c] > scores[bestIdx]) bestIdx = c;
@@ -624,30 +849,67 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       thresholds.minCenterVsRingDelta ?? CALIFACIL_OMR_SCAN.minCenterVsRingDelta;
     const solidCenterMin =
       thresholds.minSolidCenterDarkness ?? CALIFACIL_OMR_SCAN.minSolidCenterDarkness;
-    if (best < dynamicMin) {
-      out[row] = null;
-      continue;
+
+    let rulePick: number | null = null;
+    if (
+      best >= dynamicMin &&
+      !(cols >= 2 && (gap < dynamicGap || ratio < minRatio)) &&
+      !(second > dynamicMin * 0.92 && gap < dynamicGap * 1.25) &&
+      (centerVsRing >= minCenterVsRingDelta || fillBest >= solidCenterMin)
+    ) {
+      rulePick = bestIdx;
     }
-    if (cols >= 2 && (gap < dynamicGap || ratio < minRatio)) {
-      out[row] = null;
-      continue;
+
+    let inkBestIdx = 0;
+    for (let c = 1; c < cols; c++) {
+      if (inkFracs[c] > inkFracs[inkBestIdx]) inkBestIdx = c;
     }
-    // Si segunda opción también parece marcada, rechazamos por ambigüedad.
-    if (second > dynamicMin * 0.92 && gap < dynamicGap * 1.25) {
-      out[row] = null;
-      continue;
+    let inkSecondIdx = inkBestIdx === 0 ? 1 : 0;
+    for (let c = 0; c < cols; c++) {
+      if (c === inkBestIdx) continue;
+      if (inkFracs[c] > inkFracs[inkSecondIdx]) inkSecondIdx = c;
     }
-    // Vacía: centro claro y anillo impreso => centerVsRing negativo o muy bajo.
-    // Muy rellena: centro y anillo igual de oscuros => centerVsRing≈0; exigir entonces tinta fuerte en el disco.
-    if (centerVsRing < minCenterVsRingDelta && fillBest < solidCenterMin) {
-      out[row] = null;
-      continue;
+    const maxInk = inkFracs[inkBestIdx] ?? 0;
+    const secondInk = inkFracs[inkSecondIdx] ?? 0;
+    const inkGap = maxInk - secondInk;
+
+    let inkPick: number | null = null;
+    if (maxInk >= minInkFrac && inkGap >= minInkGap) {
+      inkPick = inkBestIdx;
     }
-    out[row] = bestIdx;
-    resolvedCount++;
-    confidenceSum += best + gap;
+
+    const twins = inkFracs.filter((f) => f >= twinFloor).length;
+
+    let pick: number | null = null;
+    let ambiguous = false;
+
+    if (rulePick !== null && inkPick !== null) {
+      if (rulePick === inkPick) {
+        pick = rulePick;
+        ambiguous = twins >= 2 && inkGap < 0.17;
+      } else {
+        pick = null;
+        ambiguous = true;
+      }
+    } else if (rulePick !== null) {
+      pick = rulePick;
+      ambiguous = twins >= 2;
+    } else if (inkPick !== null) {
+      pick = inkPick;
+      ambiguous = twins >= 2 || inkGap < minInkGap + 0.04;
+    } else {
+      pick = null;
+      ambiguous = maxInk > 0.22 && (twins >= 2 || inkGap < 0.09);
+    }
+
+    out[row] = pick;
+    rowMetas.push({ pick, ambiguous, inkFractions: [...inkFracs] });
+    if (pick !== null) {
+      resolvedCount++;
+      confidenceSum += best + gap + maxInk * 0.15;
+    }
   }
-  return { picks: out, resolvedCount, confidenceSum };
+  return { picks: out, resolvedCount, confidenceSum, rows: rowMetas };
 }
 
 function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
@@ -704,7 +966,17 @@ export function scanCalifacilOmrSheet(
   const corrected = applyPerspectiveCorrection(canvas);
   const canvases = corrected === canvas ? [canvas] : [canvas, corrected];
 
-  let best: ScanDetailedResult = { picks: Array(10).fill(null), resolvedCount: 0, confidenceSum: Number.NEGATIVE_INFINITY };
+  const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
+    pick: null,
+    ambiguous: false,
+    inkFractions: [],
+  }));
+  let best: ScanDetailedResult = {
+    picks: Array(10).fill(null),
+    resolvedCount: 0,
+    confidenceSum: Number.NEGATIVE_INFINITY,
+    rows: emptyRows,
+  };
 
   for (const c of canvases) {
     const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
@@ -723,6 +995,84 @@ export function scanCalifacilOmrSheet(
   }
 
   return best.picks;
+}
+
+/**
+ * Igual que {@link scanCalifacilOmrSheet} pero expone filas, fracción de tinta y si conviene asistencia por visión.
+ */
+export function scanCalifacilOmrSheetWithMeta(
+  source: HTMLImageElement | HTMLCanvasElement,
+  columns: number
+): OmrScanMetaResult {
+  if (typeof document === 'undefined') {
+    return {
+      picks: Array(10).fill(null),
+      rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
+      needsVisionAssist: false,
+    };
+  }
+  const canvas = drawSourceToCanvas(source);
+  if (!canvas) {
+    return {
+      picks: Array(10).fill(null),
+      rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
+      needsVisionAssist: false,
+    };
+  }
+
+  const thresholds: ScanThresholds = {
+    minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
+    minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
+    minBestVsSecondRatio: CALIFACIL_OMR_SCAN.minBestVsSecondRatio,
+    minCenterVsRingDelta: CALIFACIL_OMR_SCAN.minCenterVsRingDelta,
+    minSolidCenterDarkness: CALIFACIL_OMR_SCAN.minSolidCenterDarkness,
+    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+  };
+
+  const fullSheetProfile: OmrGeometryProfile = {
+    bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
+    titleStripRatioOfBand: CALIFACIL_OMR_SCAN.titleStripRatioOfBand,
+    qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+  };
+  const croppedBoxProfiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.12, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+  ];
+
+  const corrected = applyPerspectiveCorrection(canvas);
+  const canvases = corrected === canvas ? [canvas] : [canvas, corrected];
+
+  const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
+    pick: null,
+    ambiguous: false,
+    inkFractions: [],
+  }));
+  let best: ScanDetailedResult = {
+    picks: Array(10).fill(null),
+    resolvedCount: 0,
+    confidenceSum: Number.NEGATIVE_INFINITY,
+    rows: emptyRows,
+  };
+
+  for (const c of canvases) {
+    const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
+    for (const profile of profiles) {
+      const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
+      const avgConfidence =
+        detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+      const bestAvgConfidence =
+        best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+      const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+      const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
+      if (score > bestScore) {
+        best = detail;
+      }
+    }
+  }
+
+  const needsVisionAssist = best.rows.some((r) => r.ambiguous);
+  return { picks: best.picks, rows: best.rows, needsVisionAssist };
 }
 
 /**
@@ -777,6 +1127,24 @@ export function autoOrientCalifacilSheet(
   // Evita variable no usada cuando el compilador endurece reglas.
   void bestCardinal;
   return applyPerspectiveCorrection(bestCanvas);
+}
+
+/** JPEG en data URL para enviar a la API de visión (desde imagen o canvas). */
+export function califacilImageToJpegDataUrl(
+  source: HTMLImageElement | HTMLCanvasElement,
+  quality = 0.88
+): string {
+  if (typeof document === 'undefined') return '';
+  if (source instanceof HTMLCanvasElement) {
+    return source.toDataURL('image/jpeg', quality);
+  }
+  const c = document.createElement('canvas');
+  c.width = source.naturalWidth || source.width;
+  c.height = source.naturalHeight || source.height;
+  const ctx = c.getContext('2d');
+  if (!ctx) return '';
+  ctx.drawImage(source, 0, 0);
+  return c.toDataURL('image/jpeg', quality);
 }
 
 export function fileToImage(file: File): Promise<HTMLImageElement> {

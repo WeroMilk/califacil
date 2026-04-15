@@ -31,6 +31,12 @@ export async function POST(request: NextRequest) {
     const imageBase64: string = body.imageBase64;
     const rows: RowMeta[] = body.rows;
     const omrColumnCount: number = Number(body.omrColumnCount) || 4;
+    /** Si se envía, el modelo solo rellena estos números de pregunta (ambigüedad OMR). */
+    const focusNumbers: number[] | undefined = Array.isArray(body.focusNumbers)
+      ? body.focusNumbers
+          .map((n: unknown) => Number(n))
+          .filter((n: number) => Number.isFinite(n) && n > 0)
+      : undefined;
 
     if (!examId || typeof examId !== 'string') {
       return NextResponse.json({ error: 'Falta examId' }, { status: 400 });
@@ -42,8 +48,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'rows inválido (1–10)' }, { status: 400 });
     }
 
-    const questionIds = Array.from(new Set(rows.map((r) => r.questionId).filter(Boolean)));
-    if (questionIds.length !== rows.length) {
+    const focusSet =
+      focusNumbers && focusNumbers.length > 0 ? new Set(focusNumbers.map((n) => Math.round(n))) : null;
+    const rowsFiltered = focusSet ? rows.filter((r) => focusSet.has(r.globalNumber)) : rows;
+    if (rowsFiltered.length === 0) {
+      return NextResponse.json({ error: 'Ninguna fila coincide con focusNumbers' }, { status: 400 });
+    }
+
+    const questionIds = Array.from(new Set(rowsFiltered.map((r) => r.questionId).filter(Boolean)));
+    if (questionIds.length !== rowsFiltered.length) {
       return NextResponse.json({ error: 'Filas de preguntas duplicadas o inválidas' }, { status: 400 });
     }
 
@@ -71,8 +84,9 @@ export async function POST(request: NextRequest) {
     }
 
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.slice(0, Math.min(5, Math.max(2, omrColumnCount)));
-    const nums = rows.map((r) => r.globalNumber).sort((a, b) => a - b);
-    const spec = rows
+
+    const nums = rowsFiltered.map((r) => r.globalNumber).sort((a, b) => a - b);
+    const spec = rowsFiltered
       .map((r) => {
         const n = r.options.length;
         const allowed = letters.slice(0, n);
@@ -81,6 +95,10 @@ export async function POST(request: NextRequest) {
       .join('\n');
 
     const numList = nums.join(', ');
+    const scopeNote =
+      focusSet && focusNumbers && focusNumbers.length > 0
+        ? `IMPORTANTE: Solo debes incluir en byNumber las preguntas con número global: ${numList}. No incluyas otras claves.`
+        : '';
     const prompt = `Eres un lector experto de hojas de examen tipo OPSCAN/CaliFacil.
 
 La imagen muestra la parte inferior de una hoja impresa: un recuadro con filas numeradas y burbujas circulares por fila (letras A, B, C…).
@@ -91,6 +109,8 @@ TAREA:
 - Responde ÚNICAMENTE con JSON: un objeto "byNumber" cuyas claves son STRINGS con el número de pregunta global (${numList}), y valores la letra elegida ("A","B",…) o null.
 
 Ejemplo de forma (sustituye valores reales): {"byNumber":{"3":"B","4":null}}
+
+${scopeNote}
 
 Preguntas en esta hoja:
 ${spec}
@@ -135,7 +155,7 @@ Letra válida en cada fila: solo las primeras N letras del abecedario según cu�
     const byNumber = parsed.byNumber ?? {};
     const selections: Record<string, string> = {};
 
-    for (const row of rows) {
+    for (const row of rowsFiltered) {
       const key = String(row.globalNumber);
       const letterRaw = byNumber[key];
       const letter =
