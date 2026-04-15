@@ -315,13 +315,23 @@ export default function StudentExamPage() {
     const token = readExamClientSession(examId, selectedStudentId) || crypto.randomUUID();
 
     try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: false,
-        });
-      } catch {
+      let stream: MediaStream | null = null;
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+        const attempts: MediaStreamConstraints[] = [
+          { video: { facingMode: { ideal: 'user' } }, audio: false },
+          { video: { facingMode: 'user' }, audio: false },
+          { video: true, audio: false },
+        ];
+        for (const constraints of attempts) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (stream) break;
+          } catch {
+            /* siguiente perfil (p. ej. escritorio sin facingMode) */
+          }
+        }
+      }
+      if (!stream) {
         toast.error('Debes permitir la cámara para hacer el examen');
         setStartingExam(false);
         return;

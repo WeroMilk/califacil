@@ -632,6 +632,161 @@ function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElemen
   return warpPerspectiveToRect(canvas, quad) ?? canvas;
 }
 
+/**
+ * Proyección de borde horizontal: promedio de |I(y,x) − I(y−1,x)| en la franja de burbujas.
+ * Los trazos negros de la tabla producen picos en y.
+ */
+function buildHorizontalEdgeProjection(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number
+): Float64Array {
+  const proj = new Float64Array(height);
+  const ya = Math.max(1, Math.floor(y0));
+  const yb = Math.min(height - 1, Math.ceil(y1));
+  const xa = Math.max(0, Math.floor(x0));
+  const xb = Math.min(width - 1, Math.ceil(x1));
+  const denom = Math.max(1, xb - xa);
+  for (let y = ya; y < yb; y++) {
+    let s = 0;
+    for (let x = xa; x < xb; x++) {
+      const i1 = (y * width + x) * 4;
+      const i0 = ((y - 1) * width + x) * 4;
+      s += Math.abs(pixelGray255(data, i1) - pixelGray255(data, i0));
+    }
+    proj[y] = s / denom;
+  }
+  return proj;
+}
+
+function boxSmoothInRange(proj: Float64Array, y0: number, y1: number, radius: number): void {
+  if (radius < 1) return;
+  const lo = Math.max(0, y0);
+  const hi = Math.min(proj.length - 1, y1);
+  const tmp = new Float64Array(hi - lo + 1);
+  for (let i = lo; i <= hi; i++) tmp[i - lo] = proj[i];
+  const w = radius * 2 + 1;
+  for (let y = lo + radius; y <= hi - radius; y++) {
+    let sum = 0;
+    for (let k = -radius; k <= radius; k++) sum += tmp[y - lo + k];
+    proj[y] = sum / w;
+  }
+}
+
+/** Picos locales con fusión de vecinos demasiado cercanos (se queda el más alto). */
+function findHorizontalLinePeaks(
+  proj: Float64Array,
+  y0: number,
+  y1: number,
+  minDist: number,
+  minRel: number
+): number[] {
+  let peakMax = 0;
+  for (let y = y0 + 2; y < y1 - 2; y++) peakMax = Math.max(peakMax, proj[y]);
+  const thr = Math.max(peakMax * minRel, 1e-6);
+  const raw: number[] = [];
+  for (let y = y0 + 2; y < y1 - 2; y++) {
+    const v = proj[y];
+    if (v < thr) continue;
+    if (v <= proj[y - 1] || v < proj[y + 1]) continue;
+    raw.push(y);
+  }
+  raw.sort((a, b) => a - b);
+  const merged: number[] = [];
+  for (const y of raw) {
+    if (merged.length === 0) {
+      merged.push(y);
+      continue;
+    }
+    const last = merged[merged.length - 1]!;
+    if (y - last < minDist) {
+      if (proj[y] > proj[last]) merged[merged.length - 1] = y;
+    } else {
+      merged.push(y);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Elige 11 líneas horizontales coherentes con el espaciado esperado (~altura de fila).
+ * Devuelve y ordenadas de arriba abajo o null.
+ */
+function pickElevenTableLines(
+  peaks: number[],
+  expectedGap: number,
+  dataTop: number,
+  dataHeight: number
+): number[] | null {
+  if (peaks.length < 11) return null;
+  peaks = [...peaks].sort((a, b) => a - b);
+  const yMin = dataTop - dataHeight * 0.08;
+  const yMax = dataTop + dataHeight * 1.08;
+  const filtered = peaks.filter((y) => y >= yMin && y <= yMax);
+  if (filtered.length < 11) return null;
+
+  let best: number[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  const n = filtered.length;
+  for (let s = 0; s <= n - 11; s++) {
+    const window = filtered.slice(s, s + 11);
+    const gaps: number[] = [];
+    for (let i = 0; i < 10; i++) gaps.push(window[i + 1]! - window[i]!);
+    const mean = gaps.reduce((a, b) => a + b, 0) / 10;
+    if (mean < expectedGap * 0.42 || mean > expectedGap * 2.2) continue;
+    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / 10;
+    const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
+    if (cv > 0.42) continue;
+    const spacingPenalty =
+      Math.abs(mean - expectedGap) / (expectedGap + 1e-6);
+    const score = var_ + spacingPenalty * expectedGap * expectedGap * 0.35;
+    if (score < bestScore) {
+      bestScore = score;
+      best = window;
+    }
+  }
+  return best;
+}
+
+/**
+ * Detecta 11 líneas horizontales de la rejilla impresa y devuelve sus y (11 bordes → 10 filas).
+ */
+function refineOmrRowBoundariesFromTableLines(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bubbleAreaLeft: number,
+  dataTop: number,
+  dataHeight: number
+): number[] | null {
+  const rowHGuess = dataHeight / 10;
+  const pad = Math.max(3, rowHGuess * 0.12);
+  const yStart = Math.max(1, Math.floor(dataTop - pad));
+  const yEnd = Math.min(height - 2, Math.ceil(dataTop + dataHeight + pad));
+  const xPad = Math.max(2, width * 0.015);
+  const x0 = Math.min(width - 10, bubbleAreaLeft + xPad);
+  const x1 = width - 2;
+  if (x1 <= x0 + 12 || yEnd <= yStart + rowHGuess * 4) return null;
+
+  const proj = buildHorizontalEdgeProjection(data, width, height, x0, x1, yStart, yEnd);
+  boxSmoothInRange(proj, yStart, yEnd, 2);
+
+  const minDist = Math.max(2, rowHGuess * 0.38);
+  const peaks = findHorizontalLinePeaks(proj, yStart, yEnd, minDist, 0.14);
+  const lines = pickElevenTableLines(peaks, rowHGuess, dataTop, dataHeight);
+  if (!lines) return null;
+
+  for (let i = 0; i < 10; i++) {
+    const g = lines[i + 1]! - lines[i]!;
+    if (g < 3 || g > rowHGuess * 2.5) return null;
+  }
+  return lines;
+}
+
 function scanCalifacilOmrCanvasDetailed(
   canvas: HTMLCanvasElement,
   columns: number,
@@ -674,8 +829,15 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const bubbleAreaLeft = qNumW;
   const bubbleAreaW = width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
-  const radiusPx = Math.max(2, Math.min(cellW, rowH) * 0.22);
-  const diskRInk = Math.max(2, Math.round(radiusPx * 0.9));
+
+  const lineYs = refineOmrRowBoundariesFromTableLines(
+    data,
+    width,
+    height,
+    bubbleAreaLeft,
+    dataTop,
+    dataHeight
+  );
 
   const minInkFrac = CALIFACIL_OMR_SCAN.minBubbleInkFraction;
   const minInkGap = CALIFACIL_OMR_SCAN.minInkFractionGap;
@@ -684,9 +846,21 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   let resolvedCount = 0;
   let confidenceSum = 0;
   for (let row = 0; row < 10; row++) {
-    const cy = dataTop + (row + 0.5) * rowH;
-    const yRowTop = dataTop + row * rowH;
-    const yRowBot = dataTop + (row + 1) * rowH;
+    let yRowTop: number;
+    let yRowBot: number;
+    let cy: number;
+    if (lineYs && lineYs.length === 11) {
+      yRowTop = lineYs[row]!;
+      yRowBot = lineYs[row + 1]!;
+      cy = (yRowTop + yRowBot) * 0.5;
+    } else {
+      yRowTop = dataTop + row * rowH;
+      yRowBot = dataTop + (row + 1) * rowH;
+      cy = dataTop + (row + 0.5) * rowH;
+    }
+    const localRowH = Math.max(1, yRowBot - yRowTop);
+    const radiusPx = Math.max(2, Math.min(cellW, localRowH) * 0.22);
+    const diskRInk = Math.max(2, Math.round(radiusPx * 0.9));
 
     const { hist, total } = buildRowGrayHistogram(
       data,
