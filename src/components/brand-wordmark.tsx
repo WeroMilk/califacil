@@ -9,29 +9,52 @@ type BrandWordmarkProps = {
   priority?: boolean;
 };
 
+/** Logo vectorial inline (evita 404 y problemas de `<img>` con SVG en algunos móviles/CDN). */
+function CalifacilWordmarkSvg({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 420 72"
+      fill="none"
+      className={cn('block h-auto w-auto max-w-full shrink-0', className)}
+      aria-hidden
+      focusable="false"
+    >
+      <text
+        x="0"
+        y="52"
+        fontFamily="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+        fontSize="44"
+        fontWeight="800"
+        fill="#ea580c"
+        letterSpacing="-0.03em"
+      >
+        CALIFÁCIL
+      </text>
+      <path
+        d="M338 10 L356 30 L388 6"
+        stroke="#16a34a"
+        strokeWidth="6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
 /**
- * Logo horizontal CALIFÁCIL + marca (SVG vectorial para nitidez en retina / móvil).
+ * Logo horizontal CALIFÁCIL + marca (SVG inline, nitidez en cualquier DPI).
  */
 export function BrandWordmark({
   href,
   className,
   imgClassName,
-  priority = false,
+  priority: _priority,
 }: BrandWordmarkProps) {
   const to = href === false ? null : href ?? '/';
 
-  const img = (
-    <img
-      src="/califacil-wordmark.svg"
-      alt=""
-      width={400}
-      height={72}
-      aria-hidden
-      decoding="async"
-      fetchPriority={priority ? 'high' : 'low'}
-      className={cn('block h-auto w-auto max-w-full object-contain object-left', imgClassName)}
-    />
-  );
+  const mark = <CalifacilWordmarkSvg className={imgClassName} />;
 
   if (to !== null) {
     return (
@@ -40,7 +63,7 @@ export function BrandWordmark({
         className={cn('inline-flex max-w-full items-center', className)}
         aria-label="CaliFácil, inicio"
       >
-        {img}
+        {mark}
       </Link>
     );
   }
@@ -51,7 +74,7 @@ export function BrandWordmark({
       role="img"
       aria-label="CaliFácil"
     >
-      {img}
+      {mark}
     </span>
   );
 }
