@@ -34,6 +34,18 @@ export const CALIFACIL_OMR_SCAN = {
   ambiguousInkTwinFloor: 0.3,
 } as const;
 
+/**
+ * Parámetros inspirados en [OMRChecker](https://github.com/Udayraj123/OMRChecker)
+ * (CLAHE, GAMMA_LOW, normalización) para fotos de móvil con sombras / bajo contraste.
+ */
+const OMRCHECKER_STYLE_PRE = {
+  claheClipLimit: 5,
+  tileW: 16,
+  tileH: 16,
+  /** `threshold_params.GAMMA_LOW` en OMRChecker `defaults/config.py` */
+  gammaLow: 0.7,
+} as const;
+
 type ScanThresholds = {
   minMarkDarkness: number;
   minBestVsSecondGap: number;
@@ -632,6 +644,189 @@ function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElemen
   return warpPerspectiveToRect(canvas, quad) ?? canvas;
 }
 
+function normalizeMinMaxInPlaceGray(gray: Uint8Array): void {
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < gray.length; i++) {
+    const v = gray[i]!;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (max <= min) return;
+  const scale = 255 / (max - min);
+  for (let i = 0; i < gray.length; i++) {
+    gray[i] = Math.round((gray[i]! - min) * scale);
+  }
+}
+
+function gammaCorrectGrayInPlace(gray: Uint8Array, gamma: number): void {
+  const invGamma = 1 / gamma;
+  for (let i = 0; i < gray.length; i++) {
+    const v = gray[i]! / 255;
+    gray[i] = Math.round(Math.pow(v, invGamma) * 255);
+  }
+}
+
+/** CLAHE por teselas (similar a `cv2.createCLAHE` en OMRChecker). */
+function claheGrayToNewBuffer(
+  src: Uint8Array,
+  w: number,
+  h: number,
+  tileW: number,
+  tileH: number,
+  clipLimit: number
+): Uint8Array {
+  const dst = new Uint8Array(w * h);
+  const tilesX = Math.ceil(w / tileW);
+  const tilesY = Math.ceil(h / tileH);
+  for (let ty = 0; ty < tilesY; ty++) {
+    for (let tx = 0; tx < tilesX; tx++) {
+      const x0 = tx * tileW;
+      const y0 = ty * tileH;
+      const x1 = Math.min(w, x0 + tileW);
+      const y1 = Math.min(h, y0 + tileH);
+      let tilePixels = 0;
+      const hist = new Uint32Array(256);
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          hist[src[y * w + x]!]++;
+          tilePixels++;
+        }
+      }
+      const limit = Math.max(1, Math.floor((clipLimit * tilePixels) / 256));
+      let excess = 0;
+      for (let i = 0; i < 256; i++) {
+        if (hist[i]! > limit) {
+          excess += hist[i]! - limit;
+          hist[i] = limit;
+        }
+      }
+      const add = Math.floor(excess / 256);
+      for (let i = 0; i < 256; i++) {
+        hist[i] += add;
+      }
+      let rem = excess - add * 256;
+      for (let i = 0; i < 256 && rem > 0; i++) {
+        const space = limit - hist[i]!;
+        if (space > 0) {
+          const take = Math.min(space, rem);
+          hist[i] += take;
+          rem -= take;
+        }
+      }
+      const cdf = new Uint32Array(256);
+      cdf[0] = hist[0]!;
+      for (let i = 1; i < 256; i++) cdf[i] = cdf[i - 1]! + hist[i]!;
+      let cdfMin = 0;
+      for (let i = 0; i < 256; i++) {
+        if (cdf[i]! > 0) {
+          cdfMin = cdf[i]!;
+          break;
+        }
+      }
+      const denom = Math.max(1, tilePixels - cdfMin);
+      const lut = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) {
+        lut[i] = Math.min(255, Math.round(((cdf[i]! - cdfMin) * 255) / denom));
+      }
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          dst[y * w + x] = lut[src[y * w + x]!]!;
+        }
+      }
+    }
+  }
+  return dst;
+}
+
+function grayBufferToRgbCanvas(gray: Uint8Array, w: number, h: number): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const id = ctx.createImageData(w, h);
+  const d = id.data;
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) {
+    const g = gray[i]!;
+    d[j] = g;
+    d[j + 1] = g;
+    d[j + 2] = g;
+    d[j + 3] = 255;
+  }
+  ctx.putImageData(id, 0, 0);
+  return canvas;
+}
+
+function getGrayBufferFromCanvas(canvas: HTMLCanvasElement): { gray: Uint8Array; w: number; h: number } | null {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 32 || h < 32) return null;
+  const id = ctx.getImageData(0, 0, w, h);
+  const src = id.data;
+  const gray = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < src.length; i += 4, j++) {
+    gray[j] = Math.round(0.299 * src[i]! + 0.587 * src[i + 1]! + 0.114 * src[i + 2]!);
+  }
+  return { gray, w, h };
+}
+
+/**
+ * Cadena similar a OMRChecker `read_omr_response` (CLAHE → gamma → normalize) antes de leer medias.
+ * Mejora fotos de cámara con sombras; se combina con el escaneo original y se elige la lectura con mejor puntuación.
+ */
+function applyOmrcheckerStylePreprocess(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const got = getGrayBufferFromCanvas(canvas);
+  if (!got) return null;
+  let { gray, w, h } = got;
+  normalizeMinMaxInPlaceGray(gray);
+  gray = claheGrayToNewBuffer(
+    gray,
+    w,
+    h,
+    OMRCHECKER_STYLE_PRE.tileW,
+    OMRCHECKER_STYLE_PRE.tileH,
+    OMRCHECKER_STYLE_PRE.claheClipLimit
+  );
+  gammaCorrectGrayInPlace(gray, OMRCHECKER_STYLE_PRE.gammaLow);
+  normalizeMinMaxInPlaceGray(gray);
+  return grayBufferToRgbCanvas(gray, w, h);
+}
+
+/**
+ * Variantes a probar: original / corrección de perspectiva / mismas con preprocesado estilo OMRChecker.
+ * `preferFullSheetFirst`: orden de perfiles geométricos (igual que antes para raw vs corregido).
+ */
+function buildOmrScanCanvasVariants(
+  canvas: HTMLCanvasElement,
+  corrected: HTMLCanvasElement
+): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
+  const out: Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> = [];
+  const pushUnique = (c: HTMLCanvasElement, preferFullFirst: boolean) => {
+    if (!out.some((o) => o.canvas === c)) {
+      out.push({ canvas: c, preferFullSheetFirst: preferFullFirst });
+    }
+  };
+  pushUnique(canvas, true);
+  if (corrected !== canvas) {
+    pushUnique(corrected, false);
+  }
+  const preOrig = applyOmrcheckerStylePreprocess(canvas);
+  if (preOrig) {
+    pushUnique(preOrig, true);
+  }
+  if (corrected !== canvas) {
+    const preCorr = applyOmrcheckerStylePreprocess(corrected);
+    if (preCorr) {
+      pushUnique(preCorr, false);
+    }
+  }
+  return out;
+}
+
 /**
  * Proyección de borde horizontal: promedio de |I(y,x) − I(y−1,x)| en la franja de burbujas.
  * Los trazos negros de la tabla producen picos en y.
@@ -1046,7 +1241,7 @@ export function scanCalifacilOmrSheet(
   ];
 
   const corrected = applyPerspectiveCorrection(canvas);
-  const canvases = corrected === canvas ? [canvas] : [canvas, corrected];
+  const variants = buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
     pick: null,
@@ -1060,8 +1255,10 @@ export function scanCalifacilOmrSheet(
     rows: emptyRows,
   };
 
-  for (const c of canvases) {
-    const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
+  for (const { canvas: c, preferFullSheetFirst } of variants) {
+    const profiles = preferFullSheetFirst
+      ? [fullSheetProfile, ...croppedBoxProfiles]
+      : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
       const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
       const avgConfidence =
@@ -1123,7 +1320,7 @@ export function scanCalifacilOmrSheetWithMeta(
   ];
 
   const corrected = applyPerspectiveCorrection(canvas);
-  const canvases = corrected === canvas ? [canvas] : [canvas, corrected];
+  const variants = buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
     pick: null,
@@ -1137,8 +1334,10 @@ export function scanCalifacilOmrSheetWithMeta(
     rows: emptyRows,
   };
 
-  for (const c of canvases) {
-    const profiles = c === canvas ? [fullSheetProfile, ...croppedBoxProfiles] : [...croppedBoxProfiles, fullSheetProfile];
+  for (const { canvas: c, preferFullSheetFirst } of variants) {
+    const profiles = preferFullSheetFirst
+      ? [fullSheetProfile, ...croppedBoxProfiles]
+      : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
       const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
       const avgConfidence =
