@@ -57,11 +57,20 @@ const QNUM_WIDTH_SWEEP = [0.065, 0.075, 0.085, 0.09, 0.1, 0.11, 0.125, 0.14] as 
 /** Subconjunto para cámara en vivo (menos latencia por frame). */
 const QNUM_WIDTH_SWEEP_LIVE = [0.075, 0.085, 0.09, 0.1, 0.11, 0.125] as const;
 
+/**
+ * Traslación horizontal del área de burbujas en px (corrige desalineación cámara vs rejilla).
+ * Se combina con el barrido de `qnumWidthRatio`.
+ */
+const COLUMN_SHIFT_PX_SWEEP = [-14, -10, -6, -3, 0, 3, 6, 10, 14] as const;
+const COLUMN_SHIFT_PX_LIVE = [-10, -6, 0, 6, 10] as const;
+
 export type CalifacilScanOptions = {
   /** Si true, no recorta al marco guía (la imagen ya pasó por prepare/autoOrient). */
   skipGuideCrop?: boolean;
   /** Barrido de `qnumWidthRatio`: `live` = menos valores (vídeo en vivo). */
   qnumSweep?: 'full' | 'live';
+  /** Barrido de desplazamiento horizontal en px: `live` = menos valores. */
+  columnShiftSweep?: 'full' | 'live';
 };
 
 type ScanThresholds = {
@@ -1055,7 +1064,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   canvas: HTMLCanvasElement,
   columns: number,
   thresholds: ScanThresholds,
-  profile: OmrGeometryProfile
+  profile: OmrGeometryProfile,
+  columnShiftPx = 0
 ): ScanDetailedResult {
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const out: (number | null)[] = Array(10).fill(null);
@@ -1077,7 +1087,10 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const rowH = dataHeight / 10;
 
   const qNumW = width * profile.qnumWidthRatio;
-  const bubbleAreaLeft = qNumW;
+  const bubbleAreaLeft = Math.max(
+    2,
+    Math.min(width * 0.45, Math.round(qNumW + columnShiftPx))
+  );
   const bubbleAreaW = width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
 
@@ -1318,6 +1331,8 @@ export function scanCalifacilOmrSheet(
 
   const qnumSweep =
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
+  const colSweep =
+    opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
     const profiles = preferFullSheetFirst
@@ -1325,16 +1340,24 @@ export function scanCalifacilOmrSheet(
       : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
       for (const qnw of qnumSweep) {
-        const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
-        const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profileQ);
-        const avgConfidence =
-          detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-        const bestAvgConfidence =
-          best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-        const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-        const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-        if (score > bestScore) {
-          best = detail;
+        for (const colShift of colSweep) {
+          const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
+          const detail = scanCalifacilOmrCanvasDetailedWithProfile(
+            c,
+            columns,
+            thresholds,
+            profileQ,
+            colShift
+          );
+          const avgConfidence =
+            detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+          const bestAvgConfidence =
+            best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+          const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+          const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
+          if (score > bestScore) {
+            best = detail;
+          }
         }
       }
     }
@@ -1408,6 +1431,8 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const qnumSweep =
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
+  const colSweep =
+    opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
     const profiles = preferFullSheetFirst
@@ -1415,16 +1440,24 @@ export function scanCalifacilOmrSheetWithMeta(
       : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
       for (const qnw of qnumSweep) {
-        const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
-        const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profileQ);
-        const avgConfidence =
-          detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-        const bestAvgConfidence =
-          best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-        const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-        const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-        if (score > bestScore) {
-          best = detail;
+        for (const colShift of colSweep) {
+          const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
+          const detail = scanCalifacilOmrCanvasDetailedWithProfile(
+            c,
+            columns,
+            thresholds,
+            profileQ,
+            colShift
+          );
+          const avgConfidence =
+            detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+          const bestAvgConfidence =
+            best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+          const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+          const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
+          if (score > bestScore) {
+            best = detail;
+          }
         }
       }
     }

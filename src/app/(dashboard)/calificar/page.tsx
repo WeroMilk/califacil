@@ -34,6 +34,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { StudentCombobox } from '@/components/student-combobox';
 import {
   Select,
@@ -45,12 +46,16 @@ import {
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
 
 /** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
 const MIN_AUTO_READ_RATIO = 0.9;
-const STABLE_PARTIAL_TICKS = 2;
+/** Fotogramas consecutivos con lectura estable antes de fijar borrador (consenso en vivo). */
+const STABLE_PARTIAL_TICKS = 3;
+/** Si más filas ambiguas que esto, aviso explícito en revisión. */
+const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 
 /** Letra de inciso (A–E) a partir del texto de opción elegido; vacío si no hay lectura. */
 function optionAnswerToLetter(q: Question, answerText: string): string {
@@ -100,6 +105,8 @@ export default function CalificarPage() {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
   const sheetIndexRef = useRef(0);
+
+  const [reviewQualityHint, setReviewQualityHint] = useState<string | null>(null);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
@@ -256,6 +263,7 @@ export default function CalificarPage() {
       fallbackFile?: File,
       opts?: { skipReviewUi?: boolean }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
+      const skipReviewUi = opts?.skipReviewUi;
       const chunk = sheets[sheetIndexRef.current] ?? [];
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, { skipGuideCrop: true });
@@ -273,7 +281,7 @@ export default function CalificarPage() {
         picksInChunk[0] !== null &&
         picksInChunk.every((p) => p !== null);
 
-      if (ambiguousIdx.length > 0 && examId) {
+      if (CALIFACIL_VISION_POLICY.onAmbiguousRows && ambiguousIdx.length > 0 && examId) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
           globalNumber: si * 10 + i + 1,
@@ -308,7 +316,7 @@ export default function CalificarPage() {
                 raw[i] = opts.indexOf(text);
               }
             }
-            if (ambiguousIdx.length > 0 && !opts?.skipReviewUi) {
+            if (ambiguousIdx.length > 0 && !skipReviewUi) {
               toast.message('Filas dudosas revisadas con visión asistida.');
             }
           } else if (res.status === 503 && payload.code === 'NO_KEY') {
@@ -319,7 +327,12 @@ export default function CalificarPage() {
         }
       }
 
-      if (allSameCol && examId && !ambiguousIdx.length) {
+      if (
+        CALIFACIL_VISION_POLICY.onAllSameColumn &&
+        allSameCol &&
+        examId &&
+        !ambiguousIdx.length
+      ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
           globalNumber: si * 10 + i + 1,
@@ -354,12 +367,56 @@ export default function CalificarPage() {
                 raw[i] = opts.indexOf(text);
               }
             }
-            if (!opts?.skipReviewUi) {
+            if (!skipReviewUi) {
               toast.message('Lectura revisada con visión (todas las filas coincidían en la misma columna).');
             }
           }
         } catch {
           /* mantener lectura local */
+        }
+      }
+
+      if (CALIFACIL_VISION_POLICY.onFinalizeEveryRow && examId && chunk.length > 0) {
+        const rowsPayload = chunk.map((q, i) => ({
+          questionId: q.id,
+          globalNumber: si * 10 + i + 1,
+          options: q.options ?? [],
+        }));
+        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
+        try {
+          const imageBase64 = califacilImageToJpegDataUrl(oriented);
+          const res = await fetch('/api/calificar/vision-omr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              examId,
+              imageBase64,
+              rows: rowsPayload,
+              omrColumnCount: omrCols,
+              focusNumbers,
+            }),
+          });
+          const payload = (await res.json().catch(() => ({}))) as {
+            selections?: Record<string, string>;
+            code?: string;
+            error?: string;
+          };
+          if (res.ok && payload.selections) {
+            for (let i = 0; i < chunk.length; i++) {
+              const q = chunk[i];
+              const text = (payload.selections![q.id] ?? '').trim();
+              const opts = q.options ?? [];
+              if (text && opts.includes(text)) {
+                raw[i] = opts.indexOf(text);
+              }
+            }
+            if (!skipReviewUi) {
+              toast.message('Visión aplicada a toda la hoja (modo alta precisión).');
+            }
+          }
+        } catch {
+          /* mantener OMR local */
         }
       }
 
@@ -386,7 +443,23 @@ export default function CalificarPage() {
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
 
-      if (!opts?.skipReviewUi) {
+      if (!skipReviewUi) {
+        const ambiguousRowCount = meta.rows.filter((r, i) => i < chunk.length && r.ambiguous).length;
+        if (
+          ambiguousRowCount / Math.max(1, chunk.length) >= AMBIGUOUS_ROW_WARN_RATIO ||
+          meta.needsVisionAssist
+        ) {
+          setReviewQualityHint(
+            `Lectura automática dudosa en ${ambiguousRowCount} fila(s). Corrige las opciones antes de guardar.`
+          );
+        } else if (mapped.unresolvedCount > 0) {
+          setReviewQualityHint(
+            `${mapped.unresolvedCount} pregunta(s) sin lectura clara: elige la opción manualmente.`
+          );
+        } else {
+          setReviewQualityHint(null);
+        }
+
         await setPreviewFromSource(oriented, fallbackFile);
         setPhase('revisar_hoja');
         setLiveStatus(
@@ -458,6 +531,7 @@ export default function CalificarPage() {
 
   const resetFlow = useCallback(() => {
     stopLiveCamera();
+    setReviewQualityHint(null);
     setPhase('elegir');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
@@ -586,6 +660,7 @@ export default function CalificarPage() {
           const raw = scanCalifacilOmrSheet(oriented, omrCols, {
             skipGuideCrop: true,
             qnumSweep: 'live',
+            columnShiftSweep: 'live',
           });
           const mapped = mapRawToDraft(raw, chunk);
           setLiveDraftSelections(mapped.draft);
@@ -807,6 +882,9 @@ export default function CalificarPage() {
         });
       }
 
+      setReviewQualityHint(
+        'Revisa y corrige cada opción si hace falta; la lectura en vivo es orientativa.'
+      );
       setPhase('revisar_hoja');
       setLiveStatus('Revisa cada respuesta y confirma con «Guardar calificación».');
       toast.message('Revisa las lecturas antes de confirmar.');
@@ -817,6 +895,7 @@ export default function CalificarPage() {
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
+    setReviewQualityHint(null);
     setSelectedStudentId('');
     setPhase('elegir');
     setSheetIndex(0);
@@ -1195,6 +1274,13 @@ export default function CalificarPage() {
 
             {phase === 'revisar_hoja' && (
               <div className="space-y-3">
+                {reviewQualityHint ? (
+                  <Alert variant="default" className="border-amber-300 bg-amber-50 text-amber-950">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle className="text-sm">Calidad de lectura</AlertTitle>
+                    <AlertDescription className="text-sm">{reviewQualityHint}</AlertDescription>
+                  </Alert>
+                ) : null}
                 <p className="text-sm font-medium text-gray-800">
                   Confirma o corrige cada respuesta antes de guardar. La lectura automática puede fallar con
                   poca luz o encuadre.

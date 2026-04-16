@@ -338,90 +338,91 @@ export default function ExamResultsPage() {
     : '0';
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/exams')}>
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="flex min-w-0 items-start gap-2 sm:items-center sm:gap-4">
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/exams')}>
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Resultados: {exam.title}</h1>
-            <p className="text-gray-600 mt-1">Análisis de rendimiento de los estudiantes</p>
+          <div className="min-w-0">
+            <h1 className="break-words text-xl font-bold text-gray-900 sm:text-2xl">Resultados: {exam.title}</h1>
+            <p className="mt-1 text-sm text-gray-600 sm:text-base">Análisis de rendimiento de los estudiantes</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={exportToExcel}>
-            <FileSpreadsheet className="w-4 h-4 mr-2" />
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Button variant="outline" size="sm" className="h-8 sm:h-9 sm:px-4" onClick={exportToExcel}>
+            <FileSpreadsheet className="mr-2 h-4 w-4 shrink-0" />
             Excel
           </Button>
-          <Button variant="outline" onClick={exportToPDF}>
-            <FileText className="w-4 h-4 mr-2" />
+          <Button variant="outline" size="sm" className="h-8 sm:h-9 sm:px-4" onClick={exportToPDF}>
+            <FileText className="mr-2 h-4 w-4 shrink-0" />
             PDF
           </Button>
         </div>
       </div>
 
-      {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Estudiantes</CardTitle>
-            <Users className="w-4 h-4 text-orange-600" />
+      {/* Stats: 2×2 en móvil, fila en md+ */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-4">
+        <Card className="gap-0 py-3 shadow-sm sm:gap-6 sm:py-6">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-2 pt-0 sm:px-6">
+            <CardTitle className="text-xs font-medium leading-tight text-gray-600 sm:text-sm">Estudiantes</CardTitle>
+            <Users className="h-3.5 w-3.5 shrink-0 text-orange-600 sm:h-4 sm:w-4" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{studentResults.length}</div>
+          <CardContent className="px-3 pb-0 pt-0 sm:px-6">
+            <div className="text-lg font-bold tabular-nums sm:text-2xl">{studentResults.length}</div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Promedio</CardTitle>
-            <TrendingUp className="w-4 h-4 text-green-600" />
+        <Card className="gap-0 py-3 shadow-sm sm:gap-6 sm:py-6">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-2 pt-0 sm:px-6">
+            <CardTitle className="text-xs font-medium leading-tight text-gray-600 sm:text-sm">Promedio</CardTitle>
+            <TrendingUp className="h-3.5 w-3.5 shrink-0 text-green-600 sm:h-4 sm:w-4" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{averageScore}%</div>
+          <CardContent className="px-3 pb-0 pt-0 sm:px-6">
+            <div className="text-lg font-bold tabular-nums sm:text-2xl">{averageScore}%</div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Aprobados</CardTitle>
-            <CheckCircle className="w-4 h-4 text-green-600" />
+        <Card className="gap-0 py-3 shadow-sm sm:gap-6 sm:py-6">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-2 pt-0 sm:px-6">
+            <CardTitle className="text-xs font-medium leading-tight text-gray-600 sm:text-sm">Aprobados</CardTitle>
+            <CheckCircle className="h-3.5 w-3.5 shrink-0 text-green-600 sm:h-4 sm:w-4" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
+          <CardContent className="px-3 pb-0 pt-0 sm:px-6">
+            <div className="text-lg font-bold tabular-nums sm:text-2xl">
               {studentResults.filter(r => r.percentage >= 60).length}
             </div>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">Reprobados</CardTitle>
-            <XCircle className="w-4 h-4 text-red-600" />
+        <Card className="gap-0 py-3 shadow-sm sm:gap-6 sm:py-6">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-2 pt-0 sm:px-6">
+            <CardTitle className="text-xs font-medium leading-tight text-gray-600 sm:text-sm">Reprobados</CardTitle>
+            <XCircle className="h-3.5 w-3.5 shrink-0 text-red-600 sm:h-4 sm:w-4" />
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
+          <CardContent className="px-3 pb-0 pt-0 sm:px-6">
+            <div className="text-lg font-bold tabular-nums sm:text-2xl">
               {studentResults.filter(r => r.percentage < 60).length}
             </div>
           </CardContent>
         </Card>
       </div>
 
-      <Tabs defaultValue="students" className="space-y-6">
-        <TabsList>
-          <TabsTrigger value="students">
-            <Users className="w-4 h-4 mr-2" />
-            Estudiantes
+      <Tabs defaultValue="students" className="min-w-0 space-y-4 sm:space-y-6">
+        <TabsList className="grid h-auto w-full min-w-0 grid-cols-3 gap-1 rounded-lg bg-muted p-1 sm:inline-flex sm:h-9 sm:w-fit">
+          <TabsTrigger value="students" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
+            <Users className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
+            <span className="truncate">Estudiantes</span>
           </TabsTrigger>
-          <TabsTrigger value="distribution">
-            <TrendingUp className="w-4 h-4 mr-2" />
-            Distribución
+          <TabsTrigger value="distribution" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
+            <TrendingUp className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
+            <span className="truncate">Distribución</span>
           </TabsTrigger>
-          <TabsTrigger value="questions">
-            <CheckCircle className="w-4 h-4 mr-2" />
-            Ítems (por pregunta)
+          <TabsTrigger value="questions" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
+            <CheckCircle className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
+            <span className="truncate sm:hidden">Ítems</span>
+            <span className="hidden truncate sm:inline">Ítems (por pregunta)</span>
           </TabsTrigger>
         </TabsList>
 
@@ -439,27 +440,35 @@ export default function ExamResultsPage() {
                   No hay resultados aún
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
+                <div className="w-full min-w-0">
+                  <table className="w-full table-fixed text-sm">
                     <thead>
                       <tr className="border-b">
-                        <th className="text-left py-3 px-4 font-semibold">Estudiante</th>
-                        <th className="text-center py-3 px-4 font-semibold">Puntaje</th>
-                        <th className="text-center py-3 px-4 font-semibold">Porcentaje</th>
-                        <th className="hidden text-center py-3 px-4 font-semibold md:table-cell">
+                        <th className="w-[46%] py-2 pl-0 pr-2 text-left font-semibold sm:w-auto sm:py-3 sm:px-4 sm:pl-4">
+                          Estudiante
+                        </th>
+                        <th className="w-[22%] py-2 px-1 text-center font-semibold sm:w-auto sm:py-3 sm:px-4">
+                          Puntaje
+                        </th>
+                        <th className="w-[32%] py-2 pl-2 pr-0 text-center font-semibold sm:w-auto sm:py-3 sm:px-4 sm:pr-4">
+                          Porcentaje
+                        </th>
+                        <th className="hidden text-center py-3 px-4 font-semibold md:table-cell md:w-auto">
                           Calificación
                         </th>
-                        <th className="hidden text-left py-3 px-4 font-semibold md:table-cell">Fecha</th>
+                        <th className="hidden text-left py-3 px-4 font-semibold md:table-cell md:w-auto">Fecha</th>
                       </tr>
                     </thead>
                     <tbody>
                       {studentResults.map((result) => (
                         <tr key={result.studentId} className="border-b hover:bg-gray-50">
-                          <td className="py-3 px-4 font-medium">{result.studentName}</td>
-                          <td className="py-3 px-4 text-center">
+                          <td className="py-2 pl-0 pr-2 font-medium [word-break:break-word] sm:py-3 sm:px-4 sm:pl-4">
+                            {result.studentName}
+                          </td>
+                          <td className="py-2 px-1 text-center tabular-nums sm:py-3 sm:px-4">
                             {result.totalScore}/{result.maxScore}
                           </td>
-                          <td className="py-3 px-4 text-center">
+                          <td className="py-2 pl-2 pr-0 text-center sm:py-3 sm:px-4 sm:pr-4">
                             <span className={`font-semibold ${getGradeColor(result.percentage)}`}>
                               {result.percentage}%
                             </span>
@@ -524,15 +533,23 @@ export default function ExamResultsPage() {
                         </span>
                       </div>
 
-                      <div className="max-h-[26rem] overflow-y-auto rounded-lg border">
-                        <table className="w-full text-sm">
+                      <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden rounded-lg border">
+                        <table className="w-full table-fixed border-collapse text-[11px] sm:text-sm">
                           <thead className="bg-gray-50 text-gray-700">
                             <tr className="border-b">
-                              <th className="px-3 py-2 text-left font-semibold">#</th>
-                              <th className="px-3 py-2 text-left font-semibold">Respuesta alumno</th>
-                              <th className="px-3 py-2 text-left font-semibold">Correcta</th>
-                              <th className="px-3 py-2 text-left font-semibold">Estado</th>
-                              <th className="px-3 py-2 text-left font-semibold">Detalle</th>
+                              <th className="w-8 px-1 py-2 text-left font-semibold sm:w-10 sm:px-3">#</th>
+                              <th className="min-w-0 px-1 py-2 text-left font-semibold sm:px-3">
+                                <span className="[word-break:break-word]">Respuesta alumno</span>
+                              </th>
+                              <th className="min-w-0 px-1 py-2 text-left font-semibold sm:px-3">
+                                <span className="[word-break:break-word]">Correcta</span>
+                              </th>
+                              <th className="w-[4.5rem] px-1 py-2 text-left font-semibold sm:w-auto sm:px-3">
+                                Estado
+                              </th>
+                              <th className="w-[3.25rem] px-1 py-2 text-left font-semibold sm:w-auto sm:px-3">
+                                Detalle
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -540,26 +557,36 @@ export default function ExamResultsPage() {
                               const isExpanded = Boolean(expandedQuestionIds[row.questionId]);
                               const mainRow = (
                                 <tr key={row.questionId} className="border-b align-top">
-                                  <td className="px-3 py-2 font-medium text-gray-800">{row.questionNumber}</td>
-                                  <td className="px-3 py-2 text-gray-700">{row.studentAnswer || 'Sin respuesta'}</td>
-                                  <td className="px-3 py-2 text-gray-700">{row.correctAnswer || '—'}</td>
-                                  <td className="px-3 py-2">
+                                  <td className="px-1 py-2 font-medium text-gray-800 sm:px-3">{row.questionNumber}</td>
+                                  <td className="min-w-0 px-1 py-2 text-gray-700 [word-break:break-word] sm:px-3">
+                                    {row.studentAnswer || 'Sin respuesta'}
+                                  </td>
+                                  <td className="min-w-0 px-1 py-2 text-gray-700 [word-break:break-word] sm:px-3">
+                                    {row.correctAnswer || '—'}
+                                  </td>
+                                  <td className="px-1 py-2 sm:px-3">
                                     {row.isCorrect === true ? (
-                                      <Badge className="bg-green-100 text-green-700">Correcta</Badge>
+                                      <Badge className="max-w-full whitespace-normal break-words bg-green-100 text-[10px] leading-tight text-green-700 sm:text-xs">
+                                        Correcta
+                                      </Badge>
                                     ) : row.isCorrect === false ? (
-                                      <Badge className="bg-red-100 text-red-700">Incorrecta</Badge>
+                                      <Badge className="max-w-full whitespace-normal break-words bg-red-100 text-[10px] leading-tight text-red-700 sm:text-xs">
+                                        Incorrecta
+                                      </Badge>
                                     ) : (
-                                      <Badge className="bg-gray-100 text-gray-700">No evaluada</Badge>
+                                      <Badge className="bg-gray-100 text-[10px] text-gray-700 sm:text-xs">No eval.</Badge>
                                     )}
                                   </td>
-                                  <td className="px-3 py-2">
+                                  <td className="px-1 py-2 sm:px-3">
                                     <Button
                                       type="button"
                                       variant="outline"
                                       size="sm"
+                                      className="h-7 px-1.5 text-[10px] sm:h-9 sm:px-3 sm:text-sm"
                                       onClick={() => toggleExpandedQuestion(row.questionId)}
                                     >
-                                      {isExpanded ? 'Ocultar' : 'Ver pregunta'}
+                                      <span className="hidden sm:inline">{isExpanded ? 'Ocultar' : 'Ver pregunta'}</span>
+                                      <span className="sm:hidden">{isExpanded ? 'Ocultar' : 'Ver'}</span>
                                     </Button>
                                   </td>
                                 </tr>
@@ -594,8 +621,8 @@ export default function ExamResultsPage() {
                 Visualización de cómo se distribuyen las calificaciones
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="h-80">
+            <CardContent className="min-w-0">
+              <div className="h-80 w-full min-w-0 max-w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={gradeDistribution}>
                     <CartesianGrid strokeDasharray="3 3" />
