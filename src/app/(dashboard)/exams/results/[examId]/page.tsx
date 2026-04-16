@@ -421,8 +421,8 @@ export default function ExamResultsPage() {
           </TabsTrigger>
           <TabsTrigger value="questions" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
             <CheckCircle className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
-            <span className="truncate sm:hidden">Ítems</span>
-            <span className="hidden truncate sm:inline">Ítems (por pregunta)</span>
+            <span className="truncate sm:hidden">Reactivos</span>
+            <span className="hidden truncate sm:inline">Reactivos (por pregunta)</span>
           </TabsTrigger>
         </TabsList>
 
@@ -644,7 +644,7 @@ export default function ExamResultsPage() {
         <TabsContent value="questions">
           <Card>
             <CardHeader>
-              <CardTitle>Análisis agregado por ítem</CardTitle>
+              <CardTitle>Análisis agregado por reactivo</CardTitle>
               <CardDescription>
                 Aciertos, distractores más elegidos y respuestas en blanco (similar a informe por pregunta tipo ZipGrade).
               </CardDescription>
@@ -655,7 +655,7 @@ export default function ExamResultsPage() {
                   <div key={analysis.question.id} className="border rounded-lg p-4">
                     <div className="flex items-start justify-between mb-2 gap-2">
                       <div className="flex-1 min-w-0">
-                        <span className="text-sm font-medium text-gray-500">Ítem {index + 1}</span>
+                        <span className="text-sm font-medium text-gray-500">Reactivo {index + 1}</span>
                         <p className="font-medium mt-1 text-sm sm:text-base">{analysis.question.text}</p>
                       </div>
                       <Badge className={analysis.percentageCorrect >= 70 
