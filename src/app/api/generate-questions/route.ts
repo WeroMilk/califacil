@@ -5,6 +5,27 @@ import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 const DIFFICULTY_LEVELS = ['easy', 'medium', 'hard', 'extreme'] as const;
 type Difficulty = (typeof DIFFICULTY_LEVELS)[number];
 
+function shuffleArrayInPlace<T>(arr: T[]): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+/** Baraja las opciones de opción múltiple; `correct_answer` sigue siendo el texto de la opción correcta. */
+function shuffleMultipleChoiceOptions(question: Record<string, unknown>): Record<string, unknown> {
+  if (question.type !== 'multiple_choice') return question;
+  const opts = question.options;
+  if (!Array.isArray(opts) || opts.length < 2) return question;
+  const options = opts.map((o) => String(o));
+  shuffleArrayInPlace(options);
+  return { ...question, options };
+}
+
+function withShuffledMcOptions(questions: Record<string, unknown>[]): Record<string, unknown>[] {
+  return questions.map((q) => shuffleMultipleChoiceOptions(q));
+}
+
 function difficultyInstructions(level: string): string {
   const normalized = DIFFICULTY_LEVELS.includes(level as Difficulty)
     ? (level as Difficulty)
@@ -64,7 +85,7 @@ ${difficultyInstructions(difficulty)}
 Para cada pregunta, incluye:
 - text: El texto de la pregunta
 - type: Tipo de pregunta (${questionTypes.join(' o ')})
-- Si es multiple_choice: incluye un array "options" con 4 opciones (A, B, C, D) y "correct_answer" con el texto de la respuesta correcta
+- Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta (el orden de las opciones puede ser cualquiera)
 - Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)
 - illustration: Una breve descripción de una ilustración que ayude a entender la pregunta (opcional)
 
@@ -74,8 +95,8 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
     {
       "text": "¿Pregunta?",
       "type": "multiple_choice",
-      "options": ["Opción A", "Opción B", "Opción C", "Opción D"],
-      "correct_answer": "Opción A",
+      "options": ["Texto de una opción", "Otra opción", "Tercera opción", "Cuarta opción"],
+      "correct_answer": "Texto de una opción",
       "illustration": "Descripción de ilustración"
     }
   ]
@@ -127,7 +148,9 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
         throw new Error('Invalid response format');
       }
 
-      return NextResponse.json({ questions: parsedResponse.questions });
+      return NextResponse.json({
+        questions: withShuffledMcOptions(parsedResponse.questions as Record<string, unknown>[]),
+      });
     } catch (openaiError: any) {
       console.error('OpenAI error:', openaiError);
       
@@ -194,5 +217,5 @@ function generateFallbackQuestions(
     }
   }
   
-  return questions;
+  return withShuffledMcOptions(questions);
 }

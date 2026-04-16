@@ -3,6 +3,8 @@
  * Debe coincidir con el layout de `printExam.ts` (tabla 10 filas × N columnas de burbujas).
  */
 
+import { CALIFACIL_OMR_GUIDE_ASPECT_RATIO } from '@/lib/printExam';
+
 export const CALIFACIL_OMR_SCAN = {
   /** Fracción inferior de la imagen donde cae el recuadro CaliFacil impreso */
   bottomBandRatio: 0.46,
@@ -45,6 +47,22 @@ const OMRCHECKER_STYLE_PRE = {
   /** `threshold_params.GAMMA_LOW` en OMRChecker `defaults/config.py` */
   gammaLow: 0.7,
 } as const;
+
+/**
+ * Barrido del ancho relativo de la columna N.º (debe alinear con impresión ~9%).
+ * Evita lecturas sistemáticas en una sola columna (p. ej. todo "D") cuando la foto está desplazada.
+ */
+const QNUM_WIDTH_SWEEP = [0.065, 0.075, 0.085, 0.09, 0.1, 0.11, 0.125, 0.14] as const;
+
+/** Subconjunto para cámara en vivo (menos latencia por frame). */
+const QNUM_WIDTH_SWEEP_LIVE = [0.075, 0.085, 0.09, 0.1, 0.11, 0.125] as const;
+
+export type CalifacilScanOptions = {
+  /** Si true, no recorta al marco guía (la imagen ya pasó por prepare/autoOrient). */
+  skipGuideCrop?: boolean;
+  /** Barrido de `qnumWidthRatio`: `live` = menos valores (vídeo en vivo). */
+  qnumSweep?: 'full' | 'live';
+};
 
 type ScanThresholds = {
   minMarkDarkness: number;
@@ -644,6 +662,44 @@ function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElemen
   return warpPerspectiveToRect(canvas, quad) ?? canvas;
 }
 
+/**
+ * Recorta la región equivalente al marco naranja en Calificar (centrado 50%/62%, ancho 86%, misma relación de aspecto).
+ * Alinea el análisis OMR con lo que el usuario encuadra en cámara.
+ */
+export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return null;
+  const ar = CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
+  const rectW = Math.min(W * 0.86, W - 2);
+  const rectH = rectW / ar;
+  if (rectH > H * 0.98) return null;
+  const cx = W * 0.5;
+  const cy = H * 0.62;
+  let left = Math.round(cx - rectW / 2);
+  let top = Math.round(cy - rectH / 2);
+  const rw = Math.round(rectW);
+  const rh = Math.round(rectH);
+  left = Math.max(0, Math.min(left, W - rw));
+  top = Math.max(0, Math.min(top, H - rh));
+  if (rw < 100 || rh < 48 || left + rw > W || top + rh > H) return null;
+  const out = document.createElement('canvas');
+  out.width = rw;
+  out.height = rh;
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(canvas, left, top, rw, rh, 0, 0, rw, rh);
+  return out;
+}
+
+/** Escala, recorta al marco guía y devuelve imagen lista para orientar/escanear. */
+export function prepareCalifacilScanInput(source: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null {
+  const base = drawSourceToCanvas(source, 1400);
+  if (!base) return null;
+  return cropCanvasToCalifacilGuideOverlay(base) ?? base;
+}
+
 function normalizeMinMaxInPlaceGray(gray: Uint8Array): void {
   let min = 255;
   let max = 0;
@@ -1214,11 +1270,16 @@ function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
  */
 export function scanCalifacilOmrSheet(
   source: HTMLImageElement | HTMLCanvasElement,
-  columns: number
+  columns: number,
+  opts?: CalifacilScanOptions
 ): (number | null)[] {
   if (typeof document === 'undefined') return Array(10).fill(null);
-  const canvas = drawSourceToCanvas(source);
+  let canvas = drawSourceToCanvas(source);
   if (!canvas) return Array(10).fill(null);
+  if (!opts?.skipGuideCrop) {
+    const cropped = cropCanvasToCalifacilGuideOverlay(canvas);
+    if (cropped) canvas = cropped;
+  }
 
   const thresholds: ScanThresholds = {
     minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
@@ -1255,20 +1316,26 @@ export function scanCalifacilOmrSheet(
     rows: emptyRows,
   };
 
+  const qnumSweep =
+    opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
+
   for (const { canvas: c, preferFullSheetFirst } of variants) {
     const profiles = preferFullSheetFirst
       ? [fullSheetProfile, ...croppedBoxProfiles]
       : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
-      const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
-      const avgConfidence =
-        detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-      const bestAvgConfidence =
-        best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-      const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-      const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-      if (score > bestScore) {
-        best = detail;
+      for (const qnw of qnumSweep) {
+        const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
+        const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profileQ);
+        const avgConfidence =
+          detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+        const bestAvgConfidence =
+          best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+        const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+        const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
+        if (score > bestScore) {
+          best = detail;
+        }
       }
     }
   }
@@ -1281,7 +1348,8 @@ export function scanCalifacilOmrSheet(
  */
 export function scanCalifacilOmrSheetWithMeta(
   source: HTMLImageElement | HTMLCanvasElement,
-  columns: number
+  columns: number,
+  opts?: CalifacilScanOptions
 ): OmrScanMetaResult {
   if (typeof document === 'undefined') {
     return {
@@ -1290,13 +1358,17 @@ export function scanCalifacilOmrSheetWithMeta(
       needsVisionAssist: false,
     };
   }
-  const canvas = drawSourceToCanvas(source);
+  let canvas = drawSourceToCanvas(source);
   if (!canvas) {
     return {
       picks: Array(10).fill(null),
       rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
       needsVisionAssist: false,
     };
+  }
+  if (!opts?.skipGuideCrop) {
+    const cropped = cropCanvasToCalifacilGuideOverlay(canvas);
+    if (cropped) canvas = cropped;
   }
 
   const thresholds: ScanThresholds = {
@@ -1334,20 +1406,26 @@ export function scanCalifacilOmrSheetWithMeta(
     rows: emptyRows,
   };
 
+  const qnumSweep =
+    opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
+
   for (const { canvas: c, preferFullSheetFirst } of variants) {
     const profiles = preferFullSheetFirst
       ? [fullSheetProfile, ...croppedBoxProfiles]
       : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of profiles) {
-      const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profile);
-      const avgConfidence =
-        detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-      const bestAvgConfidence =
-        best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-      const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-      const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-      if (score > bestScore) {
-        best = detail;
+      for (const qnw of qnumSweep) {
+        const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
+        const detail = scanCalifacilOmrCanvasDetailedWithProfile(c, columns, thresholds, profileQ);
+        const avgConfidence =
+          detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
+        const bestAvgConfidence =
+          best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
+        const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
+        const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
+        if (score > bestScore) {
+          best = detail;
+        }
       }
     }
   }
@@ -1365,7 +1443,7 @@ export function autoOrientCalifacilSheet(
   columns: number
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
-  const base = drawSourceToCanvas(source, 1400);
+  const base = prepareCalifacilScanInput(source);
   if (!base) return null;
 
   const candidates: Array<0 | 90 | 180 | 270> = [0, 90, 180, 270];

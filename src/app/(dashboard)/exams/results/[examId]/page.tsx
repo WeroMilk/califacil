@@ -446,8 +446,10 @@ export default function ExamResultsPage() {
                         <th className="text-left py-3 px-4 font-semibold">Estudiante</th>
                         <th className="text-center py-3 px-4 font-semibold">Puntaje</th>
                         <th className="text-center py-3 px-4 font-semibold">Porcentaje</th>
-                        <th className="text-center py-3 px-4 font-semibold">Calificación</th>
-                        <th className="text-left py-3 px-4 font-semibold">Fecha</th>
+                        <th className="hidden text-center py-3 px-4 font-semibold md:table-cell">
+                          Calificación
+                        </th>
+                        <th className="hidden text-left py-3 px-4 font-semibold md:table-cell">Fecha</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -462,7 +464,7 @@ export default function ExamResultsPage() {
                               {result.percentage}%
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-center">
+                          <td className="hidden py-3 px-4 text-center md:table-cell">
                             <Badge className={result.percentage >= 60 
                               ? 'bg-green-100 text-green-700' 
                               : 'bg-red-100 text-red-700'
@@ -470,7 +472,7 @@ export default function ExamResultsPage() {
                               {getGradeLabel(result.percentage)}
                             </Badge>
                           </td>
-                          <td className="py-3 px-4 text-gray-500">
+                          <td className="hidden py-3 px-4 text-gray-500 md:table-cell">
                             {formatDate(result.submittedAt)}
                           </td>
                         </tr>

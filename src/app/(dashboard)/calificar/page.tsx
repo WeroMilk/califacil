@@ -258,7 +258,7 @@ export default function CalificarPage() {
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       const chunk = sheets[sheetIndexRef.current] ?? [];
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
-      const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols);
+      const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, { skipGuideCrop: true });
       const raw = [...meta.picks];
 
       const ambiguousIdx = meta.rows
@@ -266,6 +266,13 @@ export default function CalificarPage() {
         .filter((i) => i >= 0);
 
       const si = sheetIndexRef.current;
+      const picksInChunk = raw.slice(0, chunk.length);
+      const allSameCol =
+        chunk.length > 1 &&
+        picksInChunk.every((p, i) => i === 0 || p === picksInChunk[0]) &&
+        picksInChunk[0] !== null &&
+        picksInChunk.every((p) => p !== null);
+
       if (ambiguousIdx.length > 0 && examId) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
@@ -309,6 +316,50 @@ export default function CalificarPage() {
           }
         } catch {
           // Fallo de red: mantener lectura local
+        }
+      }
+
+      if (allSameCol && examId && !ambiguousIdx.length) {
+        const rowsPayload = chunk.map((q, i) => ({
+          questionId: q.id,
+          globalNumber: si * 10 + i + 1,
+          options: q.options ?? [],
+        }));
+        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
+        try {
+          const imageBase64 = califacilImageToJpegDataUrl(oriented);
+          const res = await fetch('/api/calificar/vision-omr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              examId,
+              imageBase64,
+              rows: rowsPayload,
+              omrColumnCount: omrCols,
+              focusNumbers,
+            }),
+          });
+          const payload = (await res.json().catch(() => ({}))) as {
+            selections?: Record<string, string>;
+            code?: string;
+            error?: string;
+          };
+          if (res.ok && payload.selections) {
+            for (let i = 0; i < chunk.length; i++) {
+              const q = chunk[i];
+              const text = (payload.selections![q.id] ?? '').trim();
+              const opts = q.options ?? [];
+              if (text && opts.includes(text)) {
+                raw[i] = opts.indexOf(text);
+              }
+            }
+            if (!opts?.skipReviewUi) {
+              toast.message('Lectura revisada con visión (todas las filas coincidían en la misma columna).');
+            }
+          }
+        } catch {
+          /* mantener lectura local */
         }
       }
 
@@ -532,7 +583,10 @@ export default function CalificarPage() {
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
           const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
-          const raw = scanCalifacilOmrSheet(oriented, omrCols);
+          const raw = scanCalifacilOmrSheet(oriented, omrCols, {
+            skipGuideCrop: true,
+            qnumSweep: 'live',
+          });
           const mapped = mapRawToDraft(raw, chunk);
           setLiveDraftSelections(mapped.draft);
           setLiveResolvedCount(mapped.resolvedCount);
@@ -730,43 +784,36 @@ export default function CalificarPage() {
 
       setDraftSelections(mergedChunk);
 
-      const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
-      for (const q of chunk) {
-        mergedNow[q.id] = mergedChunk[q.id]!;
+      const video = videoRef.current;
+      if (video && video.readyState >= 2 && video.videoWidth >= 40) {
+        const frame = document.createElement('canvas');
+        frame.width = video.videoWidth;
+        frame.height = video.videoHeight;
+        const ctx = frame.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, frame.width, frame.height);
+          const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
+          await setPreviewFromSource(oriented);
+        } else {
+          setPreviewUrl((u) => {
+            if (u) URL.revokeObjectURL(u);
+            return null;
+          });
+        }
+      } else {
+        setPreviewUrl((u) => {
+          if (u) URL.revokeObjectURL(u);
+          return null;
+        });
       }
-      setConfirmedByQuestionId(mergedNow);
-      confirmedAnswersRef.current = mergedNow;
 
-      const isLast = sheetIndex >= totalSheets - 1;
-      if (!isLast) {
-        const cur = sheetIndex + 1;
-        const next = sheetIndex + 2;
-        setSheetIndex((s) => s + 1);
-        setDraftSelections({});
-        resetLiveReadings();
-        toast.success(
-          isMobile
-            ? `Hoja ${cur} guardada. Escanea la hoja ${next}.`
-            : `Hoja ${cur} guardada. Importa la imagen de la hoja ${next}.`
-        );
-        return;
-      }
-
-      await submitAll(mergedNow);
+      setPhase('revisar_hoja');
+      setLiveStatus('Revisa cada respuesta y confirma con «Guardar calificación».');
+      toast.message('Revisa las lecturas antes de confirmar.');
     } finally {
       setScanBusy(false);
     }
-  }, [
-    confirmedByQuestionId,
-    draftSelections,
-    isMobile,
-    liveDraftSelections,
-    resetLiveReadings,
-    sheetIndex,
-    sheets,
-    submitAll,
-    totalSheets,
-  ]);
+  }, [draftSelections, liveDraftSelections, omrCols, setPreviewFromSource, setPreviewUrl, sheetIndex, sheets]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -1084,7 +1131,7 @@ export default function CalificarPage() {
                               {scanBusy ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
-                                'Guardar calificación'
+                                'Revisar y confirmar'
                               )}
                             </Button>
                             <Button variant="outline" className="flex-1" onClick={scanAgainInLive}>
@@ -1149,16 +1196,33 @@ export default function CalificarPage() {
             {phase === 'revisar_hoja' && (
               <div className="space-y-3">
                 <p className="text-sm font-medium text-gray-800">
-                  Lectura congelada. Guarda la calificación o vuelve a escanear.
+                  Confirma o corrige cada respuesta antes de guardar. La lectura automática puede fallar con
+                  poca luz o encuadre.
                 </p>
                 {currentChunk.map((q, idx) => {
                   const globalNum = sheetIndex * 10 + idx + 1;
+                  const opts = q.options ?? [];
+                  const val = draftSelections[q.id]?.trim() ?? '';
                   return (
                     <div key={q.id} className="flex flex-col gap-1">
                       <Label className="text-xs text-gray-600">Pregunta {globalNum}</Label>
-                      <div className="rounded-md border bg-white px-3 py-2 text-sm">
-                        {draftSelections[q.id] || 'Sin lectura clara'}
-                      </div>
+                      <Select
+                        value={val || undefined}
+                        onValueChange={(v) => {
+                          setDraftSelections((prev) => ({ ...prev, [q.id]: v }));
+                        }}
+                      >
+                        <SelectTrigger className="w-full max-w-md">
+                          <SelectValue placeholder="Elegir opción leída" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {opts.map((opt, oi) => (
+                            <SelectItem key={opt} value={opt}>
+                              {String.fromCharCode(65 + oi)}. {opt}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   );
                 })}
