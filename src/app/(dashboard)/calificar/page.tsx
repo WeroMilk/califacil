@@ -172,6 +172,7 @@ export default function CalificarPage() {
   const [showAutoSnapshot, setShowAutoSnapshot] = useState(false);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
+  const [virtualKeyTableDialogOpen, setVirtualKeyTableDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
     pct: number;
     correct: number;
@@ -206,7 +207,6 @@ export default function CalificarPage() {
   const totalSheets = sheets.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
   const maxQuestions = 30;
-  const minResolvedForCurrentChunk = Math.max(1, Math.ceil(currentChunk.length * MIN_AUTO_READ_RATIO));
   const expectedChunkPicks = useMemo(
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
     [currentChunk, examVirtualKeyByQuestionId]
@@ -326,7 +326,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.'
-        : 'Elige una imagen del recuadro CaliFacil para leer las respuestas.'
+        : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
   }, [clearAutoSnapshot, isMobile]);
@@ -433,17 +433,17 @@ export default function CalificarPage() {
       const examCanvas =
         oriented instanceof HTMLCanvasElement
           ? oriented
-          : prepareCalifacilScanInput(oriented);
+          : prepareCalifacilScanInput(oriented, { useGuideCrop: false });
       if (!examCanvas || !isCalifacilExamSheetLikely(examCanvas, omrCols)) {
         setLiveStatus(
           isMobile
             ? 'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso del examen.'
-            : 'No se detecta la tabla CaliFacil en la imagen. Usa una foto clara del recuadro del examen.'
+            : 'No se detecta la tabla CaliFacil. Prueba una foto más nítida de la hoja completa o del pie con la tabla N.º / A–D.'
         );
         toast.error(
           isMobile
             ? 'No se reconoce el examen CaliFacil. Centra el recuadro con la tabla de casillas A–D.'
-            : 'No se reconoce el examen CaliFacil en esta imagen. Elige una foto del recuadro impreso.'
+            : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
         );
         return { success: false };
       }
@@ -679,12 +679,12 @@ export default function CalificarPage() {
         setLiveStatus(
           isMobile
             ? 'Lectura insuficiente: acerca el recuadro, mejora luz y evita sombras.'
-            : 'Lectura insuficiente: elige una imagen más nítida del recuadro, bien iluminada.'
+            : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
         );
         toast.error(
           isMobile
             ? 'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
-            : 'La imagen no tiene calidad suficiente para leer el recuadro. Prueba con otra foto más clara.'
+            : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
         );
         return { success: false };
       }
@@ -804,7 +804,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+        : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
     );
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
@@ -844,7 +844,7 @@ export default function CalificarPage() {
       setLiveStatus(
         isMobile
           ? 'Abre la cámara para detectar respuestas en vivo.'
-          : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+          : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
       );
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
@@ -1411,7 +1411,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+        : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
     );
     toast.message('Elige otro alumno para escanear su examen.');
   }, [isMobile, stopLiveCamera]);
@@ -1507,17 +1507,13 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).'
-            : 'En ordenador importa una imagen del pie CaliFacil por hoja (10 preguntas por hoja, hasta 3 hojas). La cámara solo está disponible en el móvil.'}
+            : 'En ordenador sube por hoja una foto (JPG/PNG): puede ser la página completa con enunciados y tabla al pie, o solo el recuadro CaliFacil. Se detectan las marcas y al guardar se califica contra la clave del examen. La cámara en vivo solo está en el móvil.'}
         </p>
       </div>
 
       <Card>
         <CardHeader className="space-y-1 pb-2 sm:pb-3">
           <CardTitle className="text-base sm:text-lg">Examen y clave automática</CardTitle>
-          <CardDescription className="text-xs sm:text-sm">
-            CaliFacil genera la tabla clave automáticamente con las respuestas correctas del examen y compara cada
-            hoja de alumno contra esa clave.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 sm:space-y-4">
           <div className="space-y-2">
@@ -1600,15 +1596,30 @@ export default function CalificarPage() {
               )}
 
               {exam && supportsCalifacil && canGradeStudents && (
-                <div className="space-y-2 rounded-lg border border-orange-200 bg-orange-50/40 p-3">
-                  <Label className="text-sm text-orange-900">Tabla clave automática (generada por CaliFacil)</Label>
-                  <p className="text-xs text-orange-900/80">
-                    Esta clave se construye con las respuestas correctas del examen. Se usa para comparar
-                    automáticamente cada hoja de alumno.
-                  </p>
-                  <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                    onClick={() => setVirtualKeyTableDialogOpen(true)}
+                  >
+                    Ver tabla clave
+                  </Button>
+                </div>
+              )}
+
+              <Dialog open={virtualKeyTableDialogOpen} onOpenChange={setVirtualKeyTableDialogOpen}>
+                <DialogContent className="max-h-[min(90vh,720px)] max-w-lg gap-0 overflow-y-auto p-4 sm:p-6">
+                  <DialogHeader>
+                    <DialogTitle>Tabla clave automática</DialogTitle>
+                    <DialogDescription className="sr-only">
+                      Respuestas correctas del examen por hoja, tal como se comparan al calificar.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="mt-4 space-y-3">
                     {sheets.map((chunk, chunkIdx) => (
-                      <div key={`key-sheet-${chunkIdx}`} className="rounded-md border border-orange-200 bg-white p-2">
+                      <div key={`key-sheet-dlg-${chunkIdx}`} className="rounded-md border border-orange-200 bg-orange-50/30 p-2">
                         <p className="mb-2 text-xs font-medium text-gray-700">
                           Hoja {chunkIdx + 1} ({chunk.length} reactivos)
                         </p>
@@ -1621,7 +1632,7 @@ export default function CalificarPage() {
                                 </th>
                                 {Array.from({ length: omrCols }, (_, c) => (
                                   <th
-                                    key={`head-${chunkIdx}-${c}`}
+                                    key={`dlg-head-${chunkIdx}-${c}`}
                                     className="border border-gray-300 bg-gray-100 px-1 py-1 text-center sm:px-2"
                                   >
                                     {String.fromCharCode(65 + c)}
@@ -1634,13 +1645,13 @@ export default function CalificarPage() {
                                 const expectedIndex = virtualKeyCorrectIndexByQuestionId[q.id] ?? -1;
                                 const qNum = chunkIdx * 10 + rowIdx + 1;
                                 return (
-                                  <tr key={q.id}>
+                                  <tr key={`dlg-${q.id}`}>
                                     <td className="border border-gray-300 bg-gray-50 px-1 py-1 text-right font-semibold sm:px-2">
                                       {qNum}
                                     </td>
                                     {Array.from({ length: omrCols }, (_, c) => (
                                       <td
-                                        key={`${q.id}-${c}`}
+                                        key={`dlg-${q.id}-${c}`}
                                         className="border border-gray-300 px-1 py-1 text-center sm:px-2"
                                       >
                                         <span
@@ -1661,8 +1672,8 @@ export default function CalificarPage() {
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                </DialogContent>
+              </Dialog>
 
               <div className="space-y-2">
                 <Label htmlFor="calif-alumno">Alumno</Label>
@@ -1704,7 +1715,7 @@ export default function CalificarPage() {
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
               {isMobile
                 ? 'Incluye en la foto el recuadro negro CaliFacil del pie de página.'
-                : 'La imagen debe mostrar con claridad el recuadro CaliFacil del pie de página.'}
+                : 'Puedes pasar foto de la hoja completa o solo del pie: debe verse entera la tabla (N.º, A–D) y las marcas.'}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1760,12 +1771,6 @@ export default function CalificarPage() {
                         <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
                           {liveStatus}
                         </div>
-                        <p className="text-[11px] leading-snug text-gray-600">
-                          <span className="font-medium text-gray-800">Tip:</span> encuadra el recuadro
-                          negro completo, luz uniforme y relleno <strong>oscuro y redondo</strong> dentro
-                          del círculo. La fila es el número de pregunta; las columnas son A, B, C… según la
-                          primera fila de la tabla impresa.
-                        </p>
                         {flashSupported && (
                           <Button
                             type="button"
@@ -1777,19 +1782,6 @@ export default function CalificarPage() {
                             {flashOn ? 'Apagar flash' : 'Encender flash'}
                           </Button>
                         )}
-                        <p className="text-xs text-gray-500">
-                          Leídas{' '}
-                          {
-                            currentChunk.filter(
-                              (q) =>
-                                Boolean(draftSelections[q.id]?.trim()) ||
-                                Boolean(liveDraftSelections[q.id]?.trim())
-                            ).length
-                          }
-                          /{currentChunk.length}. Cada respuesta detectada se mantiene aunque muevas el
-                          teléfono; con al menos {minResolvedForCurrentChunk} lecturas se copian al borrador
-                          inferior. «Escanear otra vez» borra esta hoja y vuelve a leer desde cero.
-                        </p>
                         <div className="flex flex-col gap-2">
                           <div className="flex gap-2">
                             <Button
@@ -1844,8 +1836,9 @@ export default function CalificarPage() {
                     />
                     <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
                       <p className="text-sm text-gray-700">
-                        En ordenador no se usa la cámara ni la captura en vivo. Elige una imagen del recuadro
-                        CaliFacil (archivo de fotos o imagen que hayas pasado desde el móvil).
+                        En ordenador sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
+                        CaliFácil con preguntas y tabla al pie) o recorta solo el recuadro CaliFacil. Se leen las
+                        casillas A–D y al guardar se califica comparando con la clave del examen.
                       </p>
                       <Button
                         type="button"
