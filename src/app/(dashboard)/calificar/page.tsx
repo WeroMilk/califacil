@@ -27,7 +27,12 @@ import {
   type CalifacilOmrScanGeometry,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
-import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
+import {
+  calculatePercentage,
+  getGradeColor,
+  getGradeLabel,
+  resolveOptionIndexFromValue,
+} from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -82,8 +87,8 @@ function draftSelectionsToColumnPicks(
     const q = chunk[i];
     const text = draft[q.id]?.trim() ?? '';
     const opts = q.options ?? [];
-    const idx = opts.findIndex((o) => o.trim() === text);
-    out[i] = idx >= 0 ? idx : null;
+    const idx = resolveOptionIndexFromValue(opts, text);
+    out[i] = idx !== null ? idx : null;
   }
   return out;
 }
@@ -173,6 +178,13 @@ export default function CalificarPage() {
     const out: Record<string, string> = {};
     for (const row of virtualKey.rows) {
       out[row.questionId] = row.correctOption;
+    }
+    return out;
+  }, [virtualKey.rows]);
+  const virtualKeyCorrectIndexByQuestionId = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const row of virtualKey.rows) {
+      out[row.questionId] = row.correctIndex;
     }
     return out;
   }, [virtualKey.rows]);
@@ -1150,8 +1162,12 @@ export default function CalificarPage() {
       const rows = questions.map((question: Question) => {
         const answerText = (merged[question.id] ?? '').trim();
         const expected = (effectiveKey[question.id] ?? '').trim();
+        const gotIdx = resolveOptionIndexFromValue(question.options, answerText);
+        const wantIdx = resolveOptionIndexFromValue(question.options, expected);
         const isCorrect =
-          question.type === 'multiple_choice' ? Boolean(expected) && answerText === expected : null;
+          question.type === 'multiple_choice'
+            ? gotIdx !== null && wantIdx !== null && gotIdx === wantIdx
+            : null;
         if (isCorrect) correctCount++;
 
         return {
@@ -1579,8 +1595,7 @@ export default function CalificarPage() {
                             </thead>
                             <tbody>
                               {chunk.map((q, rowIdx) => {
-                                const expected = (examVirtualKeyByQuestionId[q.id] ?? '').trim();
-                                const expectedIndex = (q.options ?? []).findIndex((opt) => opt.trim() === expected);
+                                const expectedIndex = virtualKeyCorrectIndexByQuestionId[q.id] ?? -1;
                                 const qNum = chunkIdx * 10 + rowIdx + 1;
                                 return (
                                   <tr key={q.id}>

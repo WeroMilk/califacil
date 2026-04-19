@@ -1,4 +1,5 @@
 import type { ExamWithQuestions, Question } from '@/types';
+import { resolveOptionIndexFromValue } from '@/lib/utils';
 
 /** Relación ancho:alto aproximada del recuadro CaliFacil (incl. título + tabla con cabecera A–D). */
 export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 3.28;
@@ -24,19 +25,20 @@ export function buildCalifacilVirtualKey(questions: Question[]): {
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i];
     if (q.type !== 'multiple_choice') continue;
-    const options = (q.options ?? []).map((opt) => opt.trim()).filter(Boolean);
-    const correct = (q.correct_answer ?? '').trim();
-    const correctIndex = options.findIndex((opt) => opt === correct);
-    if (correctIndex < 0) {
+    const optsRaw = q.options ?? [];
+    const correctIndex = resolveOptionIndexFromValue(optsRaw, q.correct_answer);
+    if (correctIndex === null) {
       issues.push(`La pregunta ${i + 1} no tiene respuesta correcta válida dentro de sus opciones.`);
       continue;
     }
+    const options = optsRaw.map((opt) => String(opt).trim());
+    const correctOption = options[correctIndex] ?? '';
     rows.push({
       questionId: q.id,
       questionNumber: i + 1,
       options,
       correctIndex,
-      correctOption: options[correctIndex],
+      correctOption,
     });
   }
   return { rows, issues };

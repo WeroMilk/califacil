@@ -17,9 +17,16 @@ function shuffleMultipleChoiceOptions(question: Record<string, unknown>): Record
   if (question.type !== 'multiple_choice') return question;
   const opts = question.options;
   if (!Array.isArray(opts) || opts.length < 2) return question;
-  const options = opts.map((o) => String(o));
+  const correctRaw =
+    question.correct_answer != null ? String(question.correct_answer).trim() : '';
+  const options = opts.map((o) => String(o).trim()).filter((s) => s.length > 0);
+  if (options.length < 2) return question;
   shuffleArrayInPlace(options);
-  return { ...question, options };
+  const next = { ...question, options, correct_answer: correctRaw || question.correct_answer };
+  if (correctRaw && !options.some((o) => o === correctRaw)) {
+    return question;
+  }
+  return next;
 }
 
 function withShuffledMcOptions(questions: Record<string, unknown>[]): Record<string, unknown>[] {
