@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Info, LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
@@ -50,7 +51,6 @@ import {
 } from '@/components/ui/select';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
 import {
@@ -62,7 +62,6 @@ import {
 } from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
-type GradeMode = 'student' | 'master_key';
 
 /** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
 const MIN_AUTO_READ_RATIO = 0.9;
@@ -89,25 +88,6 @@ function draftSelectionsToColumnPicks(
   return out;
 }
 
-async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('No se pudo cargar la imagen'));
-      el.src = url;
-    });
-    return img;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.9): string {
-  return canvas.toDataURL('image/jpeg', quality);
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -121,7 +101,6 @@ export default function CalificarPage() {
   const [examId, setExamId] = useState<string>('');
   const { exam, loading: examLoading } = useExam(examId || undefined);
 
-  const [gradeMode, setGradeMode] = useState<GradeMode>('student');
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [students, setStudents] = useState<Student[]>([]);
   const [phase, setPhase] = useState<Phase>('elegir');
@@ -156,19 +135,19 @@ export default function CalificarPage() {
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
   const liveCompleteSoundPlayedRef = useRef(false);
   const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
-  const autoCaptureAndCompareRef = useRef<
-    (merged: Record<string, string>, sourceForKey?: HTMLCanvasElement | HTMLImageElement) => Promise<void>
-  >(async () => {});
+  const autoCaptureAndCompareRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
+  /** Permite abrir la cámara en el mismo clic que pone `phase` en `capturar` (evita doble toque). */
+  const startLiveCameraRef = useRef<
+    ((opts?: { skipPhaseGuard?: boolean }) => Promise<void>) | undefined
+  >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
   const sheetIndexRef = useRef(0);
   const prevPhaseRef = useRef<Phase>('elegir');
 
   const [reviewQualityHint, setReviewQualityHint] = useState<string | null>(null);
-  const [keyImageUploading, setKeyImageUploading] = useState(false);
-  const [masterBlurOverlayUrl, setMasterBlurOverlayUrl] = useState<string | null>(null);
   const [overlayOpacity, setOverlayOpacity] = useState(55);
   const [autoSnapshotUrl, setAutoSnapshotUrl] = useState<string | null>(null);
   const [showAutoSnapshot, setShowAutoSnapshot] = useState(false);
@@ -190,21 +169,22 @@ export default function CalificarPage() {
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
-  const teacherSheetKeyByQuestionId = useMemo<Record<string, string>>(() => {
-    const raw = exam?.answer_key_by_question;
-    if (!raw || typeof raw !== 'object') return {};
+  const examVirtualKeyByQuestionId = useMemo<Record<string, string>>(() => {
     const out: Record<string, string> = {};
-    for (const [qid, v] of Object.entries(raw)) {
-      if (typeof v === 'string' && v.trim()) out[qid] = v.trim();
+    for (const row of virtualKey.rows) {
+      out[row.questionId] = row.correctOption;
     }
     return out;
-  }, [exam?.answer_key_by_question]);
-  const usingTeacherSheetKey = exam?.answer_key_source === 'teacher_sheet';
+  }, [virtualKey.rows]);
   const sheets = useMemo(() => chunkQuestions(questions, 10), [questions]);
   const totalSheets = sheets.length;
-  const currentChunk = sheets[sheetIndex] ?? [];
+  const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
   const maxQuestions = 30;
   const minResolvedForCurrentChunk = Math.max(1, Math.ceil(currentChunk.length * MIN_AUTO_READ_RATIO));
+  const expectedChunkPicks = useMemo(
+    () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
+    [currentChunk, examVirtualKeyByQuestionId]
+  );
 
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
@@ -221,11 +201,14 @@ export default function CalificarPage() {
 
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
-  const answeredByTeacherSheetCount = questions.filter(
-    (q) => Boolean(teacherSheetKeyByQuestionId[q.id]?.trim())
-  ).length;
-  const teacherSheetKeyComplete = questions.length > 0 && answeredByTeacherSheetCount === questions.length;
-  const canGradeStudents = usingTeacherSheetKey && teacherSheetKeyComplete;
+  const virtualKeyMcTotal = questions.filter((q) => q.type === 'multiple_choice').length;
+  const virtualKeyReadyCount = Object.keys(examVirtualKeyByQuestionId).length;
+  const virtualKeyComplete =
+    supportsCalifacil &&
+    virtualKey.issues.length === 0 &&
+    virtualKeyMcTotal > 0 &&
+    virtualKeyReadyCount === virtualKeyMcTotal;
+  const canGradeStudents = virtualKeyComplete;
 
   const setTorchEnabled = useCallback(async (enabled: boolean) => {
     const track = streamRef.current?.getVideoTracks?.()[0];
@@ -788,9 +771,8 @@ export default function CalificarPage() {
   }, [stopLiveCamera, isMobile]);
 
   const handleStudentChange = (studentId: string) => {
-    if (gradeMode !== 'student') return;
     if (!canGradeStudents) {
-      toast.error('Primero captura y guarda la hoja clave del maestro para habilitar la calificación de alumnos.');
+      toast.error('No se puede calificar: este examen no tiene clave automática válida en todos sus reactivos.');
       return;
     }
     setSelectedStudentId(studentId);
@@ -805,24 +787,30 @@ export default function CalificarPage() {
       virtualKey.issues.length === 0 &&
       sortedStudents.some((s) => s.id === studentId);
     if (!canAutoStart) return;
+    resumeScanAudioContext();
     stopLiveCamera();
-    setPhase('capturar');
-    setSheetIndex(0);
-    setConfirmedByQuestionId({});
-    setDraftSelections({});
-    setLiveDraftSelections({});
-    setLiveResolvedCount(0);
-    setLiveStatus(
-      isMobile
-        ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
-    );
-    setPreviewUrl((u) => {
-      if (u) URL.revokeObjectURL(u);
-      return null;
+    flushSync(() => {
+      setPhase('capturar');
+      setSheetIndex(0);
+      setConfirmedByQuestionId({});
+      setDraftSelections({});
+      setLiveDraftSelections({});
+      setLiveResolvedCount(0);
+      setLiveStatus(
+        isMobile
+          ? 'Abre la cámara para detectar respuestas en vivo.'
+          : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+      );
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setReviewOmrGeometry(null);
+      setReviewHumanAck(false);
     });
-    setReviewOmrGeometry(null);
-    setReviewHumanAck(false);
+    if (isMobile) {
+      void startLiveCameraRef.current?.({ skipPhaseGuard: true });
+    }
   };
 
   const startSheetCapture = useCallback(() => {
@@ -834,40 +822,44 @@ export default function CalificarPage() {
       questions.length > 0 &&
       questions.length <= maxQuestions &&
       virtualKey.issues.length === 0 &&
-      (gradeMode === 'master_key' || (canGradeStudents && sortedStudents.some((s) => s.id === selectedStudentId)));
+      canGradeStudents &&
+      sortedStudents.some((s) => s.id === selectedStudentId);
     if (!canStart) {
       toast.error(
-        gradeMode === 'master_key'
-          ? 'Elige un examen válido para capturar la hoja clave.'
-          : !canGradeStudents
-            ? 'Primero captura y guarda la hoja clave del maestro.'
-            : 'Selecciona un alumno válido para iniciar la captura.'
+        !canGradeStudents
+          ? 'No se puede calificar: este examen no tiene clave automática válida en todos sus reactivos.'
+          : 'Selecciona un alumno válido para iniciar la captura.'
       );
       return;
     }
+    resumeScanAudioContext();
     stopLiveCamera();
-    setPhase('capturar');
-    setSheetIndex(0);
-    setConfirmedByQuestionId({});
-    setDraftSelections({});
-    setLiveDraftSelections({});
-    setLiveResolvedCount(0);
-    setLiveStatus(
-      isMobile
-        ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
-    );
-    setPreviewUrl((u) => {
-      if (u) URL.revokeObjectURL(u);
-      return null;
+    flushSync(() => {
+      setPhase('capturar');
+      setSheetIndex(0);
+      setConfirmedByQuestionId({});
+      setDraftSelections({});
+      setLiveDraftSelections({});
+      setLiveResolvedCount(0);
+      setLiveStatus(
+        isMobile
+          ? 'Abre la cámara para detectar respuestas en vivo.'
+          : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+      );
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setReviewOmrGeometry(null);
+      setReviewHumanAck(false);
     });
-    setReviewOmrGeometry(null);
-    setReviewHumanAck(false);
+    if (isMobile) {
+      void startLiveCameraRef.current?.({ skipPhaseGuard: true });
+    }
   }, [
     exam,
     examId,
     examLoading,
-    gradeMode,
     isMobile,
     maxQuestions,
     canGradeStudents,
@@ -878,106 +870,6 @@ export default function CalificarPage() {
     supportsCalifacil,
     virtualKey.issues.length,
   ]);
-
-  const uploadMasterKeyImage = useCallback(
-    async (
-      sheetIdx: number,
-      source: string | HTMLCanvasElement | HTMLImageElement
-    ): Promise<boolean> => {
-      if (!examId) return false;
-      try {
-        setKeyImageUploading(true);
-        let img: HTMLImageElement;
-        if (typeof source === 'string') {
-          const blob = await fetch(source).then((r) => r.blob());
-          img = await blobToImage(blob);
-        } else if (source instanceof HTMLCanvasElement) {
-          img = await blobToImage(
-            await new Promise<Blob>((resolve, reject) => {
-              source.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo serializar la imagen'))), 'image/jpeg', 0.92);
-            })
-          );
-        } else {
-          img = source;
-        }
-        const w = Math.max(1, Math.round(img.naturalWidth || img.width));
-        const h = Math.max(1, Math.round(img.naturalHeight || img.height));
-
-        const originalCanvas = document.createElement('canvas');
-        originalCanvas.width = w;
-        originalCanvas.height = h;
-        const octx = originalCanvas.getContext('2d');
-        if (!octx) throw new Error('No se pudo preparar imagen original');
-        octx.drawImage(img, 0, 0, w, h);
-
-        const blurCanvas = document.createElement('canvas');
-        blurCanvas.width = w;
-        blurCanvas.height = h;
-        const bctx = blurCanvas.getContext('2d');
-        if (!bctx) throw new Error('No se pudo preparar imagen blur');
-        const blurPx = Math.max(8, Math.round(Math.min(w, h) * 0.03));
-        bctx.filter = `blur(${blurPx}px)`;
-        bctx.drawImage(img, 0, 0, w, h);
-        bctx.filter = 'none';
-
-        const headers = await dashboardAuthJsonHeaders();
-        const res = await fetch(`/api/exams/${examId}/answer-key-image`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            sheetIndex: sheetIdx,
-            originalImageBase64: canvasToDataUrl(originalCanvas, 0.92),
-            blurImageBase64: canvasToDataUrl(blurCanvas, 0.9),
-            width: w,
-            height: h,
-          }),
-        });
-        const payload = (await res.json().catch(() => ({}))) as { error?: string };
-        if (!res.ok) {
-          throw new Error(payload.error || 'No se pudo guardar la foto de la hoja clave');
-        }
-        return true;
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : 'No se pudo guardar foto de clave';
-        toast.error('No se pudo guardar la foto de la hoja clave', {
-          description: toSpanishAuthMessage(msg),
-        });
-        return false;
-      } finally {
-        setKeyImageUploading(false);
-      }
-    },
-    [examId]
-  );
-
-  const loadMasterBlurOverlay = useCallback(async () => {
-    if (!examId || gradeMode !== 'student' || !canGradeStudents) {
-      setMasterBlurOverlayUrl(null);
-      return;
-    }
-    try {
-      const headers = await dashboardAuthJsonHeaders();
-      const res = await fetch(
-        `/api/exams/${examId}/answer-key-image?sheetIndex=${sheetIndex}`,
-        { method: 'GET', headers }
-      );
-      const payload = (await res.json().catch(() => ({}))) as {
-        hasImage?: boolean;
-        blurSignedUrl?: string;
-      };
-      if (res.ok && payload.hasImage && payload.blurSignedUrl) {
-        setMasterBlurOverlayUrl(payload.blurSignedUrl);
-      } else {
-        setMasterBlurOverlayUrl(null);
-      }
-    } catch {
-      setMasterBlurOverlayUrl(null);
-    }
-  }, [canGradeStudents, examId, gradeMode, sheetIndex]);
-
-  useEffect(() => {
-    void loadMasterBlurOverlay();
-  }, [loadMasterBlurOverlay]);
 
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1002,14 +894,19 @@ export default function CalificarPage() {
     }
   };
 
-  const startLiveCamera = useCallback(async () => {
-    if (!examId || !exam || !supportsCalifacil || phase !== 'capturar') {
+  const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }) => {
+    if (!examId || !exam || !supportsCalifacil) {
+      toast.error('Selecciona primero un examen válido y entra a captura.');
+      return;
+    }
+    if (!opts?.skipPhaseGuard && phase !== 'capturar') {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
     if (cameraOpen || startingCameraRef.current) return;
     startingCameraRef.current = true;
     try {
+      resumeScanAudioContext();
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
         toast.error('Tu navegador no permite cámara en vivo en esta pantalla.');
         startingCameraRef.current = false;
@@ -1175,10 +1072,7 @@ export default function CalificarPage() {
           ) {
             stableFullTicksRef.current = 0;
             await showAutoCaptureSnapshot(oriented);
-            await autoCaptureAndCompareRef.current(
-              mergedLive,
-              gradeMode === 'master_key' ? oriented : undefined
-            );
+            await autoCaptureAndCompareRef.current(mergedLive);
           }
         } finally {
           liveBusyRef.current = false;
@@ -1202,13 +1096,14 @@ export default function CalificarPage() {
     mapRawToDraft,
     omrCols,
     phase,
-    gradeMode,
     resetLiveReadings,
     showAutoCaptureSnapshot,
     setTorchEnabled,
     sheets,
     supportsCalifacil,
   ]);
+
+  startLiveCameraRef.current = startLiveCamera;
 
   useEffect(() => {
     if (!isMobile) return;
@@ -1217,10 +1112,7 @@ export default function CalificarPage() {
     void startLiveCamera();
   }, [isMobile, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
 
-  const confirmCurrentSheet = async (
-    autoSource?: HTMLCanvasElement | HTMLImageElement,
-    providedDraft?: Record<string, string>
-  ) => {
+  const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
       toast.error('Selecciona un examen antes de confirmar.');
       return;
@@ -1237,16 +1129,6 @@ export default function CalificarPage() {
         toast.error(`Falta la respuesta de la pregunta ${questions.findIndex((x) => x.id === q.id) + 1}`);
         return;
       }
-    }
-
-    if (gradeMode === 'master_key') {
-      const sourceForUpload = autoSource ?? previewUrl;
-      if (!sourceForUpload) {
-        toast.error('No hay foto de hoja para guardar como clave. Vuelve a escanear.');
-        return;
-      }
-      const ok = await uploadMasterKeyImage(sheetIndex, sourceForUpload);
-      if (!ok) return;
     }
 
     const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
@@ -1277,17 +1159,14 @@ export default function CalificarPage() {
     await submitAll(mergedNow);
   };
 
-  const autoCaptureAndCompare = async (
-    mergedDraft: Record<string, string>,
-    sourceForKey?: HTMLCanvasElement | HTMLImageElement
-  ) => {
+  const autoCaptureAndCompare = async (mergedDraft: Record<string, string>) => {
     if (autoFinalizeInProgressRef.current) return;
     autoFinalizeInProgressRef.current = true;
     try {
       setDraftSelections(mergedDraft);
       setLiveDraftSelections(mergedDraft);
       setLiveStatus('Hoja detectada y capturada automáticamente. Procesando...');
-      await confirmCurrentSheet(sourceForKey, mergedDraft);
+      await confirmCurrentSheet(mergedDraft);
     } finally {
       autoFinalizeInProgressRef.current = false;
     }
@@ -1303,78 +1182,61 @@ export default function CalificarPage() {
       }
     }
 
-    if (gradeMode === 'student' && (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId))) {
+    if (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId)) {
       toast.error('Alumno no válido. Vuelve a seleccionar en la primera pantalla.');
       return;
     }
-    if (gradeMode === 'student' && !canGradeStudents) {
-      toast.error('Calificación bloqueada: primero captura y guarda la hoja clave del maestro.');
+    if (!canGradeStudents) {
+      toast.error('Calificación bloqueada: la clave automática del examen no está completa.');
       return;
     }
 
     setPhase('guardando');
 
     try {
-      if (gradeMode === 'master_key') {
-        const teacherKeyPayload = questions.reduce<Record<string, string>>((acc, q) => {
-          const answerText = (merged[q.id] ?? '').trim();
-          if (answerText) acc[q.id] = answerText;
-          return acc;
-        }, {});
-        const { error: keyError } = await supabase
-          .from('exams')
-          .update({
-            answer_key_source: 'teacher_sheet',
-            answer_key_by_question: teacherKeyPayload,
-          })
-          .eq('id', examId);
-        if (keyError) throw keyError;
-        toast.success('Hoja clave guardada. Las próximas calificaciones se compararán contra esta clave.');
-      } else {
-        const studentId = selectedStudentId;
-        const effectiveKey = teacherSheetKeyByQuestionId;
-        const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
-        const mcTotal = mcQuestions.length;
-        if (Object.keys(effectiveKey).length !== mcTotal) {
-          toast.error('Clave del maestro incompleta. Vuelve a capturar la hoja clave antes de calificar.');
-          setPhase('elegir');
-          return;
-        }
-
-        let correctCount = 0;
-        const rows = questions.map((question: Question) => {
-          const answerText = (merged[question.id] ?? '').trim();
-          const expected = (effectiveKey[question.id] ?? '').trim();
-          const isCorrect =
-            question.type === 'multiple_choice' ? Boolean(expected) && answerText === expected : null;
-          if (isCorrect) correctCount++;
-
-          return {
-            exam_id: examId,
-            student_id: studentId,
-            question_id: question.id,
-            answer_text: answerText,
-            is_correct: isCorrect,
-            score: isCorrect ? 1 : 0,
-          };
-        });
-
-        const { error: answersError } = await supabase.from('answers').upsert(rows, {
-          onConflict: 'exam_id,student_id,question_id',
-        });
-        if (answersError) throw answersError;
-
-        const pct = calculatePercentage(correctCount, mcTotal);
-        const wrong = Math.max(0, mcTotal - correctCount);
-        setAutoGradeStats({
-          pct,
-          correct: correctCount,
-          wrong,
-          total: mcTotal,
-        });
-        setAutoGradeDialogOpen(true);
-        toast.success('Calificación guardada.');
+      const studentId = selectedStudentId;
+      const effectiveKey = examVirtualKeyByQuestionId;
+      const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
+      const mcTotal = mcQuestions.length;
+      if (Object.keys(effectiveKey).length !== mcTotal) {
+        toast.error('Clave automática incompleta. Revisa que cada reactivo tenga respuesta correcta válida.');
+        setPhase('elegir');
+        return;
       }
+
+      let correctCount = 0;
+      const rows = questions.map((question: Question) => {
+        const answerText = (merged[question.id] ?? '').trim();
+        const expected = (effectiveKey[question.id] ?? '').trim();
+        const isCorrect =
+          question.type === 'multiple_choice' ? Boolean(expected) && answerText === expected : null;
+        if (isCorrect) correctCount++;
+
+        return {
+          exam_id: examId,
+          student_id: studentId,
+          question_id: question.id,
+          answer_text: answerText,
+          is_correct: isCorrect,
+          score: isCorrect ? 1 : 0,
+        };
+      });
+
+      const { error: answersError } = await supabase.from('answers').upsert(rows, {
+        onConflict: 'exam_id,student_id,question_id',
+      });
+      if (answersError) throw answersError;
+
+      const pct = calculatePercentage(correctCount, mcTotal);
+      const wrong = Math.max(0, mcTotal - correctCount);
+      setAutoGradeStats({
+        pct,
+        correct: correctCount,
+        wrong,
+        total: mcTotal,
+      });
+      setAutoGradeDialogOpen(true);
+      toast.success('Calificación guardada.');
 
       stopLiveCamera();
       setPhase('elegir');
@@ -1394,14 +1256,8 @@ export default function CalificarPage() {
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: string }).message)
           : '';
-      const isMissingKeyColumn =
-        msg.includes('answer_key_source') || msg.includes('answer_key_by_question');
       toast.error('No se pudo guardar', {
-        description: isMissingKeyColumn
-          ? 'Falta actualizar la base de datos para hoja clave del maestro. Ejecuta la migración más reciente y vuelve a intentar.'
-          : msg
-            ? toSpanishAuthMessage(msg)
-            : 'Revisa tu conexión y permisos.',
+        description: msg ? toSpanishAuthMessage(msg) : 'Revisa tu conexión y permisos.',
       });
       setPhase('revisar_hoja');
     }
@@ -1663,9 +1519,10 @@ export default function CalificarPage() {
 
       <Card>
         <CardHeader className="space-y-1 pb-2 sm:pb-3">
-          <CardTitle className="text-base sm:text-lg">Examen y modo de calificación</CardTitle>
+          <CardTitle className="text-base sm:text-lg">Examen y clave automática</CardTitle>
           <CardDescription className="text-xs sm:text-sm">
-            Captura una hoja clave del maestro y luego califica alumnos por comparación con esa clave.
+            CaliFacil genera la tabla clave automáticamente con las respuestas correctas del examen y compara cada
+            hoja de alumno contra esa clave.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 sm:space-y-4">
@@ -1729,96 +1586,118 @@ export default function CalificarPage() {
 
           {examId && (
             <>
-              <div className="space-y-2">
-                <Label>Modo</Label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <Button
-                    type="button"
-                    variant={gradeMode === 'master_key' ? 'default' : 'outline'}
-                    className={gradeMode === 'master_key' ? 'bg-orange-600 hover:bg-orange-700' : ''}
-                    disabled={phase === 'guardando'}
-                    onClick={() => {
-                      setGradeMode('master_key');
-                      setSelectedStudentId('');
-                      resetFlow();
-                    }}
-                  >
-                    Capturar hoja clave
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={gradeMode === 'student' ? 'default' : 'outline'}
-                    className={gradeMode === 'student' ? 'bg-orange-600 hover:bg-orange-700' : ''}
-                    disabled={phase === 'guardando'}
-                    onClick={() => {
-                      if (!canGradeStudents) {
-                        toast.error('Primero captura y guarda la hoja clave del maestro.');
-                        setGradeMode('master_key');
-                        return;
-                      }
-                      setGradeMode('student');
-                    }}
-                  >
-                    Calificar alumno
-                  </Button>
-                </div>
-              </div>
-
               {exam && supportsCalifacil && (
                 <div
                   className={`rounded-lg border p-3 text-sm ${
-                    usingTeacherSheetKey && teacherSheetKeyComplete
+                    canGradeStudents
                       ? 'border-green-200 bg-green-50 text-green-900'
                       : 'border-amber-200 bg-amber-50 text-amber-900'
                   }`}
                 >
-                  {usingTeacherSheetKey && teacherSheetKeyComplete ? (
-                    <>Clave activa: hoja del maestro ({answeredByTeacherSheetCount}/{questions.length} reactivos).</>
+                  {canGradeStudents ? (
+                    <>Clave automática activa: {virtualKeyReadyCount}/{virtualKeyMcTotal} reactivos listos.</>
                   ) : (
                     <>
-                      Aún no hay hoja clave del maestro completa. La calificación de alumnos está bloqueada hasta
-                      capturarla y guardarla.
+                      La clave automática del examen está incompleta. Revisa las preguntas para que cada reactivo
+                      tenga una respuesta correcta válida dentro de sus opciones.
                     </>
                   )}
                 </div>
               )}
 
-              {gradeMode === 'student' && (
-                <div className="space-y-2">
-                  <Label htmlFor="calif-alumno">Alumno</Label>
-                  <StudentCombobox
-                    id="calif-alumno"
-                    students={sortedStudents}
-                    value={selectedStudentId}
-                    onValueChange={handleStudentChange}
-                    disabled={phase === 'guardando' || !canGradeStudents}
-                    placeholder="Busca y elige al alumno"
-                    searchPlaceholder="Escribe para buscar…"
-                    emptyText="Ningún alumno coincide."
-                    noStudentsText={
-                      exam && !exam.group_id
-                        ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
-                        : undefined
-                    }
-                  />
-                  <p className="text-xs text-gray-500">
-                    {canGradeStudents
-                      ? 'Solo puedes calificar a alumnos que estén en la lista del grupo del examen.'
-                      : 'Bloqueado: captura primero la hoja clave del maestro para habilitar esta sección.'}
+              {exam && supportsCalifacil && canGradeStudents && (
+                <div className="space-y-2 rounded-lg border border-orange-200 bg-orange-50/40 p-3">
+                  <Label className="text-sm text-orange-900">Tabla clave automática (generada por CaliFacil)</Label>
+                  <p className="text-xs text-orange-900/80">
+                    Esta clave se construye con las respuestas correctas del examen. Se usa para comparar
+                    automáticamente cada hoja de alumno.
                   </p>
+                  <div className="space-y-3">
+                    {sheets.map((chunk, chunkIdx) => (
+                      <div key={`key-sheet-${chunkIdx}`} className="rounded-md border border-orange-200 bg-white p-2">
+                        <p className="mb-2 text-xs font-medium text-gray-700">
+                          Hoja {chunkIdx + 1} ({chunk.length} reactivos)
+                        </p>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-[20rem] table-fixed border-collapse text-xs">
+                            <thead>
+                              <tr>
+                                <th className="w-12 border border-gray-300 bg-gray-100 px-2 py-1 text-right">N.º</th>
+                                {Array.from({ length: omrCols }, (_, c) => (
+                                  <th
+                                    key={`head-${chunkIdx}-${c}`}
+                                    className="border border-gray-300 bg-gray-100 px-2 py-1 text-center"
+                                  >
+                                    {String.fromCharCode(65 + c)}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {chunk.map((q, rowIdx) => {
+                                const expected = (examVirtualKeyByQuestionId[q.id] ?? '').trim();
+                                const expectedIndex = (q.options ?? []).findIndex((opt) => opt.trim() === expected);
+                                const qNum = chunkIdx * 10 + rowIdx + 1;
+                                return (
+                                  <tr key={q.id}>
+                                    <td className="border border-gray-300 bg-gray-50 px-2 py-1 text-right font-semibold">
+                                      {qNum}
+                                    </td>
+                                    {Array.from({ length: omrCols }, (_, c) => (
+                                      <td key={`${q.id}-${c}`} className="border border-gray-300 px-2 py-1 text-center">
+                                        <span
+                                          className={`inline-block h-4 w-4 rounded-[2px] border ${
+                                            c === expectedIndex
+                                              ? 'border-orange-600 bg-orange-500'
+                                              : 'border-gray-500 bg-white'
+                                          }`}
+                                        />
+                                      </td>
+                                    ))}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {gradeMode === 'master_key' && exam && supportsCalifacil && (
-                <Button
-                  type="button"
-                  className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
-                  disabled={phase === 'guardando'}
-                  onClick={startSheetCapture}
-                >
-                  Capturar hoja clave del maestro
-                </Button>
-              )}
+              <div className="space-y-2">
+                <Label htmlFor="calif-alumno">Alumno</Label>
+                <StudentCombobox
+                  id="calif-alumno"
+                  students={sortedStudents}
+                  value={selectedStudentId}
+                  onValueChange={handleStudentChange}
+                  disabled={phase === 'guardando' || !canGradeStudents}
+                  placeholder="Busca y elige al alumno"
+                  searchPlaceholder="Escribe para buscar…"
+                  emptyText="Ningún alumno coincide."
+                  noStudentsText={
+                    exam && !exam.group_id
+                      ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
+                      : undefined
+                  }
+                />
+                <p className="text-xs text-gray-500">
+                  {canGradeStudents
+                    ? 'La comparación se hace automáticamente contra la tabla clave generada por el sistema.'
+                    : 'Bloqueado: el examen necesita respuestas correctas válidas para generar la clave automática.'}
+                </p>
+              </div>
+
+              <Button
+                type="button"
+                className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
+                disabled={phase === 'guardando' || !canGradeStudents || !selectedStudentId}
+                onClick={startSheetCapture}
+              >
+                {isMobile ? 'Escanear con la cámara' : 'Elegir imagen y calificar'}
+              </Button>
             </>
           )}
 
@@ -1829,7 +1708,7 @@ export default function CalificarPage() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">
-              {gradeMode === 'master_key' ? 'Hoja clave' : 'Hoja de alumno'} {sheetIndex + 1} de {totalSheets}
+              Hoja de alumno {sheetIndex + 1} de {totalSheets}
             </CardTitle>
             <CardDescription>
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
@@ -1949,19 +1828,10 @@ export default function CalificarPage() {
                             type="button"
                             variant="secondary"
                             className="w-full"
-                            onClick={
-                              gradeMode === 'master_key'
-                                ? () => {
-                                    resetFlow();
-                                    setPhase('elegir');
-                                  }
-                                : switchToAnotherStudentScan
-                            }
+                            onClick={switchToAnotherStudentScan}
                             disabled={scanBusy}
                           >
-                            {gradeMode === 'master_key'
-                              ? 'Volver a configuración'
-                              : 'Escanear examen de otro alumno'}
+                            Escanear examen de otro alumno
                           </Button>
                         </div>
                       </div>
@@ -2012,30 +1882,21 @@ export default function CalificarPage() {
                       alt="Vista previa del recuadro CaliFacil"
                       className="relative z-0 block max-h-96 w-auto max-w-full"
                     />
-                    {gradeMode === 'student' && masterBlurOverlayUrl ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={masterBlurOverlayUrl}
-                          alt="Superposición blur de hoja clave del maestro"
-                          className="pointer-events-none absolute inset-0 z-[1] h-full w-full object-contain"
-                          style={{ opacity: overlayOpacity / 100 }}
-                        />
-                      </>
-                    ) : null}
                     {reviewOmrGeometry ? (
                       <CalifacilOmrReviewOverlay
                         geometry={reviewOmrGeometry}
                         picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
+                        expectedPicks={expectedChunkPicks}
+                        expectedOpacity={overlayOpacity / 100}
                         rowCount={currentChunk.length}
                       />
                     ) : null}
                   </div>
                 </div>
-                {gradeMode === 'student' && masterBlurOverlayUrl ? (
+                {canGradeStudents ? (
                   <div className="rounded-md border bg-white px-3 py-2">
                     <div className="mb-1 flex items-center justify-between text-xs text-gray-600">
-                      <span>Superposición blur de clave</span>
+                      <span>Blur de clave automática esperada</span>
                       <span>{overlayOpacity}%</span>
                     </div>
                     <input
@@ -2136,14 +1997,10 @@ export default function CalificarPage() {
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
-                    disabled={!reviewHumanAck || scanBusy || keyImageUploading}
+                    disabled={!reviewHumanAck || scanBusy}
                     onClick={() => void confirmCurrentSheet()}
                   >
-                    {keyImageUploading
-                      ? 'Guardando foto clave...'
-                      : gradeMode === 'master_key'
-                        ? 'Guardar hoja clave'
-                        : 'Guardar calificación'}
+                    Guardar calificación
                   </Button>
                 </div>
               </div>
