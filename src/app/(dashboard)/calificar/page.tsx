@@ -1438,95 +1438,105 @@ export default function CalificarPage() {
             </div>
           )}
 
-          <div className="space-y-2">
-            <Label>Modo</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <Button
-                type="button"
-                variant={gradeMode === 'master_key' ? 'default' : 'outline'}
-                className={gradeMode === 'master_key' ? 'bg-orange-600 hover:bg-orange-700' : ''}
-                disabled={phase === 'guardando'}
-                onClick={() => {
-                  setGradeMode('master_key');
-                  setSelectedStudentId('');
-                  resetFlow();
-                }}
-              >
-                Capturar hoja clave
-              </Button>
-              <Button
-                type="button"
-                variant={gradeMode === 'student' ? 'default' : 'outline'}
-                className={gradeMode === 'student' ? 'bg-orange-600 hover:bg-orange-700' : ''}
-                disabled={phase === 'guardando'}
-                onClick={() => {
-                  if (!canGradeStudents) {
-                    toast.error('Primero captura y guarda la hoja clave del maestro.');
-                    setGradeMode('master_key');
-                    return;
-                  }
-                  setGradeMode('student');
-                }}
-              >
-                Calificar alumno
-              </Button>
-            </div>
-          </div>
+          {!examId && (
+            <p className="text-xs text-gray-500">
+              Selecciona un examen para habilitar las opciones de captura y calificación.
+            </p>
+          )}
 
-          {exam && supportsCalifacil && (
-            <div
-              className={`rounded-lg border p-3 text-sm ${
-                usingTeacherSheetKey && teacherSheetKeyComplete
-                  ? 'border-green-200 bg-green-50 text-green-900'
-                  : 'border-amber-200 bg-amber-50 text-amber-900'
-              }`}
-            >
-              {usingTeacherSheetKey && teacherSheetKeyComplete ? (
-                <>Clave activa: hoja del maestro ({answeredByTeacherSheetCount}/{questions.length} reactivos).</>
-              ) : (
-                <>
-                  Aún no hay hoja clave del maestro completa. La calificación de alumnos está bloqueada hasta
-                  capturarla y guardarla.
-                </>
+          {examId && (
+            <>
+              <div className="space-y-2">
+                <Label>Modo</Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <Button
+                    type="button"
+                    variant={gradeMode === 'master_key' ? 'default' : 'outline'}
+                    className={gradeMode === 'master_key' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                    disabled={phase === 'guardando'}
+                    onClick={() => {
+                      setGradeMode('master_key');
+                      setSelectedStudentId('');
+                      resetFlow();
+                    }}
+                  >
+                    Capturar hoja clave
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={gradeMode === 'student' ? 'default' : 'outline'}
+                    className={gradeMode === 'student' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                    disabled={phase === 'guardando'}
+                    onClick={() => {
+                      if (!canGradeStudents) {
+                        toast.error('Primero captura y guarda la hoja clave del maestro.');
+                        setGradeMode('master_key');
+                        return;
+                      }
+                      setGradeMode('student');
+                    }}
+                  >
+                    Calificar alumno
+                  </Button>
+                </div>
+              </div>
+
+              {exam && supportsCalifacil && (
+                <div
+                  className={`rounded-lg border p-3 text-sm ${
+                    usingTeacherSheetKey && teacherSheetKeyComplete
+                      ? 'border-green-200 bg-green-50 text-green-900'
+                      : 'border-amber-200 bg-amber-50 text-amber-900'
+                  }`}
+                >
+                  {usingTeacherSheetKey && teacherSheetKeyComplete ? (
+                    <>Clave activa: hoja del maestro ({answeredByTeacherSheetCount}/{questions.length} reactivos).</>
+                  ) : (
+                    <>
+                      Aún no hay hoja clave del maestro completa. La calificación de alumnos está bloqueada hasta
+                      capturarla y guardarla.
+                    </>
+                  )}
+                </div>
               )}
-            </div>
-          )}
 
-          {gradeMode === 'student' && (
-            <div className="space-y-2">
-              <Label htmlFor="calif-alumno">Alumno</Label>
-              <StudentCombobox
-                id="calif-alumno"
-                students={sortedStudents}
-                value={selectedStudentId}
-                onValueChange={handleStudentChange}
-                disabled={phase === 'guardando' || !canGradeStudents}
-                placeholder="Busca y elige al alumno"
-                searchPlaceholder="Escribe para buscar…"
-                emptyText="Ningún alumno coincide."
-                noStudentsText={
-                  exam && !exam.group_id
-                    ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
-                    : undefined
-                }
-              />
-              <p className="text-xs text-gray-500">
-                {canGradeStudents
-                  ? 'Solo puedes calificar a alumnos que estén en la lista del grupo del examen.'
-                  : 'Bloqueado: captura primero la hoja clave del maestro para habilitar esta sección.'}
-              </p>
-            </div>
-          )}
+              {gradeMode === 'student' && (
+                <div className="space-y-2">
+                  <Label htmlFor="calif-alumno">Alumno</Label>
+                  <StudentCombobox
+                    id="calif-alumno"
+                    students={sortedStudents}
+                    value={selectedStudentId}
+                    onValueChange={handleStudentChange}
+                    disabled={phase === 'guardando' || !canGradeStudents}
+                    placeholder="Busca y elige al alumno"
+                    searchPlaceholder="Escribe para buscar…"
+                    emptyText="Ningún alumno coincide."
+                    noStudentsText={
+                      exam && !exam.group_id
+                        ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
+                        : undefined
+                    }
+                  />
+                  <p className="text-xs text-gray-500">
+                    {canGradeStudents
+                      ? 'Solo puedes calificar a alumnos que estén en la lista del grupo del examen.'
+                      : 'Bloqueado: captura primero la hoja clave del maestro para habilitar esta sección.'}
+                  </p>
+                </div>
+              )}
 
-          {gradeMode === 'master_key' && exam && supportsCalifacil && (
-            <Button
-              type="button"
-              className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
-              disabled={phase === 'guardando'}
-              onClick={startSheetCapture}
-            >
-              Capturar hoja clave del maestro
-            </Button>
+              {gradeMode === 'master_key' && exam && supportsCalifacil && (
+                <Button
+                  type="button"
+                  className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
+                  disabled={phase === 'guardando'}
+                  onClick={startSheetCapture}
+                >
+                  Capturar hoja clave del maestro
+                </Button>
+              )}
+            </>
           )}
 
         </CardContent>
