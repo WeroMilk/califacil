@@ -1475,6 +1475,12 @@ function refineOmrRowBoundariesFromTableLines(
  * Comprueba si la imagen (recorte guía CaliFacil ya orientado) muestra la rejilla impresa
  * de la tabla de respuestas (~11 líneas horizontales coherentes). Las escenas sin examen
  * suelen no cumplir esto, así que sirve para no “leer” basura con la cámara.
+ *
+ * En **hoja impresa completa**, la tabla está solo en la parte inferior; si analizamos
+ * casi toda la altura (`bottomBandRatio: 1`), los trazos del enunciado añaden picos y
+ * casi nunca salen exactamente 11 líneas. Por eso probamos primero la misma franja inferior
+ * que usa el escaneo OMR (`printExam`), y dejamos `bottomBandRatio: 1` para fotos ya
+ * recortadas al recuadro.
  */
 export function hasCalifacilPrintedTableGrid(
   canvas: HTMLCanvasElement,
@@ -1489,11 +1495,26 @@ export function hasCalifacilPrintedTableGrid(
   const { data } = id;
 
   const profiles: OmrGeometryProfile[] = [
+    {
+      bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
+      titleStripRatioOfBand: CALIFACIL_OMR_SCAN.titleStripRatioOfBand,
+      qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+    },
+    {
+      bottomBandRatio: 0.52,
+      titleStripRatioOfBand: 0.2,
+      qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+    },
+    {
+      bottomBandRatio: 0.58,
+      titleStripRatioOfBand: 0.17,
+      qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+    },
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.12, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
   ];
-  const shifts = [0, -8, 8, -14, 14];
+  const shifts = [0, -6, 6, -8, 8, -14, 14, -20, 20];
 
   for (const profile of profiles) {
     const bandH = height * profile.bottomBandRatio;
@@ -1530,7 +1551,10 @@ export function isCalifacilExamSheetLikely(
 ): boolean {
   if (typeof document === 'undefined') return false;
   const corrected = applyPerspectiveCorrection(canvas);
-  return hasCalifacilPrintedTableGrid(corrected, columns);
+  if (hasCalifacilPrintedTableGrid(corrected, columns)) return true;
+  /** Página muy cargada o borde mal inferido: la homografía puede estropear líneas; probar imagen previa al warp. */
+  if (corrected !== canvas && hasCalifacilPrintedTableGrid(canvas, columns)) return true;
+  return false;
 }
 
 function scanCalifacilOmrCanvasDetailed(
