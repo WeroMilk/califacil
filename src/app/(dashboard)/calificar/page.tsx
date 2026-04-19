@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/select';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
 import {
@@ -93,6 +94,25 @@ function optionAnswerToLetter(q: Question, answerText: string): string {
   const idx = opts.findIndex((o) => o.trim() === t);
   if (idx < 0) return '';
   return String.fromCharCode(65 + idx);
+}
+
+async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('No se pudo cargar la imagen'));
+      el.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.9): string {
+  return canvas.toDataURL('image/jpeg', quality);
 }
 
 export default function CalificarPage() {
@@ -145,6 +165,9 @@ export default function CalificarPage() {
   const prevPhaseRef = useRef<Phase>('elegir');
 
   const [reviewQualityHint, setReviewQualityHint] = useState<string | null>(null);
+  const [keyImageUploading, setKeyImageUploading] = useState(false);
+  const [masterBlurOverlayUrl, setMasterBlurOverlayUrl] = useState<string | null>(null);
+  const [overlayOpacity, setOverlayOpacity] = useState(55);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
@@ -163,10 +186,6 @@ export default function CalificarPage() {
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
-  const virtualKeyAnswerByQuestionId = useMemo(
-    () => Object.fromEntries(virtualKey.rows.map((row) => [row.questionId, row.correctOption])),
-    [virtualKey.rows]
-  );
   const teacherSheetKeyByQuestionId = useMemo<Record<string, string>>(() => {
     const raw = exam?.answer_key_by_question;
     if (!raw || typeof raw !== 'object') return {};
@@ -177,9 +196,6 @@ export default function CalificarPage() {
     return out;
   }, [exam?.answer_key_by_question]);
   const usingTeacherSheetKey = exam?.answer_key_source === 'teacher_sheet';
-  const activeAnswerKeyByQuestionId = usingTeacherSheetKey
-    ? teacherSheetKeyByQuestionId
-    : virtualKeyAnswerByQuestionId;
   const sheets = useMemo(() => chunkQuestions(questions, 10), [questions]);
   const totalSheets = sheets.length;
   const currentChunk = sheets[sheetIndex] ?? [];
@@ -323,8 +339,16 @@ export default function CalificarPage() {
       fallbackFile?: File,
       opts?: { skipReviewUi?: boolean }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
+      if (!examId || !exam || !supportsCalifacil) {
+        toast.error('Selecciona un examen válido antes de escanear.');
+        return { success: false };
+      }
       const skipReviewUi = opts?.skipReviewUi;
       const chunk = sheets[sheetIndexRef.current] ?? [];
+      if (chunk.length === 0) {
+        toast.error('No hay preguntas para escanear en esta hoja.');
+        return { success: false };
+      }
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
       const examCanvas =
         oriented instanceof HTMLCanvasElement
@@ -630,7 +654,7 @@ export default function CalificarPage() {
 
       return { success: true, chunkDraft: mapped.draft };
     },
-    [examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheets]
+    [exam, examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheets, supportsCalifacil]
   );
 
   useEffect(() => {
@@ -803,10 +827,100 @@ export default function CalificarPage() {
     virtualKey.issues.length,
   ]);
 
+  const uploadMasterKeyImage = useCallback(
+    async (sheetIdx: number, sourceUrl: string): Promise<boolean> => {
+      if (!examId) return false;
+      try {
+        setKeyImageUploading(true);
+        const blob = await fetch(sourceUrl).then((r) => r.blob());
+        const img = await blobToImage(blob);
+        const w = Math.max(1, Math.round(img.naturalWidth || img.width));
+        const h = Math.max(1, Math.round(img.naturalHeight || img.height));
+
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = w;
+        originalCanvas.height = h;
+        const octx = originalCanvas.getContext('2d');
+        if (!octx) throw new Error('No se pudo preparar imagen original');
+        octx.drawImage(img, 0, 0, w, h);
+
+        const blurCanvas = document.createElement('canvas');
+        blurCanvas.width = w;
+        blurCanvas.height = h;
+        const bctx = blurCanvas.getContext('2d');
+        if (!bctx) throw new Error('No se pudo preparar imagen blur');
+        const blurPx = Math.max(8, Math.round(Math.min(w, h) * 0.03));
+        bctx.filter = `blur(${blurPx}px)`;
+        bctx.drawImage(img, 0, 0, w, h);
+        bctx.filter = 'none';
+
+        const headers = await dashboardAuthJsonHeaders();
+        const res = await fetch(`/api/exams/${examId}/answer-key-image`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            sheetIndex: sheetIdx,
+            originalImageBase64: canvasToDataUrl(originalCanvas, 0.92),
+            blurImageBase64: canvasToDataUrl(blurCanvas, 0.9),
+            width: w,
+            height: h,
+          }),
+        });
+        const payload = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          throw new Error(payload.error || 'No se pudo guardar la foto de la hoja clave');
+        }
+        return true;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'No se pudo guardar foto de clave';
+        toast.error('No se pudo guardar la foto de la hoja clave', {
+          description: toSpanishAuthMessage(msg),
+        });
+        return false;
+      } finally {
+        setKeyImageUploading(false);
+      }
+    },
+    [examId]
+  );
+
+  const loadMasterBlurOverlay = useCallback(async () => {
+    if (!examId || gradeMode !== 'student' || !canGradeStudents) {
+      setMasterBlurOverlayUrl(null);
+      return;
+    }
+    try {
+      const headers = await dashboardAuthJsonHeaders();
+      const res = await fetch(
+        `/api/exams/${examId}/answer-key-image?sheetIndex=${sheetIndex}`,
+        { method: 'GET', headers }
+      );
+      const payload = (await res.json().catch(() => ({}))) as {
+        hasImage?: boolean;
+        blurSignedUrl?: string;
+      };
+      if (res.ok && payload.hasImage && payload.blurSignedUrl) {
+        setMasterBlurOverlayUrl(payload.blurSignedUrl);
+      } else {
+        setMasterBlurOverlayUrl(null);
+      }
+    } catch {
+      setMasterBlurOverlayUrl(null);
+    }
+  }, [canGradeStudents, examId, gradeMode, sheetIndex]);
+
+  useEffect(() => {
+    void loadMasterBlurOverlay();
+  }, [loadMasterBlurOverlay]);
+
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    if (!examId || !exam || !supportsCalifacil || phase !== 'capturar') {
+      toast.error('Selecciona primero un examen válido y entra a captura.');
+      return;
+    }
     if (!file.type.startsWith('image/')) {
       toast.error('Elige un archivo de imagen (JPG, PNG, etc.).');
       return;
@@ -822,7 +936,11 @@ export default function CalificarPage() {
     }
   };
 
-  const startLiveCamera = async () => {
+  const startLiveCamera = useCallback(async () => {
+    if (!examId || !exam || !supportsCalifacil || phase !== 'capturar') {
+      toast.error('Selecciona primero un examen válido y entra a captura.');
+      return;
+    }
     if (cameraOpen || startingCameraRef.current) return;
     startingCameraRef.current = true;
     try {
@@ -866,6 +984,10 @@ export default function CalificarPage() {
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
+        if (!examId || !exam || phase !== 'capturar') {
+          stopScanningHum();
+          return;
+        }
         const video = videoRef.current;
         if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) return;
         liveBusyRef.current = true;
@@ -878,6 +1000,7 @@ export default function CalificarPage() {
           ctx.drawImage(video, 0, 0, frame.width, frame.height);
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
+          if (chunk.length === 0) return;
           const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
           if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
             stopScanningHum();
@@ -985,22 +1108,52 @@ export default function CalificarPage() {
     } finally {
       startingCameraRef.current = false;
     }
-  };
+  }, [
+    attachStreamToVideo,
+    cameraOpen,
+    exam,
+    examId,
+    mapRawToDraft,
+    omrCols,
+    phase,
+    resetLiveReadings,
+    setTorchEnabled,
+    sheets,
+    supportsCalifacil,
+  ]);
 
   useEffect(() => {
     if (!isMobile) return;
+    if (!examId || !exam || !supportsCalifacil) return;
     if (phase !== 'capturar' || cameraOpen || scanBusy) return;
     void startLiveCamera();
-  }, [isMobile, cameraOpen, phase, scanBusy, startLiveCamera]);
+  }, [isMobile, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
 
-  const confirmCurrentSheet = () => {
+  const confirmCurrentSheet = async () => {
+    if (!examId || !exam) {
+      toast.error('Selecciona un examen antes de confirmar.');
+      return;
+    }
     const chunk = sheets[sheetIndex] ?? [];
+    if (chunk.length === 0) {
+      toast.error('No hay preguntas para esta hoja.');
+      return;
+    }
     for (const q of chunk) {
       const v = draftSelections[q.id]?.trim() ?? '';
       if (!v) {
         toast.error(`Falta la respuesta de la pregunta ${questions.findIndex((x) => x.id === q.id) + 1}`);
         return;
       }
+    }
+
+    if (gradeMode === 'master_key') {
+      if (!previewUrl) {
+        toast.error('No hay foto de hoja para guardar como clave. Vuelve a escanear.');
+        return;
+      }
+      const ok = await uploadMasterKeyImage(sheetIndex, previewUrl);
+      if (!ok) return;
     }
 
     const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
@@ -1028,7 +1181,7 @@ export default function CalificarPage() {
       return;
     }
 
-    void submitAll(mergedNow);
+    await submitAll(mergedNow);
   };
 
   const submitAll = async (merged: Record<string, string>) => {
@@ -1070,9 +1223,14 @@ export default function CalificarPage() {
         toast.success('Hoja clave guardada. Las próximas calificaciones se compararán contra esta clave.');
       } else {
         const studentId = selectedStudentId;
-        const effectiveKey = activeAnswerKeyByQuestionId;
+        const effectiveKey = teacherSheetKeyByQuestionId;
         const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
         const mcTotal = mcQuestions.length;
+        if (Object.keys(effectiveKey).length !== mcTotal) {
+          toast.error('Clave del maestro incompleta. Vuelve a capturar la hoja clave antes de calificar.');
+          setPhase('elegir');
+          return;
+        }
 
         let correctCount = 0;
         const rows = questions.map((question: Question) => {
@@ -1141,6 +1299,10 @@ export default function CalificarPage() {
   };
 
   const commitGradeFromLive = useCallback(async () => {
+    if (!examId || !exam || phase !== 'capturar') {
+      toast.error('Selecciona un examen válido antes de revisar y confirmar.');
+      return;
+    }
     const chunk = sheets[sheetIndex] ?? [];
     if (chunk.length === 0) return;
 
@@ -1257,7 +1419,18 @@ export default function CalificarPage() {
     } finally {
       setScanBusy(false);
     }
-  }, [draftSelections, examId, liveDraftSelections, omrCols, setPreviewFromSource, setPreviewUrl, sheetIndex, sheets]);
+  }, [
+    draftSelections,
+    exam,
+    examId,
+    liveDraftSelections,
+    omrCols,
+    phase,
+    setPreviewFromSource,
+    setPreviewUrl,
+    sheetIndex,
+    sheets,
+  ]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -1721,22 +1894,52 @@ export default function CalificarPage() {
             )}
 
             {previewUrl && phase === 'revisar_hoja' && (
-              <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
-                <div className="relative inline-block max-h-96 max-w-full">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewUrl}
-                    alt="Vista previa del recuadro CaliFacil"
-                    className="relative z-0 block max-h-96 w-auto max-w-full"
-                  />
-                  {reviewOmrGeometry ? (
-                    <CalifacilOmrReviewOverlay
-                      geometry={reviewOmrGeometry}
-                      picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
-                      rowCount={currentChunk.length}
+              <div className="space-y-2">
+                <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
+                  <div className="relative inline-block max-h-96 max-w-full">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUrl}
+                      alt="Vista previa del recuadro CaliFacil"
+                      className="relative z-0 block max-h-96 w-auto max-w-full"
                     />
-                  ) : null}
+                    {gradeMode === 'student' && masterBlurOverlayUrl ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={masterBlurOverlayUrl}
+                          alt="Superposición blur de hoja clave del maestro"
+                          className="pointer-events-none absolute inset-0 z-[1] h-full w-full object-contain"
+                          style={{ opacity: overlayOpacity / 100 }}
+                        />
+                      </>
+                    ) : null}
+                    {reviewOmrGeometry ? (
+                      <CalifacilOmrReviewOverlay
+                        geometry={reviewOmrGeometry}
+                        picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
+                        rowCount={currentChunk.length}
+                      />
+                    ) : null}
+                  </div>
                 </div>
+                {gradeMode === 'student' && masterBlurOverlayUrl ? (
+                  <div className="rounded-md border bg-white px-3 py-2">
+                    <div className="mb-1 flex items-center justify-between text-xs text-gray-600">
+                      <span>Superposición blur de clave</span>
+                      <span>{overlayOpacity}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={overlayOpacity}
+                      onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+                      className="w-full accent-orange-600"
+                    />
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -1824,10 +2027,14 @@ export default function CalificarPage() {
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
-                    disabled={!reviewHumanAck}
-                    onClick={confirmCurrentSheet}
+                    disabled={!reviewHumanAck || scanBusy || keyImageUploading}
+                    onClick={() => void confirmCurrentSheet()}
                   >
-                    {gradeMode === 'master_key' ? 'Guardar hoja clave' : 'Guardar calificación'}
+                    {keyImageUploading
+                      ? 'Guardando foto clave...'
+                      : gradeMode === 'master_key'
+                        ? 'Guardar hoja clave'
+                        : 'Guardar calificación'}
                   </Button>
                 </div>
               </div>
