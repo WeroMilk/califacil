@@ -74,7 +74,7 @@ const QNUM_WIDTH_SWEEP_LIVE = QNUM_WIDTH_SWEEP;
  * Traslación horizontal del área de burbujas en px (corrige desalineación cámara vs rejilla).
  * Se combina con el barrido de `qnumWidthRatio`.
  */
-const COLUMN_SHIFT_PX_SWEEP = [-14, -10, -6, -3, 0, 3, 6, 10, 14] as const;
+const COLUMN_SHIFT_PX_SWEEP = [-18, -14, -10, -6, -3, 0, 3, 6, 10, 14, 18] as const;
 const COLUMN_SHIFT_PX_LIVE = COLUMN_SHIFT_PX_SWEEP;
 
 export type CalifacilScanOptions = {
@@ -1086,6 +1086,40 @@ function applyOmrcheckerStylePreprocess(canvas: HTMLCanvasElement): HTMLCanvasEl
 }
 
 /**
+ * Pasa bajo suave vía downscale + upscale: reduce moiré/subpixel en fotos de pantalla LCD
+ * donde la franja completa por columna puede engañar al OMR.
+ */
+function applyAntiMoirLowPass(
+  canvas: HTMLCanvasElement,
+  scale: number
+): HTMLCanvasElement | null {
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 32 || h < 32 || scale <= 0.55 || scale >= 0.98) return null;
+  const sw = Math.max(16, Math.round(w * scale));
+  const sh = Math.max(16, Math.round(h * scale));
+  const small = document.createElement('canvas');
+  small.width = sw;
+  small.height = sh;
+  const sctx = small.getContext('2d');
+  if (!sctx) return null;
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(canvas, 0, 0, sw, sh);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const octx = out.getContext('2d');
+  if (!octx) return null;
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(small, 0, 0, w, h);
+  return out;
+}
+
+const ANTI_MOIR_DOWN_SCALE = 0.84 as const;
+
+/**
  * Variantes a probar: original / corrección de perspectiva / mismas con preprocesado estilo OMRChecker.
  * `preferFullSheetFirst`: orden de perfiles geométricos (igual que antes para raw vs corregido).
  */
@@ -1111,6 +1145,16 @@ function buildOmrScanCanvasVariants(
     const preCorr = applyOmrcheckerStylePreprocess(corrected);
     if (preCorr) {
       pushUnique(preCorr, false);
+    }
+  }
+  const antiOrig = applyAntiMoirLowPass(canvas, ANTI_MOIR_DOWN_SCALE);
+  if (antiOrig) {
+    pushUnique(antiOrig, true);
+  }
+  if (corrected !== canvas) {
+    const antiCorr = applyAntiMoirLowPass(corrected, ANTI_MOIR_DOWN_SCALE);
+    if (antiCorr) {
+      pushUnique(antiCorr, false);
     }
   }
   return out;
@@ -1788,17 +1832,33 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const innerWinnerRaw = innerFracs[innerPickInfo.bestIdx] ?? 0;
     const minInnerWin = CALIFACIL_OMR_SCAN.minInnerWinnerRawFrac;
 
-    if (stripPrimaryPick !== null) {
-      pick = stripPrimaryPick;
-      clarityStripGapSum += stripPickInfo.gap;
-      const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
-      ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.065;
-    } else if (
+    const innerStrong =
       innerPickInfo.aboveMed >= minAbove * 0.95 &&
       innerPickInfo.gap >= minStripGap * 0.92 &&
       innerWinnerRaw >= minInnerWin &&
-      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && innerPickInfo.gap < 0.048)
-    ) {
+      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && innerPickInfo.gap < 0.048);
+
+    if (stripPrimaryPick !== null) {
+      const preferInner =
+        innerStrong &&
+        innerPickInfo.bestIdx !== stripPrimaryPick &&
+        innerPickInfo.gap >= 0.042 &&
+        (innerPickInfo.gap + 0.005 >= stripPickInfo.gap ||
+          innerWinnerRaw >= stripWinnerRaw + 0.035);
+
+      if (preferInner) {
+        /** Pantalla/moiré: la franja completa a veces elige mal columna; el interior del cuadrado suele acertar. */
+        pick = innerPickInfo.bestIdx;
+        clarityStripGapSum += innerPickInfo.gap * 0.95;
+        const twinsIn = innerFracs.filter((f) => f >= twinFloor * 0.95).length;
+        ambiguous = twinsIn >= 2 && innerPickInfo.gap < 0.058;
+      } else {
+        pick = stripPrimaryPick;
+        clarityStripGapSum += stripPickInfo.gap;
+        const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
+        ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.065;
+      }
+    } else if (innerStrong) {
       /** Casillas cuadradas rellenas: el interior de la celda marca mejor que la franja completa. */
       pick = innerPickInfo.bestIdx;
       clarityStripGapSum += innerPickInfo.gap * 0.95;
@@ -1849,7 +1909,16 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     rowMetas.push({ pick, ambiguous, inkFractions: [...stripFracs] });
     if (pick !== null) {
       resolvedCount++;
-      if (stripPrimaryPick !== null) {
+      const scoredAsInner =
+        pick === innerPickInfo.bestIdx &&
+        innerStrong &&
+        (stripPrimaryPick === null || innerPickInfo.bestIdx !== stripPrimaryPick);
+
+      if (scoredAsInner) {
+        const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
+        confidenceSum +=
+          innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
+      } else if (stripPrimaryPick !== null && pick === stripPrimaryPick) {
         const maxStrip = stripFracs.reduce((a, b) => Math.max(a, b), 0);
         confidenceSum +=
           stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
