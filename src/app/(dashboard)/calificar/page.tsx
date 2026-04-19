@@ -30,6 +30,7 @@ import {
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
   calculatePercentage,
+  cn,
   getGradeColor,
   getGradeLabel,
   resolveOptionIndexFromValue,
@@ -77,6 +78,18 @@ const STABLE_PARTIAL_TICKS = 3;
 const STABLE_FULL_TICKS = 2;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+
+/**
+ * Permite que React y el navegador pinten el spinner antes de trabajo pesado en el hilo principal;
+ * si no, la animación CSS parece “congelada”.
+ */
+function yieldForSpinnerPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
 
 /** Convierte borrador de texto a índice de columna OMR por fila (0 = A). */
 function draftSelectionsToColumnPicks(
@@ -839,6 +852,7 @@ export default function CalificarPage() {
       return;
     }
     setScanBusy(true);
+    await yieldForSpinnerPaint();
     try {
       const img = await fileToImage(file);
       await finalizeCapturedSheet(img, file);
@@ -1231,6 +1245,7 @@ export default function CalificarPage() {
     if (chunk.length === 0) return;
 
     setScanBusy(true);
+    await yieldForSpinnerPaint();
     try {
       const mergedChunk: Record<string, string> = { ...draftSelections };
       for (const q of chunk) {
@@ -1759,7 +1774,10 @@ export default function CalificarPage() {
                         <div className="flex flex-col gap-2">
                           <div className="flex gap-2">
                             <Button
-                              className="flex-1 bg-orange-600 hover:bg-orange-700"
+                              className={cn(
+                                'flex-1 bg-orange-600 hover:bg-orange-700',
+                                scanBusy && 'disabled:opacity-100'
+                              )}
                               onClick={() => void commitGradeFromLive()}
                               disabled={
                                 scanBusy ||
@@ -1771,7 +1789,10 @@ export default function CalificarPage() {
                               }
                             >
                               {scanBusy ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <Loader2
+                                  className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                                  aria-hidden
+                                />
                               ) : (
                                 'Revisar y confirmar'
                               )}
@@ -1809,13 +1830,19 @@ export default function CalificarPage() {
                       </p>
                       <Button
                         type="button"
-                        className="mt-4 bg-orange-600 hover:bg-orange-700"
+                        className={cn(
+                          'mt-4 bg-orange-600 hover:bg-orange-700',
+                          scanBusy && 'disabled:opacity-100'
+                        )}
                         disabled={scanBusy}
                         onClick={() => galleryInputRef.current?.click()}
                       >
                         {scanBusy ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <Loader2
+                              className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                              aria-hidden
+                            />
                             Leyendo imagen…
                           </>
                         ) : (
