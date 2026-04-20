@@ -1385,6 +1385,25 @@ function buildOmrScanCanvasVariants(
   return out;
 }
 
+/**
+ * Variantes que conservan exactamente la geometría del input (sin warp/rotación):
+ * original + mejoras de contraste/suavizado para robustez.
+ */
+function buildPreservedInputVariants(
+  canvas: HTMLCanvasElement
+): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
+  const out: Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> = [];
+  const pushUnique = (c: HTMLCanvasElement) => {
+    if (!out.some((o) => o.canvas === c)) out.push({ canvas: c, preferFullSheetFirst: true });
+  };
+  pushUnique(canvas);
+  const pre = applyOmrcheckerStylePreprocess(canvas);
+  if (pre) pushUnique(pre);
+  const anti = applyAntiMoirLowPass(canvas, ANTI_MOIR_DOWN_SCALE);
+  if (anti) pushUnique(anti);
+  return out;
+}
+
 function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
   const w = Math.max(1, canvas.width);
   const h = Math.max(1, canvas.height);
@@ -2365,7 +2384,7 @@ export function scanCalifacilOmrSheet(
 
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
-    ? [{ canvas, preferFullSheetFirst: true }]
+    ? buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
@@ -2496,7 +2515,7 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
-    ? [{ canvas, preferFullSheetFirst: true }]
+    ? buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({

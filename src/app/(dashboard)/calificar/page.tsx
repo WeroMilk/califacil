@@ -702,6 +702,7 @@ export default function CalificarPage() {
       }
       const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
       if (mergedResolved < minResolved) {
+        const allowManualReview = !skipReviewUi;
         setDraftSelections({});
         setLiveDraftSelections(mergedDraft);
         setLiveResolvedCount(mergedResolved);
@@ -710,12 +711,19 @@ export default function CalificarPage() {
             ? 'Lectura insuficiente: acerca el recuadro, mejora luz y evita sombras.'
             : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
         );
-        toast.error(
+        if (!allowManualReview) {
+          toast.error(
+            isMobile
+              ? 'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
+              : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
+          );
+          return { success: false };
+        }
+        toast.message(
           isMobile
-            ? 'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
-            : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
+            ? `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa y corrige manualmente antes de guardar.`
+            : `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
         );
-        return { success: false };
       }
 
       liveLockedAnswersRef.current = {};
