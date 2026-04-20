@@ -232,6 +232,24 @@ export default function CalificarPage() {
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
     [currentChunk, examVirtualKeyByQuestionId]
   );
+  const mobileGuideClipRect = useMemo(() => {
+    if (!isMobile || !reviewOmrGeometry) return null;
+    const W = Math.max(1, reviewOmrGeometry.imageWidth);
+    const H = Math.max(1, reviewOmrGeometry.imageHeight);
+    const guideW = Math.min(W * 0.86, W - 2);
+    const guideH = guideW / CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
+    if (guideH > H * 0.98) return null;
+    const cx = W * 0.5;
+    const cy = H * 0.62;
+    const left = Math.max(0, Math.min(W - guideW, cx - guideW * 0.5));
+    const top = Math.max(0, Math.min(H - guideH, cy - guideH * 0.5));
+    return {
+      x: left / W,
+      y: top / H,
+      w: guideW / W,
+      h: guideH / H,
+    };
+  }, [isMobile, reviewOmrGeometry]);
 
   /** Comparación borrador vs clave automática solo en la hoja actual (p. ej. 4/10 · 40%). */
   const chunkKeyComparison = useMemo(() => {
@@ -448,12 +466,15 @@ export default function CalificarPage() {
         toast.error('No hay preguntas para escanear en esta hoja.');
         return { success: false };
       }
-      /** Archivo subido ≠ vista de cámara: sin recorte “marco naranja” para alinear mejor página completa. */
+      /** En móvil o archivo subido, respetamos la imagen tal cual: sin auto-rotar/deformar. */
+      const preserveCapturedFrame = isMobile || Boolean(fallbackFile);
       const oriented =
-        autoOrientCalifacilSheet(source, omrCols, {
-          useGuideCrop: false,
-          allowTiltSweep: !fallbackFile,
-        }) ?? source;
+        preserveCapturedFrame
+          ? source
+          : (autoOrientCalifacilSheet(source, omrCols, {
+              useGuideCrop: false,
+              allowTiltSweep: true,
+            }) ?? source);
       const examCanvas =
         oriented instanceof HTMLCanvasElement
           ? oriented
@@ -473,7 +494,8 @@ export default function CalificarPage() {
       }
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
         skipGuideCrop: true,
-        geometryMode: fallbackFile ? 'fullSheet' : 'auto',
+        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
+        preserveInputCanvas: preserveCapturedFrame,
       });
       const raw = [...meta.picks];
 
@@ -959,7 +981,7 @@ export default function CalificarPage() {
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
           if (chunk.length === 0) return;
-          const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
+          const oriented = frame;
           if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
             stopScanningHum();
             stablePartialTicksRef.current = 0;
@@ -983,6 +1005,8 @@ export default function CalificarPage() {
             skipGuideCrop: true,
             qnumSweep: 'live',
             columnShiftSweep: 'live',
+            geometryMode: 'croppedBox',
+            preserveInputCanvas: true,
           });
           const mapped = mapRawToDraft(raw, chunk);
           const locks = liveLockedAnswersRef.current;
@@ -1296,7 +1320,7 @@ export default function CalificarPage() {
         const ctx = frame.getContext('2d', { willReadFrequently: true });
         if (ctx) {
           ctx.drawImage(video, 0, 0, frame.width, frame.height);
-          orientedForPreview = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
+          orientedForPreview = frame;
         }
       }
 
@@ -1350,7 +1374,11 @@ export default function CalificarPage() {
 
       let omrReviewMeta: OmrScanMetaResult | null = null;
       if (orientedForPreview) {
-        omrReviewMeta = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, { skipGuideCrop: true });
+        omrReviewMeta = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, {
+          skipGuideCrop: true,
+          geometryMode: 'croppedBox',
+          preserveInputCanvas: true,
+        });
         setReviewOmrGeometry(omrReviewMeta.geometry);
       } else {
         setReviewOmrGeometry(null);
@@ -1881,6 +1909,18 @@ export default function CalificarPage() {
                       alt="Vista previa del recuadro CaliFacil"
                       className="relative z-0 block max-h-96 w-auto max-w-full"
                     />
+                    {mobileGuideClipRect ? (
+                      <div
+                        className="pointer-events-none absolute rounded-lg border-[2.5px] border-orange-400/95"
+                        style={{
+                          left: `${mobileGuideClipRect.x * 100}%`,
+                          top: `${mobileGuideClipRect.y * 100}%`,
+                          width: `${mobileGuideClipRect.w * 100}%`,
+                          height: `${mobileGuideClipRect.h * 100}%`,
+                        }}
+                        aria-hidden
+                      />
+                    ) : null}
                     {reviewOmrGeometry ? (
                       <CalifacilOmrReviewOverlay
                         geometry={reviewOmrGeometry}
@@ -1888,6 +1928,7 @@ export default function CalificarPage() {
                         expectedPicks={expectedChunkPicks}
                         expectedOpacity={overlayOpacity / 100}
                         rowCount={currentChunk.length}
+                        clipRect={mobileGuideClipRect}
                       />
                     ) : null}
                   </div>

@@ -91,6 +91,11 @@ export type CalifacilScanOptions = {
    * - `auto` (default): decide según variante/heurística.
    */
   geometryMode?: 'auto' | 'fullSheet' | 'croppedBox';
+  /**
+   * Si true, usa exactamente el canvas de entrada para medir/dibujar geometría:
+   * sin corrección de perspectiva ni variantes derivadas.
+   */
+  preserveInputCanvas?: boolean;
 };
 
 type ScanThresholds = {
@@ -2358,8 +2363,10 @@ export function scanCalifacilOmrSheet(
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
   ];
 
-  const corrected = applyPerspectiveCorrection(canvas);
-  const variants = buildOmrScanCanvasVariants(canvas, corrected);
+  const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
+  const variants = opts?.preserveInputCanvas
+    ? [{ canvas, preferFullSheetFirst: true }]
+    : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
     pick: null,
@@ -2385,7 +2392,9 @@ export function scanCalifacilOmrSheet(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
   const selectedVariants =
-    geometryMode === 'fullSheet'
+    opts?.preserveInputCanvas
+      ? variants
+      : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
 
@@ -2485,8 +2494,10 @@ export function scanCalifacilOmrSheetWithMeta(
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
   ];
 
-  const corrected = applyPerspectiveCorrection(canvas);
-  const variants = buildOmrScanCanvasVariants(canvas, corrected);
+  const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
+  const variants = opts?.preserveInputCanvas
+    ? [{ canvas, preferFullSheetFirst: true }]
+    : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
     pick: null,
@@ -2514,7 +2525,9 @@ export function scanCalifacilOmrSheetWithMeta(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
   const selectedVariants =
-    geometryMode === 'fullSheet'
+    opts?.preserveInputCanvas
+      ? variants
+      : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
 
