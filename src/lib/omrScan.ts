@@ -2410,6 +2410,15 @@ export function scanCalifacilOmrSheet(
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
+  const fullSheetSweepProfiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 0.28, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.32, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.36, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.4, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    fullSheetProfile,
+  ];
+  const fullSheetQnumSweep = [0.07, 0.085, 0.1, 0.115, 0.13, 0.15, 0.17, 0.19, 0.22] as const;
+  const fullSheetColSweep = [-180, -140, -100, -70, -45, -25, 0, 25, 45, 70, 100, 140, 180] as const;
   const selectedVariants =
     opts?.preserveInputCanvas
       ? variants
@@ -2421,12 +2430,14 @@ export function scanCalifacilOmrSheet(
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'
-        ? [fullSheetProfile]
+        ? fullSheetSweepProfiles
         : geometryMode === 'croppedBox'
           ? [...croppedBoxProfiles]
           : preferFullSheetFirst || likelyFullSheet
             ? [fullSheetProfile, ...croppedBoxProfiles]
             : [...croppedBoxProfiles, fullSheetProfile];
+    const qSweep = geometryMode === 'fullSheet' ? fullSheetQnumSweep : qnumSweep;
+    const cSweep = geometryMode === 'fullSheet' ? fullSheetColSweep : colSweep;
     for (const profile of orderedProfiles) {
       const profilePrior =
         likelyFullSheet && profile.bottomBandRatio >= 0.99
@@ -2436,8 +2447,8 @@ export function scanCalifacilOmrSheet(
             : profile.bottomBandRatio < 0.95
               ? 18
               : 0;
-      for (const qnw of qnumSweep) {
-        for (const colShift of colSweep) {
+      for (const qnw of qSweep) {
+        for (const colShift of cSweep) {
           const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
           const detail = scanCalifacilOmrCanvasDetailedWithProfile(
             c,
@@ -2543,6 +2554,15 @@ export function scanCalifacilOmrSheetWithMeta(
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
+  const fullSheetSweepProfiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 0.28, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.32, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.36, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.4, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    fullSheetProfile,
+  ];
+  const fullSheetQnumSweep = [0.07, 0.085, 0.1, 0.115, 0.13, 0.15, 0.17, 0.19, 0.22] as const;
+  const fullSheetColSweep = [-180, -140, -100, -70, -45, -25, 0, 25, 45, 70, 100, 140, 180] as const;
   const selectedVariants =
     opts?.preserveInputCanvas
       ? variants
@@ -2554,12 +2574,14 @@ export function scanCalifacilOmrSheetWithMeta(
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'
-        ? [fullSheetProfile]
+        ? fullSheetSweepProfiles
         : geometryMode === 'croppedBox'
           ? [...croppedBoxProfiles]
           : preferFullSheetFirst || likelyFullSheet
             ? [fullSheetProfile, ...croppedBoxProfiles]
             : [...croppedBoxProfiles, fullSheetProfile];
+    const qSweep = geometryMode === 'fullSheet' ? fullSheetQnumSweep : qnumSweep;
+    const cSweep = geometryMode === 'fullSheet' ? fullSheetColSweep : colSweep;
     for (const profile of orderedProfiles) {
       const profilePrior =
         likelyFullSheet && profile.bottomBandRatio >= 0.99
@@ -2569,8 +2591,8 @@ export function scanCalifacilOmrSheetWithMeta(
             : profile.bottomBandRatio < 0.95
               ? 18
               : 0;
-      for (const qnw of qnumSweep) {
-        for (const colShift of colSweep) {
+      for (const qnw of qSweep) {
+        for (const colShift of cSweep) {
           const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
           const detail = scanCalifacilOmrCanvasDetailedWithProfile(
             c,
