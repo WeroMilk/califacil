@@ -84,6 +84,13 @@ export type CalifacilScanOptions = {
   qnumSweep?: 'full' | 'live';
   /** Barrido de desplazamiento horizontal en px; `live` coincide con `full`. */
   columnShiftSweep?: 'full' | 'live';
+  /**
+   * Controla qué perfiles geométricos probar:
+   * - `fullSheet`: fuerza tabla en banda inferior (hoja completa).
+   * - `croppedBox`: fuerza tabla ocupando el recorte completo.
+   * - `auto` (default): decide según variante/heurística.
+   */
+  geometryMode?: 'auto' | 'fullSheet' | 'croppedBox';
 };
 
 type ScanThresholds = {
@@ -2301,13 +2308,18 @@ export function scanCalifacilOmrSheet(
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
+  const geometryMode = opts?.geometryMode ?? 'auto';
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
-    const likelyFullSheet = isLikelyFullSheetPhoto(c);
+    const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
-      preferFullSheetFirst || likelyFullSheet
-        ? [fullSheetProfile, ...croppedBoxProfiles]
-        : [...croppedBoxProfiles, fullSheetProfile];
+      geometryMode === 'fullSheet'
+        ? [fullSheetProfile]
+        : geometryMode === 'croppedBox'
+          ? [...croppedBoxProfiles]
+          : preferFullSheetFirst || likelyFullSheet
+            ? [fullSheetProfile, ...croppedBoxProfiles]
+            : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of orderedProfiles) {
       const profilePrior =
         likelyFullSheet && profile.bottomBandRatio >= 0.99
@@ -2421,13 +2433,18 @@ export function scanCalifacilOmrSheetWithMeta(
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
+  const geometryMode = opts?.geometryMode ?? 'auto';
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
-    const likelyFullSheet = isLikelyFullSheetPhoto(c);
+    const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
-      preferFullSheetFirst || likelyFullSheet
-        ? [fullSheetProfile, ...croppedBoxProfiles]
-        : [...croppedBoxProfiles, fullSheetProfile];
+      geometryMode === 'fullSheet'
+        ? [fullSheetProfile]
+        : geometryMode === 'croppedBox'
+          ? [...croppedBoxProfiles]
+          : preferFullSheetFirst || likelyFullSheet
+            ? [fullSheetProfile, ...croppedBoxProfiles]
+            : [...croppedBoxProfiles, fullSheetProfile];
     for (const profile of orderedProfiles) {
       const profilePrior =
         likelyFullSheet && profile.bottomBandRatio >= 0.99

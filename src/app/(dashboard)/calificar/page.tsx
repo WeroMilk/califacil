@@ -468,7 +468,10 @@ export default function CalificarPage() {
         );
         return { success: false };
       }
-      const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, { skipGuideCrop: true });
+      const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
+        skipGuideCrop: true,
+        geometryMode: fallbackFile ? 'fullSheet' : 'auto',
+      });
       const raw = [...meta.picks];
 
       const ambiguousIdx = meta.rows
