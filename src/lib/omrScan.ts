@@ -2591,13 +2591,14 @@ export function scanCalifacilOmrSheetWithMeta(
   }
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
+  const reviewCanvas = opts?.preserveInputCanvas ? canvas : bestReviewCanvas;
   return {
     picks: best.picks,
     rows: best.rows,
     needsVisionAssist,
     maxSameColumnCount: best.maxSameColumnCount,
     geometry: best.geometry,
-    reviewSourceCanvas: bestReviewCanvas,
+    reviewSourceCanvas: reviewCanvas,
   };
 }
 
