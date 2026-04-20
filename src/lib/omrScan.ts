@@ -1424,26 +1424,16 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
 
 function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
   const base: OmrFixedTemplate = {
-    tableLeftRatio: 0.115,
-    tableTopRatio: 0.705,
-    tableWidthRatio: 0.77,
-    tableHeightRatio: 0.225,
+    // Plantilla para hoja escaneada vertical (formato constante del usuario).
+    tableLeftRatio: 0.162,
+    tableTopRatio: 0.718,
+    tableWidthRatio: 0.718,
+    tableHeightRatio: 0.185,
     titleStripRatioOfTable: 0.2,
-    qnumWidthRatio: 0.092,
+    qnumWidthRatio: 0.104,
   };
-  const dx = [0, -0.012, 0.012];
-  const dy = [0, -0.01, 0.01];
-  const out: OmrFixedTemplate[] = [];
-  for (const ox of dx) {
-    for (const oy of dy) {
-      out.push({
-        ...base,
-        tableLeftRatio: Math.max(0.04, Math.min(0.24, base.tableLeftRatio + ox)),
-        tableTopRatio: Math.max(0.64, Math.min(0.8, base.tableTopRatio + oy)),
-      });
-    }
-  }
-  return out;
+  // Modo determinístico: una sola plantilla, sin offsets.
+  return [base];
 }
 
 /**
@@ -1950,31 +1940,36 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     : width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
 
-  const lineYs = refineOmrRowBoundariesFromTableLines(
-    data,
-    width,
-    height,
-    bubbleAreaLeft,
-    dataTop,
-    dataHeight
-  );
+  // En modo plantilla fija evitamos refinamiento por líneas para no desplazar la malla.
+  const lineYs = fixedTemplate
+    ? null
+    : refineOmrRowBoundariesFromTableLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        dataTop,
+        dataHeight
+      );
 
-  const inferredColEdgesLocal = inferColumnEdgesFromVerticalLines(
-    data,
-    width,
-    height,
-    bubbleAreaLeft,
-    bubbleAreaW,
-    cols,
-    dataTop,
-    rowH
-  );
+  const inferredColEdgesLocal = fixedTemplate
+    ? null
+    : inferColumnEdgesFromVerticalLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        bubbleAreaW,
+        cols,
+        dataTop,
+        rowH
+      );
   const inferredColEdgesGlobal =
     !fixedTemplate && profile.bottomBandRatio < 0.95
       ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
       : null;
   let inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
-  if (inferredColEdges && profile.bottomBandRatio < 0.95) {
+  if (inferredColEdges && !fixedTemplate && profile.bottomBandRatio < 0.95) {
     const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
     // En hoja completa, un span demasiado corto suele ser un falso positivo sobre el texto.
     if (span < width * 0.56) inferredColEdges = null;
@@ -2475,11 +2470,12 @@ export function scanCalifacilOmrSheet(
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
+  const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
   const fixedTemplates =
-    geometryMode === 'fullSheet' && opts?.fixedTemplateAnchor
+    strictFixedTemplateMode
       ? buildFullSheetFixedTemplateCandidates()
       : [];
-  const fixedTemplateShifts = [-16, -8, 0, 8, 16] as const;
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([0] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     if (fixedTemplates.length > 0) {
@@ -2501,6 +2497,7 @@ export function scanCalifacilOmrSheet(
           }
         }
       }
+      if (strictFixedTemplateMode) continue;
     }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
@@ -2642,11 +2639,12 @@ export function scanCalifacilOmrSheetWithMeta(
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
+  const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
   const fixedTemplates =
-    geometryMode === 'fullSheet' && opts?.fixedTemplateAnchor
+    strictFixedTemplateMode
       ? buildFullSheetFixedTemplateCandidates()
       : [];
-  const fixedTemplateShifts = [-16, -8, 0, 8, 16] as const;
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([0] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     if (fixedTemplates.length > 0) {
@@ -2669,6 +2667,7 @@ export function scanCalifacilOmrSheetWithMeta(
           }
         }
       }
+      if (strictFixedTemplateMode) continue;
     }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =

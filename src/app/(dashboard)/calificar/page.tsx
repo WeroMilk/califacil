@@ -79,10 +79,32 @@ const STABLE_PARTIAL_TICKS = 3;
 const STABLE_FULL_TICKS = 2;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+/** Resolución máxima usada para escaneo en vivo móvil (mejora fluidez). */
+const MOBILE_SCAN_MAX_WIDTH = 960;
+/** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
+const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 
 /** Valores centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
 const SELECT_NO_EXAM = '__califacil_no_exam__';
 const SELECT_NO_OPTION = '__califacil_no_option__';
+
+function isVirtualCameraLabel(label: string | undefined): boolean {
+  return Boolean(label && VIRTUAL_CAMERA_RE.test(label));
+}
+
+async function pickPreferredDesktopCameraDeviceId(excludeDeviceId?: string): Promise<string | null> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return null;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videos = devices.filter((d) => d.kind === 'videoinput');
+  if (videos.length === 0) return null;
+  const filtered = videos.filter((d) => d.deviceId && d.deviceId !== excludeDeviceId);
+  const preferred =
+    filtered.find((d) => !isVirtualCameraLabel(d.label)) ??
+    videos.find((d) => !isVirtualCameraLabel(d.label)) ??
+    filtered[0] ??
+    videos[0];
+  return preferred?.deviceId ?? null;
+}
 
 async function fetchVisionOmr(payload: {
   examId: string;
@@ -956,6 +978,30 @@ export default function CalificarPage() {
       if (!stream) {
         throw new Error('camera_unavailable');
       }
+
+      if (!isMobile) {
+        const initialTrack = stream.getVideoTracks()[0];
+        const initialLabel = initialTrack?.label ?? '';
+        if (isVirtualCameraLabel(initialLabel)) {
+          const currentId =
+            typeof initialTrack?.getSettings === 'function'
+              ? (initialTrack.getSettings().deviceId ?? undefined)
+              : undefined;
+          const preferredDeviceId = await pickPreferredDesktopCameraDeviceId(currentId);
+          if (preferredDeviceId) {
+            try {
+              const switched = await navigator.mediaDevices.getUserMedia({
+                video: { deviceId: { exact: preferredDeviceId } },
+                audio: false,
+              });
+              stream.getTracks().forEach((t) => t.stop());
+              stream = switched;
+            } catch {
+              // Si falla el cambio, mantenemos el stream ya abierto.
+            }
+          }
+        }
+      }
       streamRef.current = stream;
       setCameraOpen(true);
       resetLiveReadings();
@@ -969,6 +1015,10 @@ export default function CalificarPage() {
       setFlashSupported(supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
+      const liveScanIntervalMs = isMobile ? 1150 : 750;
+      const scanCanvas = document.createElement('canvas');
+      const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+      let hotLoopStatus = '';
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
@@ -978,18 +1028,25 @@ export default function CalificarPage() {
         }
         const video = videoRef.current;
         if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) return;
+        if (!scanCtx) return;
         liveBusyRef.current = true;
         try {
-          const frame = document.createElement('canvas');
-          frame.width = video.videoWidth;
-          frame.height = video.videoHeight;
-          const ctx = frame.getContext('2d');
-          if (!ctx) return;
-          ctx.drawImage(video, 0, 0, frame.width, frame.height);
+          let targetW = video.videoWidth;
+          let targetH = video.videoHeight;
+          if (isMobile && targetW > MOBILE_SCAN_MAX_WIDTH) {
+            const s = MOBILE_SCAN_MAX_WIDTH / Math.max(1, targetW);
+            targetW = MOBILE_SCAN_MAX_WIDTH;
+            targetH = Math.max(1, Math.round(targetH * s));
+          }
+          if (scanCanvas.width !== targetW || scanCanvas.height !== targetH) {
+            scanCanvas.width = targetW;
+            scanCanvas.height = targetH;
+          }
+          scanCtx.drawImage(video, 0, 0, targetW, targetH);
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
           if (chunk.length === 0) return;
-          const oriented = frame;
+          const oriented = scanCanvas;
           if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
             stopScanningHum();
             stablePartialTicksRef.current = 0;
@@ -1004,9 +1061,12 @@ export default function CalificarPage() {
             }
             setLiveDraftSelections(mergedNoExam);
             setLiveResolvedCount(resolvedNoExam);
-            setLiveStatus(
-              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y casillas).'
-            );
+            const nextStatus =
+              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y casillas).';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
             return;
           }
           const raw = scanCalifacilOmrSheet(oriented, omrCols, {
@@ -1055,17 +1115,30 @@ export default function CalificarPage() {
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
           if (mergedResolved >= chunk.length && chunk.length > 0) {
-            setLiveStatus(
-              'Detección completa. Capturando automáticamente...'
-            );
+            const nextStatus = 'Detección completa. Toca «Revisar y confirmar».';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
           } else if (mergedResolved >= minResolved) {
-            setLiveStatus(
-              'Lecturas capturadas se mantienen aunque muevas el teléfono. Completa las faltantes o pulsa «Revisar y confirmar».'
-            );
+            const nextStatus =
+              'Lecturas capturadas. Completa faltantes o pulsa «Revisar y confirmar».';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
           } else if (mergedResolved >= Math.ceil(chunk.length * 0.3)) {
-            setLiveStatus('Casi listo: centra mejor el recuadro y aumenta luz.');
+            const nextStatus = 'Casi listo: centra mejor el recuadro y aumenta luz.';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
           } else {
-            setLiveStatus('Ajusta cámara: acerca la banda CaliFacil y evita sombras.');
+            const nextStatus = 'Ajusta cámara: acerca la banda CaliFacil y evita sombras.';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
           }
 
           if (mergedResolved >= minResolved && chunk.length > 0) {
@@ -1094,14 +1167,17 @@ export default function CalificarPage() {
           if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
             await showAutoCaptureSnapshot(oriented);
-            setLiveStatus(
-              'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.'
-            );
+            const nextStatus =
+              'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
           }
         } finally {
           liveBusyRef.current = false;
         }
-      }, 750);
+      }, liveScanIntervalMs);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".';
@@ -1310,10 +1386,9 @@ export default function CalificarPage() {
 
       const missing = chunk.filter((q) => !mergedChunk[q.id]?.trim());
       if (missing.length > 0) {
-        toast.error(
-          `Faltan ${missing.length} respuesta(s) en esta hoja. Acerca el recuadro o espera la lectura en vivo.`
+        toast.message(
+          `Faltan ${missing.length} respuesta(s). Puedes revisarlas y completarlas manualmente antes de guardar.`
         );
-        return;
       }
 
       let orientedForPreview: HTMLCanvasElement | null = null;
@@ -1834,14 +1909,7 @@ export default function CalificarPage() {
                                 scanBusy && 'disabled:opacity-100'
                               )}
                               onClick={() => void commitGradeFromLive()}
-                              disabled={
-                                scanBusy ||
-                                !currentChunk.every(
-                                  (q) =>
-                                    Boolean(draftSelections[q.id]?.trim()) ||
-                                    Boolean(liveDraftSelections[q.id]?.trim())
-                                )
-                              }
+                              disabled={scanBusy}
                             >
                               {scanBusy ? (
                                 <Loader2

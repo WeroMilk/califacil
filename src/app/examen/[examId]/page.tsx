@@ -51,6 +51,26 @@ const forfeitMessages: Record<string, string> = {
     'Saliste del modo pantalla completa durante el examen. El intento quedó anulado y no puedes volver a presentarlo.',
 };
 
+const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
+
+function isVirtualCameraLabel(label: string | undefined): boolean {
+  return Boolean(label && VIRTUAL_CAMERA_RE.test(label));
+}
+
+async function pickPreferredDesktopCameraDeviceId(excludeDeviceId?: string): Promise<string | null> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return null;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videos = devices.filter((d) => d.kind === 'videoinput');
+  if (videos.length === 0) return null;
+  const filtered = videos.filter((d) => d.deviceId && d.deviceId !== excludeDeviceId);
+  const preferred =
+    filtered.find((d) => !isVirtualCameraLabel(d.label)) ??
+    videos.find((d) => !isVirtualCameraLabel(d.label)) ??
+    filtered[0] ??
+    videos[0];
+  return preferred?.deviceId ?? null;
+}
+
 async function exitExamFullscreenSafe() {
   try {
     if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
@@ -335,6 +355,28 @@ export default function StudentExamPage() {
         toast.error('Debes permitir la cámara para hacer el examen');
         setStartingExam(false);
         return;
+      }
+
+      const initialTrack = stream.getVideoTracks()[0];
+      const initialLabel = initialTrack?.label ?? '';
+      if (isVirtualCameraLabel(initialLabel)) {
+        const currentId =
+          typeof initialTrack?.getSettings === 'function'
+            ? (initialTrack.getSettings().deviceId ?? undefined)
+            : undefined;
+        const preferredDeviceId = await pickPreferredDesktopCameraDeviceId(currentId);
+        if (preferredDeviceId) {
+          try {
+            const switched = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: preferredDeviceId } },
+              audio: false,
+            });
+            stream.getTracks().forEach((t) => t.stop());
+            stream = switched;
+          } catch {
+            // Si falla el cambio, seguimos con la cámara ya abierta.
+          }
+        }
       }
 
       const start = await rpcStartStudentExamAttempt(examId, selectedStudentId, token);
