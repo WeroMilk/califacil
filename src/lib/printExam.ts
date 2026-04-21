@@ -298,33 +298,33 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       right: 0;
       bottom: 7pt;
       margin-top: 0;
-      padding: 5pt 6pt 6pt;
-      border: 2pt solid #000;
+      padding: 4pt 5pt 5pt;
+      border: 1.7pt solid #000;
       page-break-inside: avoid;
       break-inside: avoid-page;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .omr-title {
-      font-size: 6.75pt;
+      font-size: 6.4pt;
       font-weight: bold;
       text-align: center;
-      margin: 0 0 5pt;
+      margin: 0 0 3.5pt;
       line-height: 1.2;
     }
     .omr-table {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      font-size: 7.25pt;
-      border: 1.2pt solid #000;
+      font-size: 7pt;
+      border: 1pt solid #000;
     }
     .omr-tr--head .omr-th {
       font-weight: 800;
       text-align: center;
       vertical-align: middle;
-      padding: 3pt 3pt;
-      border: 0.9pt solid #000;
+      padding: 2.3pt 2.6pt;
+      border: 0.8pt solid #000;
       background: #d8d8d8;
       color: #000;
       -webkit-print-color-adjust: exact;
@@ -335,11 +335,11 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       background: #c8c8c8;
     }
     .omr-th-letter {
-      font-size: 9pt;
+      font-size: 8.4pt;
       letter-spacing: 0.02em;
     }
     .omr-th-num {
-      font-size: 7pt;
+      font-size: 6.6pt;
     }
     .omr-tr--inactive .omr-inactive {
       text-align: center;
@@ -351,17 +351,17 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       width: 9%;
       font-weight: bold;
       text-align: right;
-      padding: 3pt 5pt 3pt 3pt;
+      padding: 2.2pt 4.2pt 2.2pt 2.4pt;
       vertical-align: middle;
-      border: 0.9pt solid #000;
+      border: 0.8pt solid #000;
       background: #efefef;
-      font-size: 8pt;
+      font-size: 7.4pt;
     }
     .omr-bubble-cell {
       text-align: center;
       vertical-align: middle;
-      padding: 2.5pt 4pt;
-      border: 0.9pt solid #000;
+      padding: 1.9pt 3.2pt;
+      border: 0.8pt solid #000;
     }
     .omr-bubble-cell--muted {
       background: #ebebeb;
@@ -371,14 +371,14 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       flex-direction: row;
       align-items: center;
       justify-content: center;
-      min-height: 15pt;
+      min-height: 13pt;
     }
     .omr-square {
-      width: 14pt;
-      height: 14pt;
-      min-width: 14pt;
-      min-height: 14pt;
-      border: 1.35pt solid #000;
+      width: 12pt;
+      height: 12pt;
+      min-width: 12pt;
+      min-height: 12pt;
+      border: 1.1pt solid #000;
       border-radius: 1.5pt;
       background: #fff;
       box-sizing: border-box;
