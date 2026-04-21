@@ -85,10 +85,11 @@ function preStartMessage(block: PreStartBlock): { title: string; body: string } 
   if (!block) return null;
   switch (block.type) {
     case 'voided':
+      const voidReason = block.message?.trim() ?? '';
       return {
         title: 'Examen anulado',
         body:
-          block.message?.trim() ||
+          (voidReason === 'left_fullscreen' ? 'Pide ayuda a tu Maestro' : voidReason) ||
           'Este intento fue cancelado. Debes contactar a tu maestro si necesitas volver a intentarlo.',
       };
     case 'submitted':

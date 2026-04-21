@@ -157,7 +157,8 @@ function sleep(ms: number): Promise<void> {
 export default function CalificarPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
-  const useLiveCameraUi = true;
+  // En desktop la calificación debe hacerse solo por carga de imágenes escaneadas.
+  const useLiveCameraUi = isMobile;
   const { user } = useAuth();
   const { exams, loading: examsLoading } = useExams(user?.id);
 
@@ -180,7 +181,7 @@ export default function CalificarPage() {
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [liveStatus, setLiveStatus] = useState('Abre la cámara para detectar respuestas en vivo.');
+  const [liveStatus, setLiveStatus] = useState('Sube una imagen escaneada para leer respuestas.');
   const [liveResolvedCount, setLiveResolvedCount] = useState(0);
   const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
   const [flashSupported, setFlashSupported] = useState(false);
@@ -865,7 +866,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
+        : 'Sube una imagen escaneada para leer respuestas.'
     );
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
@@ -905,7 +906,7 @@ export default function CalificarPage() {
       setLiveStatus(
         isMobile
           ? 'Abre la cámara para detectar respuestas en vivo.'
-          : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
+          : 'Sube una imagen escaneada para leer respuestas.'
       );
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
@@ -1521,7 +1522,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
+        : 'Sube una imagen escaneada para leer respuestas.'
     );
     toast.message('Elige otro alumno para escanear su examen.');
   }, [isMobile, stopLiveCamera]);
@@ -1617,7 +1618,7 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).'
-            : 'En ordenador usa la webcam para capturar el recuadro CaliFacil. También puedes subir una imagen JPG/PNG como alternativa.'}
+            : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
 
