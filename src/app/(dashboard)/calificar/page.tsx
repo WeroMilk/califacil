@@ -114,12 +114,20 @@ async function fetchVisionOmr(payload: {
   focusNumbers: number[];
 }) {
   const headers = await dashboardAuthJsonHeaders();
-  return fetch('/api/calificar/vision-omr', {
-    method: 'POST',
-    headers: { ...headers },
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  });
+  const controller = new AbortController();
+  const timeoutMs = 9000;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch('/api/calificar/vision-omr', {
+      method: 'POST',
+      headers: { ...headers },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -518,9 +526,9 @@ export default function CalificarPage() {
       }
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
         skipGuideCrop: true,
-        geometryMode: isMobile ? 'croppedBox' : 'auto',
+        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
-        fixedTemplateAnchor: false,
+        fixedTemplateAnchor: Boolean(fallbackFile),
       });
       const raw = [...meta.picks];
 
@@ -668,7 +676,7 @@ export default function CalificarPage() {
         }
       }
 
-      if (CALIFACIL_VISION_POLICY.onFinalizeEveryRow && examId && chunk.length > 0) {
+      if (CALIFACIL_VISION_POLICY.onFinalizeEveryRow && examId && chunk.length > 0 && !fallbackFile) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
           globalNumber: si * 10 + i + 1,
