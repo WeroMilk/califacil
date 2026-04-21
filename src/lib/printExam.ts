@@ -242,7 +242,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       grid-template-columns: minmax(0, 2.35fr) minmax(0, 0.55fr) minmax(0, 1.1fr);
       gap: 2pt 6pt;
       margin-top: 4pt;
-      margin-bottom: 9pt;
+      margin-bottom: 5pt;
       font-size: 7pt;
     }
     .meta-grid label { font-weight: bold; }
@@ -252,11 +252,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       margin-top: 3pt;
     }
     .questions-block { margin-top: 0; }
-    .question { margin-bottom: 7pt; page-break-inside: avoid; break-inside: avoid-page; }
-    .question + .question {
-      border-top: 0.6pt solid #e3e3e3;
-      padding-top: 3pt;
-    }
+    .question { margin-bottom: 3pt; page-break-inside: avoid; break-inside: avoid-page; }
     .question--placeholder .q-num { color: #777; }
     .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.2pt; line-height: 1.14; }
     .opt-letter { font-weight: bold; }
