@@ -280,11 +280,15 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       margin-bottom: 2pt;
     }
     .footer-note {
-      margin-top: 2pt;
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 1pt;
+      margin-top: 0;
       font-size: 6.5pt;
       text-align: center;
       color: #666;
-      border-top: 1px solid #ddd;
+      border-top: 0;
       padding-top: 1pt;
     }
     .empty-note { font-size: 9pt; color: #666; font-style: italic; }
