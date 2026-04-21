@@ -518,9 +518,9 @@ export default function CalificarPage() {
       }
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
         skipGuideCrop: true,
-        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
+        geometryMode: isMobile ? 'croppedBox' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
-        fixedTemplateAnchor: Boolean(fallbackFile),
+        fixedTemplateAnchor: false,
       });
       const raw = [...meta.picks];
 
