@@ -546,7 +546,7 @@ export default function ExamResultsPage() {
     : '0';
 
   return (
-    <div className="min-w-0 max-w-full space-y-4 overflow-x-hidden sm:space-y-6">
+    <div className="mx-auto min-h-full min-w-0 w-full max-w-7xl space-y-4 overflow-x-hidden pb-2 sm:space-y-6">
       {/* Header */}
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="flex min-w-0 items-start gap-2 sm:items-center sm:gap-4">

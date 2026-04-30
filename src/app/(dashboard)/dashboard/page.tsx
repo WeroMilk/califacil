@@ -48,10 +48,10 @@ export default function DashboardPage() {
   const recentExams = [...exams].slice(0, RECENTS_MAX);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden sm:gap-3">
+    <div className="flex min-h-full flex-1 flex-col gap-3 pb-1 sm:gap-4">
       <div className="shrink-0">
-        <h1 className="text-xl font-bold text-gray-900 sm:text-3xl">Dashboard</h1>
-        <p className="mt-0.5 text-xs text-gray-600 sm:text-base">
+        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Dashboard</h1>
+        <p className="mt-1 text-sm text-gray-600 sm:text-base">
           Bienvenido de vuelta, {user?.email?.split('@')[0]}
         </p>
       </div>

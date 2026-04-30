@@ -1675,7 +1675,7 @@ export default function CalificarPage() {
   if (!user) return null;
 
   return (
-    <div className="flex w-full flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
+    <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1746,7 +1746,7 @@ export default function CalificarPage() {
       </Dialog>
 
       <div>
-        <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Calificar</h1>
+        <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).'

@@ -629,7 +629,7 @@ export default function StudentExamPage() {
 
   if (submitted) {
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 py-8 backdrop-blur-[2px] app-scroll">
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 py-6 backdrop-blur-[2px] app-scroll sm:py-8">
         <div className="mx-auto max-w-2xl">
           <Card className="p-8 text-center">
             <CheckCircle className="mx-auto mb-6 h-20 w-20 text-green-500" />
@@ -654,8 +654,8 @@ export default function StudentExamPage() {
   if (!hasStarted) {
     const blockMsg = preStartMessage(preStartBlock);
     return (
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 py-8 backdrop-blur-[2px] app-scroll">
-        <div className="mx-auto max-w-md">
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 py-6 backdrop-blur-[2px] app-scroll sm:py-8">
+        <div className="mx-auto w-full max-w-lg">
           <div className="mb-10 flex justify-center px-1">
             <BrandWordmark
               href={false}
@@ -754,7 +754,7 @@ export default function StudentExamPage() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 pb-24 pt-8 backdrop-blur-[2px] app-scroll">
+    <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8">
       {hasStarted &&
         !submitted &&
         !forfeitReason &&
@@ -783,10 +783,10 @@ export default function StudentExamPage() {
           document.body
         )}
 
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="mx-auto w-full max-w-4xl">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">{exam.title}</h1>
-          <p className="text-gray-600">Estudiante: {selectedStudentName}</p>
+          <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
+          <p className="text-sm text-gray-600 sm:text-base">Estudiante: {selectedStudentName}</p>
         </div>
 
         <div className="mb-6">

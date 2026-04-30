@@ -12,6 +12,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { Mail, Lock, Loader2 } from 'lucide-react';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { supabase } from '@/lib/supabase';
+import { isSubscriptionActive } from '@/lib/billing';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -25,12 +27,37 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const { error } = await signIn(email, password);
+      const { data, error } = await signIn(email, password);
       if (error) {
         toast.error('Error al iniciar sesión', {
           description: toSpanishAuthMessage(error.message),
         });
       } else {
+        const userId = data.user?.id;
+        if (!userId) {
+          toast.error('No se pudo validar tu sesion.');
+          return;
+        }
+
+        const { data: billingRow, error: billingError } = await supabase
+          .from('teacher_billing')
+          .select('is_active,subscription_status')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (billingError) {
+          toast.error('Error al validar tu suscripcion', {
+            description: toSpanishAuthMessage(billingError.message),
+          });
+          return;
+        }
+
+        if (!isSubscriptionActive(billingRow)) {
+          toast.message('Tu cuenta esta creada, pero aun no tiene un plan activo.');
+          router.push('/billing');
+          return;
+        }
+
         toast.success('¡Bienvenido de vuelta!');
         router.push('/dashboard');
       }
@@ -45,7 +72,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
-      <div className="flex min-h-0 flex-1 flex-col px-2 pb-0 pt-1 sm:px-4 sm:pt-3 lg:px-8">
+      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pb-0 pt-2 sm:px-6 sm:pt-4 lg:px-10">
         <div className="mx-auto flex w-full max-w-md shrink-0 justify-center sm:max-w-lg md:max-w-xl">
           <BrandWordmark
             priority
@@ -54,7 +81,7 @@ export default function LoginPage() {
           />
         </div>
 
-        <Card className="mt-2 flex min-h-0 w-full max-w-md flex-1 flex-col overflow-hidden rounded-b-none rounded-t-2xl border-0 shadow-xl sm:mx-auto sm:mt-3 sm:max-w-lg md:max-w-xl">
+        <Card className="mt-2 flex min-h-0 w-full max-w-md flex-1 flex-col overflow-hidden rounded-b-none rounded-t-2xl border-0 shadow-xl sm:mx-auto sm:mt-3 sm:max-w-lg md:max-w-xl lg:max-w-2xl">
             <CardHeader className="shrink-0 space-y-0.5 px-4 pb-2 pt-3 sm:px-6 sm:pb-3 sm:pt-5">
               <CardTitle className="text-center text-lg font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
               <CardDescription className="text-center text-xs sm:text-sm">

@@ -74,7 +74,7 @@ export default function GroupsPage() {
   };
 
   return (
-    <div className="space-y-3 sm:space-y-6">
+    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
@@ -98,7 +98,7 @@ export default function GroupsPage() {
           <Loader2 className="w-8 h-8 animate-spin text-orange-600" />
         </div>
       ) : groups.length === 0 ? (
-        <Card className="p-12 text-center">
+        <Card className="p-8 text-center sm:p-12">
           <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-medium text-gray-900 mb-2">No hay grupos aún</h3>
           <p className="text-gray-500 mb-6">Crea tu primer grupo para comenzar a organizar tus estudiantes</p>

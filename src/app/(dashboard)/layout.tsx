@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
@@ -18,6 +18,8 @@ import { LayoutDashboard, Users, FileText, LogOut, UserRound, Camera } from 'luc
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { supabase } from '@/lib/supabase';
+import { isSubscriptionActive } from '@/lib/billing';
 
 function navActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') return pathname === '/dashboard';
@@ -32,6 +34,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { user, loading, signOut } = useAuth();
+  const [billingReady, setBillingReady] = useState(false);
   const dashboardHome = pathname === '/dashboard';
 
   useEffect(() => {
@@ -39,6 +42,26 @@ export default function DashboardLayout({
       router.replace('/login');
     }
   }, [user, loading, router]);
+
+  useEffect(() => {
+    const guardBilling = async () => {
+      if (loading || !user) return;
+      setBillingReady(false);
+      const { data, error } = await supabase
+        .from('teacher_billing')
+        .select('is_active,subscription_status')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (error || !isSubscriptionActive(data)) {
+        router.replace('/billing');
+        return;
+      }
+      setBillingReady(true);
+    };
+
+    void guardBilling();
+  }, [loading, user, router]);
 
   const handleSignOut = async () => {
     const { error } = await signOut();
@@ -52,7 +75,7 @@ export default function DashboardLayout({
     }
   };
 
-  if (loading) {
+  if (loading || !billingReady) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-orange-600" />
@@ -149,7 +172,7 @@ export default function DashboardLayout({
 
         <main
           className={cn(
-            'min-h-0 flex-1 overscroll-contain px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-4 sm:pt-4 lg:px-5 lg:pb-4 xl:px-6',
+            'mx-auto min-h-0 w-full max-w-[1500px] flex-1 overscroll-contain px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-5 sm:pt-4 lg:px-6 lg:pb-4 xl:px-8',
             dashboardHome ? 'flex flex-col overflow-hidden' : 'app-scroll overflow-y-auto'
           )}
         >

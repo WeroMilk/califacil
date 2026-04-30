@@ -214,25 +214,25 @@ export default function CreateExamPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-start gap-3 sm:items-center sm:gap-4">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Crear Examen</h1>
-          <p className="text-gray-600 mt-1">Crea un nuevo examen con ayuda de IA</p>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Crear Examen</h1>
+          <p className="mt-1 text-sm text-gray-600 sm:text-base">Crea un nuevo examen con ayuda de IA</p>
         </div>
       </div>
 
       {/* Progress Steps */}
       <div className="flex items-center justify-center">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
           {steps.map((step, index) => (
             <div key={step.id} className="flex items-center">
               <div 
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 sm:px-4 ${
                   currentStep === step.id 
                     ? 'bg-orange-600 text-white' 
                     : currentStep > step.id 
@@ -241,7 +241,7 @@ export default function CreateExamPage() {
                 }`}
               >
                 <step.icon className="w-4 h-4" />
-                <span className="text-sm font-medium hidden sm:inline">{step.title}</span>
+                <span className="hidden text-sm font-medium sm:inline">{step.title}</span>
                 {currentStep > step.id && <Check className="w-4 h-4 ml-1" />}
               </div>
               {index < steps.length - 1 && (

@@ -334,18 +334,18 @@ export default function ExamDetailPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => router.push('/exams')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">{exam.title}</h1>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
               <Badge className={statusConfig[exam.status].color}>{statusConfig[exam.status].label}</Badge>
             </div>
-            <p className="mt-1 text-gray-600">{exam.description || 'Sin descripción'}</p>
+            <p className="mt-1 text-sm text-gray-600 sm:text-base">{exam.description || 'Sin descripción'}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
