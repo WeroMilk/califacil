@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 import { BILLING_PLANS } from '@/lib/billing';
 import { getStripeClient } from '@/lib/stripe';
@@ -23,6 +24,14 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
+    if (!priceId.startsWith('price_')) {
+      return NextResponse.json(
+        {
+          error: `${plan.stripePriceEnv} debe ser un Price ID de Stripe (empieza con price_), no Product ID`,
+        },
+        { status: 500 }
+      );
+    }
 
     const { data: currentBilling } = await supabaseAdmin
       .from('teacher_billing')
@@ -31,6 +40,12 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     const customerEmail = request.headers.get('x-user-email') || undefined;
+    if (!currentBilling?.stripe_customer_id && !customerEmail) {
+      return NextResponse.json(
+        { error: 'No se encontro correo del usuario para crear checkout' },
+        { status: 400 }
+      );
+    }
 
     const stripe = getStripeClient();
     const session = await stripe.checkout.sessions.create({
@@ -49,6 +64,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ url: session.url });
   } catch (error) {
     console.error('billing/create-checkout-session error', error);
-    return NextResponse.json({ error: 'No se pudo crear la sesion de pago' }, { status: 500 });
+    const message =
+      error instanceof Stripe.errors.StripeError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : 'No se pudo crear la sesion de pago';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

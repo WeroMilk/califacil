@@ -128,12 +128,9 @@ export default function BillingPage() {
   if (!user) return null;
 
   return (
-    <div className="app-scroll h-full overflow-y-auto px-4 py-6 sm:py-8 md:px-8">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8">
-          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-4xl">
-            Precios por Servicio
-          </h1>
+    <div className="app-scroll flex h-full overflow-y-auto px-4 py-6 sm:py-8 md:px-8">
+      <div className="mx-auto flex w-full max-w-6xl flex-col items-center">
+        <div className="mb-6 flex w-full max-w-5xl items-center justify-end sm:mb-8">
           <Button
             type="button"
             variant="outline"
@@ -144,13 +141,18 @@ export default function BillingPage() {
             Salir
           </Button>
         </div>
-        <p className="mb-6 text-sm text-gray-600 sm:mb-8">
+        <div className="w-full max-w-5xl text-center">
+          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-4xl">
+            Precios por Servicio
+          </h1>
+        </div>
+        <p className="mb-6 mt-2 w-full max-w-5xl text-center text-sm text-gray-600 sm:mb-8">
           Elige tu plan para activar tu cuenta y acceder al dashboard.
         </p>
         <h2 className="sr-only">
           Precios por Servicio
         </h2>
-        <div className="grid gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid w-full max-w-5xl gap-4 sm:gap-5 md:grid-cols-2 lg:grid-cols-3">
           {BILLING_PLANS.map((plan) => (
             <article
               key={plan.key}
