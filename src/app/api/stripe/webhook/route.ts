@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { stripe } from '@/lib/stripe';
+import { getStripeClient } from '@/lib/stripe';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { ACTIVE_SUBSCRIPTION_STATUSES } from '@/lib/billing';
 
@@ -36,6 +36,7 @@ async function upsertBillingFromSubscription(subscription: Stripe.Subscription) 
 
 export async function POST(request: NextRequest) {
   try {
+    const stripe = getStripeClient();
     const signature = request.headers.get('stripe-signature');
     if (!signature) {
       return NextResponse.json({ error: 'Firma faltante' }, { status: 400 });

@@ -1,12 +1,19 @@
 import Stripe from 'stripe';
 
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim();
+let stripeClient: Stripe | null = null;
 
-if (!stripeSecretKey) {
-  throw new Error('Falta STRIPE_SECRET_KEY');
+export function getStripeClient() {
+  if (stripeClient) return stripeClient;
+
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim();
+  if (!stripeSecretKey) {
+    throw new Error('Falta STRIPE_SECRET_KEY');
+  }
+
+  stripeClient = new Stripe(stripeSecretKey, {
+    apiVersion: '2026-04-22.dahlia',
+    typescript: true,
+  });
+
+  return stripeClient;
 }
-
-export const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2026-04-22.dahlia',
-  typescript: true,
-});

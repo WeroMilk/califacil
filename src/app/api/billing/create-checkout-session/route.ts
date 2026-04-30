@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 import { BILLING_PLANS } from '@/lib/billing';
-import { stripe } from '@/lib/stripe';
+import { getStripeClient } from '@/lib/stripe';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function POST(request: NextRequest) {
@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
 
     const customerEmail = request.headers.get('x-user-email') || undefined;
 
+    const stripe = getStripeClient();
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: currentBilling?.stripe_customer_id ?? undefined,
