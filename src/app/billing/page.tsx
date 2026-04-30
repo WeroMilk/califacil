@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
 import { BILLING_PLANS, isSubscriptionActive, type PlanKey } from '@/lib/billing';
@@ -17,7 +17,7 @@ type BillingRow = {
 };
 
 export default function BillingPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, signOut } = useAuth();
   const router = useRouter();
   const [billing, setBilling] = useState<BillingRow | null>(null);
   const [checking, setChecking] = useState(true);
@@ -105,6 +105,18 @@ export default function BillingPage() {
     }
   };
 
+  const handleSignOut = async () => {
+    try {
+      const { error } = await signOut();
+      if (error) {
+        throw error;
+      }
+      router.replace('/login');
+    } catch {
+      toast.error('No se pudo cerrar sesion');
+    }
+  };
+
   if (loading || checking) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
@@ -118,9 +130,26 @@ export default function BillingPage() {
   return (
     <div className="app-scroll h-full overflow-y-auto px-4 py-6 sm:py-8 md:px-8">
       <div className="mx-auto max-w-7xl">
-        <h1 className="mb-6 text-center text-3xl font-extrabold tracking-tight text-gray-900 sm:mb-8 sm:text-4xl">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8">
+          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-4xl">
+            Precios por Servicio
+          </h1>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 border-orange-200 text-gray-700 hover:bg-orange-50"
+            onClick={() => void handleSignOut()}
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            Salir
+          </Button>
+        </div>
+        <p className="mb-6 text-sm text-gray-600 sm:mb-8">
+          Elige tu plan para activar tu cuenta y acceder al dashboard.
+        </p>
+        <h2 className="sr-only">
           Precios por Servicio
-        </h1>
+        </h2>
         <div className="grid gap-4 sm:gap-5 md:grid-cols-2 xl:grid-cols-4">
           {BILLING_PLANS.map((plan) => (
             <article
@@ -192,7 +221,13 @@ export default function BillingPage() {
               ))}
             </ul>
             <Button className="mt-6 h-11 w-full" asChild>
-              <a href="mailto:contacto@califacil.app">Solicitar demo</a>
+              <a
+                href="https://wa.me/526623501632?text=Hola%2C%20quiero%20solicitar%20una%20demo%20de%20CaliFacil."
+                target="_blank"
+                rel="noreferrer"
+              >
+                Solicitar demo
+              </a>
             </Button>
           </article>
         </div>

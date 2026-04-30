@@ -34,7 +34,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden max-sm:overflow-y-auto">
-        <section className="mx-auto flex min-h-full w-full max-w-7xl flex-1 flex-col justify-evenly gap-5 px-3 py-3 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] sm:gap-7 sm:px-6 sm:py-5 md:gap-8 md:py-6 lg:justify-between lg:px-10 lg:py-8">
+        <section className="mx-auto flex min-h-full w-full max-w-7xl flex-1 flex-col justify-evenly gap-5 px-3 py-5 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] sm:gap-7 sm:px-6 sm:py-7 md:gap-8 md:py-8 lg:justify-between lg:px-10 lg:py-10">
           <div className="flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8">
             {/* 1–3: hero de texto */}
             <div className="mx-auto w-full max-w-[min(100%,35rem)] shrink-0 text-center sm:max-w-3xl lg:max-w-4xl">
