@@ -17,9 +17,8 @@ async function upsertBillingFromSubscription(subscription: Stripe.Subscription) 
   if (!userId) return;
 
   const isActive = ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status);
-  const periodEnd = subscription.current_period_end
-    ? new Date(subscription.current_period_end * 1000).toISOString()
-    : null;
+  const itemPeriodEnd = subscription.items.data[0]?.current_period_end;
+  const periodEnd = itemPeriodEnd ? new Date(itemPeriodEnd * 1000).toISOString() : null;
 
   await supabaseAdmin.from('teacher_billing').upsert(
     {

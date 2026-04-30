@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -19,7 +19,6 @@ type BillingRow = {
 export default function BillingPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [billing, setBilling] = useState<BillingRow | null>(null);
   const [checking, setChecking] = useState(true);
   const [processingPlan, setProcessingPlan] = useState<PlanKey | null>(null);
@@ -56,7 +55,7 @@ export default function BillingPage() {
   }, [loading, user, router, loadBilling]);
 
   useEffect(() => {
-    const status = searchParams.get('status');
+    const status = new URLSearchParams(window.location.search).get('status');
     if (status === 'success') {
       toast.success('Pago confirmado. Validando acceso...');
       void loadBilling();
@@ -64,7 +63,7 @@ export default function BillingPage() {
     if (status === 'cancel') {
       toast.message('El pago se cancelo. Puedes intentarlo de nuevo.');
     }
-  }, [searchParams, loadBilling]);
+  }, [loadBilling]);
 
   useEffect(() => {
     if (isPaid) {
