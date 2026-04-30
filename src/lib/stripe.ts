@@ -9,6 +9,9 @@ export function getStripeClient() {
   if (!stripeSecretKey) {
     throw new Error('Falta STRIPE_SECRET_KEY');
   }
+  if (!stripeSecretKey.startsWith('sk_')) {
+    throw new Error('STRIPE_SECRET_KEY invalida: debe iniciar con sk_ (test o live)');
+  }
 
   stripeClient = new Stripe(stripeSecretKey, {
     apiVersion: '2026-04-22.dahlia',
