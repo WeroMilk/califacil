@@ -16,6 +16,21 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+/**
+ * Cliente para `/examen/*` (alumno por QR). No reutiliza el JWT del maestro: las RPC de intentos
+ * (`student_answer_count`, `get_student_exam_attempt`, etc.) solo tienen EXECUTE para `anon`
+ * (migración supabase_lint_fixes). Sin esto, un maestro logueado en el mismo navegador obtiene
+ * "permission denied" y la UI muestra error de migración.
+ */
+export const examPublicSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+    storageKey: 'califacil.examen.anon',
+  },
+});
+
 export type Database = {
   public: {
     tables: {

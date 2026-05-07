@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { examPublicSupabase } from '@/lib/supabase';
 import {
   rpcCompleteStudentExamAttempt,
   rpcGetStudentExamAttempt,
@@ -188,7 +188,7 @@ export default function StudentExamPage() {
     try {
       setLoading(true);
 
-      const { data: examData, error: examError } = await supabase
+      const { data: examData, error: examError } = await examPublicSupabase
         .from('exams')
         .select('*')
         .eq('id', examId)
@@ -202,7 +202,7 @@ export default function StudentExamPage() {
 
       setExam(examData);
 
-      const { data: questionsData, error: questionsError } = await supabase
+      const { data: questionsData, error: questionsError } = await examPublicSupabase
         .from('questions')
         .select('*')
         .eq('exam_id', examId)
@@ -211,7 +211,7 @@ export default function StudentExamPage() {
       if (questionsError) throw questionsError;
       setQuestions(questionsData || []);
 
-      const { data: assignmentData } = await supabase
+      const { data: assignmentData } = await examPublicSupabase
         .from('exam_group_assignments')
         .select('group_id')
         .eq('exam_id', examId);
@@ -224,7 +224,7 @@ export default function StudentExamPage() {
       setAllowedGroupIds(examGroupIds);
 
       if (examGroupIds.length > 0) {
-        const { data: studentsData, error: studentsError } = await supabase
+        const { data: studentsData, error: studentsError } = await examPublicSupabase
           .from('students')
           .select('*')
           .in('group_id', examGroupIds);
@@ -558,7 +558,7 @@ export default function StudentExamPage() {
 
       const answersToInsert = graded.map(({ _points: _p, ...row }) => row);
 
-      const { error: answersError } = await supabase.from('answers').insert(answersToInsert);
+      const { error: answersError } = await examPublicSupabase.from('answers').insert(answersToInsert);
 
       if (answersError) throw answersError;
 

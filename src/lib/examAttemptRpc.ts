@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import { examPublicSupabase } from '@/lib/supabase';
 
 /** Intentos (exam_attempts). La API /api/grade/open-answer valida con `validate_open_answer_attempt` (migración 20250413100000). */
 
@@ -24,7 +24,7 @@ export async function rpcGetStudentExamAttempt(
   studentId: string,
   clientSession: string | null
 ): Promise<AttemptGetResult> {
-  const { data, error } = await supabase.rpc('get_student_exam_attempt', {
+  const { data, error } = await examPublicSupabase.rpc('get_student_exam_attempt', {
     p_exam_id: examId,
     p_student_id: studentId,
     p_session: clientSession,
@@ -38,7 +38,7 @@ export async function rpcStartStudentExamAttempt(
   studentId: string,
   clientSession: string
 ): Promise<AttemptStartResult> {
-  const { data, error } = await supabase.rpc('start_student_exam_attempt', {
+  const { data, error } = await examPublicSupabase.rpc('start_student_exam_attempt', {
     p_exam_id: examId,
     p_student_id: studentId,
     p_session: clientSession,
@@ -53,7 +53,7 @@ export async function rpcVoidStudentExamAttempt(
   clientSession: string,
   reason: string
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc('void_student_exam_attempt', {
+  const { data, error } = await examPublicSupabase.rpc('void_student_exam_attempt', {
     p_exam_id: examId,
     p_student_id: studentId,
     p_session: clientSession,
@@ -71,7 +71,7 @@ export async function rpcCompleteStudentExamAttempt(
   studentId: string,
   clientSession: string
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc('complete_student_exam_attempt', {
+  const { data, error } = await examPublicSupabase.rpc('complete_student_exam_attempt', {
     p_exam_id: examId,
     p_student_id: studentId,
     p_session: clientSession,
@@ -82,7 +82,7 @@ export async function rpcCompleteStudentExamAttempt(
 
 /** Respuestas ya guardadas para (examen, alumno). -1 = no permitido (RPC no aplicada o examen inválido). */
 export async function rpcStudentAnswerCount(examId: string, studentId: string): Promise<number> {
-  const { data, error } = await supabase.rpc('student_answer_count', {
+  const { data, error } = await examPublicSupabase.rpc('student_answer_count', {
     p_exam_id: examId,
     p_student_id: studentId,
   });
