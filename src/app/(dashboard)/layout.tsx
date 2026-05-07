@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { BrandWordmark } from '@/components/brand-wordmark';
@@ -103,27 +102,39 @@ export default function DashboardLayout({
       <aside className="fixed left-0 top-0 z-50 hidden h-full max-h-[100dvh] w-64 flex-col overflow-y-auto border-r border-gray-200 bg-white lg:flex app-scroll">
         <div className="flex h-full min-h-0 flex-col">
           <div className="border-b border-gray-200 px-4 py-5 sm:px-5">
-            <BrandWordmark
-              href="/dashboard"
-              priority
-              className="w-full"
-              imgClassName="h-16 w-auto max-w-full object-contain object-left sm:h-[4.75rem] lg:h-[5.25rem]"
-            />
+            <button
+              type="button"
+              onClick={() => router.push('/dashboard')}
+              className="w-full cursor-pointer text-left"
+              aria-label="CaliFácil, ir al dashboard"
+            >
+              <BrandWordmark
+                href={false}
+                priority
+                className="w-full"
+                imgClassName="h-16 w-auto max-w-full object-contain object-left sm:h-[4.75rem] lg:h-[5.25rem]"
+              />
+            </button>
           </div>
           <nav className="flex-1 space-y-1 p-4" aria-label="Navegación principal">
-            {navItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-4 py-3 font-medium text-gray-700 transition-colors hover:bg-orange-50 hover:text-orange-600',
-                  navActive(pathname, item.href) && 'bg-orange-50 text-orange-600'
-                )}
-              >
-                <item.icon className="h-5 w-5 shrink-0" />
-                <span>{item.label === 'Inicio' ? 'Dashboard' : item.label}</span>
-              </Link>
-            ))}
+            {navItems.map((item) => {
+              const active = navActive(pathname, item.href);
+              return (
+                <button
+                  key={item.href}
+                  type="button"
+                  onClick={() => router.push(item.href)}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center gap-3 rounded-lg px-4 py-3 text-left font-medium text-gray-700 transition-colors hover:bg-orange-50 hover:text-orange-600',
+                    active && 'bg-orange-50 text-orange-600'
+                  )}
+                >
+                  <item.icon className="h-5 w-5 shrink-0" />
+                  <span>{item.label === 'Inicio' ? 'Dashboard' : item.label}</span>
+                </button>
+              );
+            })}
           </nav>
           <div className="border-t border-gray-200 p-4">
             <div className="mb-4 rounded-lg bg-gray-50 px-4 py-2">
@@ -146,11 +157,18 @@ export default function DashboardLayout({
             style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
           >
             <span className="inline-flex min-w-0 max-w-[min(100%,18rem)] items-center sm:max-w-[20rem]">
-              <BrandWordmark
-                href="/dashboard"
-                priority
-                imgClassName="h-[50px] w-auto max-w-full object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
-              />
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard')}
+                className="max-w-full cursor-pointer text-left"
+                aria-label="CaliFácil, ir al dashboard"
+              >
+                <BrandWordmark
+                  href={false}
+                  priority
+                  imgClassName="h-[50px] w-auto max-w-full object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
+                />
+              </button>
             </span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -192,17 +210,19 @@ export default function DashboardLayout({
             {navItems.map((item) => {
               const active = navActive(pathname, item.href);
               return (
-                <Link
+                <button
                   key={item.href}
-                  href={item.href}
+                  type="button"
+                  onClick={() => router.push(item.href)}
+                  aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex min-w-0 flex-1 touch-manipulation flex-col items-center justify-center gap-0.5 rounded-lg py-2 text-[11px] font-medium leading-tight transition-colors',
+                    'flex min-w-0 flex-1 cursor-pointer touch-manipulation flex-col items-center justify-center gap-0.5 rounded-lg border-0 bg-transparent py-2 text-[11px] font-medium leading-tight transition-colors',
                     active ? 'text-orange-600' : 'text-gray-500 active:bg-gray-50'
                   )}
                 >
                   <item.icon className="h-5 w-5 shrink-0" strokeWidth={active ? 2.5 : 2} />
                   <span className="truncate px-0.5">{item.label}</span>
-                </Link>
+                </button>
               );
             })}
           </div>
