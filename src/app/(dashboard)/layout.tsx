@@ -19,7 +19,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { supabase } from '@/lib/supabase';
-import { isSubscriptionActive } from '@/lib/billing';
+import { isCalifacilSuperUserEmail, isSubscriptionActive } from '@/lib/billing';
 
 function navActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') return pathname === '/dashboard';
@@ -53,7 +53,10 @@ export default function DashboardLayout({
         .eq('user_id', user.id)
         .maybeSingle();
 
-      if (error || !isSubscriptionActive(data)) {
+      if (
+        !isCalifacilSuperUserEmail(user.email) &&
+        (error || !isSubscriptionActive(data))
+      ) {
         router.replace('/billing');
         return;
       }

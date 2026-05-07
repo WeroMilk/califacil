@@ -46,6 +46,14 @@ export const PLAN_MONTHLY_EXAM_LIMIT: Record<PlanKey, number> = {
   pro: 30,
 };
 
+/** Cuenta interna para pruebas: sin pago ni cupos de IA. */
+const CALIFACIL_SUPERUSER_EMAIL = 'admin@califacil.com';
+
+export function isCalifacilSuperUserEmail(email: string | null | undefined) {
+  if (!email) return false;
+  return email.trim().toLowerCase() === CALIFACIL_SUPERUSER_EMAIL;
+}
+
 export function resolvePlanKey(raw: string | null | undefined): PlanKey {
   return raw === 'pro' ? 'pro' : 'basic';
 }

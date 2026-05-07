@@ -5,6 +5,7 @@ import {
   PLAN_MONTHLY_EXAM_LIMIT,
   resolvePlanKey,
   isSubscriptionActive,
+  isCalifacilSuperUserEmail,
 } from '@/lib/billing';
 
 const DIFFICULTY_LEVELS = ['easy', 'medium', 'hard', 'extreme'] as const;
@@ -60,55 +61,59 @@ export async function POST(request: NextRequest) {
     const auth = await requireSessionUser(request);
     if ('response' in auth) return auth.response;
 
-    const { data: billingRow, error: billingError } = await auth.supabase
-      .from('teacher_billing')
-      .select('is_active,subscription_status,plan_key')
-      .eq('user_id', auth.user.id)
-      .maybeSingle();
+    const superUser = isCalifacilSuperUserEmail(auth.user.email);
 
-    if (billingError) {
-      return NextResponse.json(
-        { error: 'No se pudo validar el plan activo', message: billingError.message },
-        { status: 500 }
-      );
-    }
+    if (!superUser) {
+      const { data: billingRow, error: billingError } = await auth.supabase
+        .from('teacher_billing')
+        .select('is_active,subscription_status,plan_key')
+        .eq('user_id', auth.user.id)
+        .maybeSingle();
 
-    if (!isSubscriptionActive(billingRow)) {
-      return NextResponse.json(
-        { error: 'Necesitas un plan activo para generar examenes con IA' },
-        { status: 402 }
-      );
-    }
+      if (billingError) {
+        return NextResponse.json(
+          { error: 'No se pudo validar el plan activo', message: billingError.message },
+          { status: 500 }
+        );
+      }
 
-    const planKey = resolvePlanKey(billingRow?.plan_key);
-    const monthlyLimit = PLAN_MONTHLY_EXAM_LIMIT[planKey];
-    const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+      if (!isSubscriptionActive(billingRow)) {
+        return NextResponse.json(
+          { error: 'Necesitas un plan activo para generar examenes con IA' },
+          { status: 402 }
+        );
+      }
 
-    const { count: monthUsageCount, error: usageCountError } = await auth.supabase
-      .from('ai_exam_generation_usage')
-      .select('*', { count: 'exact', head: true })
-      .eq('teacher_id', auth.user.id)
-      .gte('created_at', monthStart);
+      const planKey = resolvePlanKey(billingRow?.plan_key);
+      const monthlyLimit = PLAN_MONTHLY_EXAM_LIMIT[planKey];
+      const now = new Date();
+      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 
-    if (usageCountError) {
-      return NextResponse.json(
-        { error: 'No se pudo validar tu consumo mensual', message: usageCountError.message },
-        { status: 500 }
-      );
-    }
+      const { count: monthUsageCount, error: usageCountError } = await auth.supabase
+        .from('ai_exam_generation_usage')
+        .select('*', { count: 'exact', head: true })
+        .eq('teacher_id', auth.user.id)
+        .gte('created_at', monthStart);
 
-    const used = monthUsageCount ?? 0;
-    if (used >= monthlyLimit) {
-      return NextResponse.json(
-        {
-          error: `Alcanzaste tu limite mensual (${monthlyLimit}) para el plan ${planKey}.`,
-          used,
-          limit: monthlyLimit,
-          plan: planKey,
-        },
-        { status: 429 }
-      );
+      if (usageCountError) {
+        return NextResponse.json(
+          { error: 'No se pudo validar tu consumo mensual', message: usageCountError.message },
+          { status: 500 }
+        );
+      }
+
+      const used = monthUsageCount ?? 0;
+      if (used >= monthlyLimit) {
+        return NextResponse.json(
+          {
+            error: `Alcanzaste tu limite mensual (${monthlyLimit}) para el plan ${planKey}.`,
+            used,
+            limit: monthlyLimit,
+            plan: planKey,
+          },
+          { status: 429 }
+        );
+      }
     }
 
     const {
@@ -179,15 +184,17 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
 
     const openai = new OpenAI({ apiKey });
 
-    const { error: usageInsertError } = await auth.supabase
-      .from('ai_exam_generation_usage')
-      .insert({ teacher_id: auth.user.id });
+    if (!superUser) {
+      const { error: usageInsertError } = await auth.supabase
+        .from('ai_exam_generation_usage')
+        .insert({ teacher_id: auth.user.id });
 
-    if (usageInsertError) {
-      return NextResponse.json(
-        { error: 'No se pudo registrar el uso mensual', message: usageInsertError.message },
-        { status: 500 }
-      );
+      if (usageInsertError) {
+        return NextResponse.json(
+          { error: 'No se pudo registrar el uso mensual', message: usageInsertError.message },
+          { status: 500 }
+        );
+      }
     }
 
     try {

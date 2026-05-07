@@ -26,7 +26,10 @@ export function createSupabaseRouteClient(request: NextRequest) {
 
 /** Sesión válida; la propiedad del recurso (p. ej. exam.teacher_id) define permisos. */
 export async function requireSessionUser(request: NextRequest): Promise<
-  | { user: { id: string }; supabase: ReturnType<typeof createSupabaseRouteClient> }
+  | {
+      user: { id: string; email: string | undefined };
+      supabase: ReturnType<typeof createSupabaseRouteClient>;
+    }
   | { response: NextResponse }
 > {
   const auth = request.headers.get('Authorization')?.trim();
@@ -44,7 +47,7 @@ export async function requireSessionUser(request: NextRequest): Promise<
     return { response: NextResponse.json({ error: 'Sesión inválida' }, { status: 401 }) };
   }
 
-  return { user: { id: user.id }, supabase };
+  return { user: { id: user.id, email: user.email ?? undefined }, supabase };
 }
 
 /** Headers para fetch desde el dashboard con la sesión actual. */

@@ -13,7 +13,7 @@ import { BrandWordmark } from '@/components/brand-wordmark';
 import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { supabase } from '@/lib/supabase';
-import { isSubscriptionActive } from '@/lib/billing';
+import { isCalifacilSuperUserEmail, isSubscriptionActive } from '@/lib/billing';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -53,7 +53,10 @@ export default function LoginPage() {
           return;
         }
 
-        if (!isSubscriptionActive(billingRow)) {
+        if (
+          !isCalifacilSuperUserEmail(data.user?.email) &&
+          !isSubscriptionActive(billingRow)
+        ) {
           toast.message('Tu cuenta esta creada, pero aun no tiene un plan activo.');
           router.push('/billing');
           return;
