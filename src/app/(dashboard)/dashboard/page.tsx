@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { useExams } from '@/hooks/useExams';
 import { useGroups } from '@/hooks/useGroups';
+import { fetchTeacherExamAverageSummaries } from '@/lib/teacherExamAverages';
 import { ExamMiniPreview } from '@/components/exam-mini-preview';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,10 @@ export default function DashboardPage() {
     totalGroups: 0,
     totalStudents: 0,
   });
+  const [globalGradePercent, setGlobalGradePercent] = useState<number | null>(null);
+  const [globalGradeLoading, setGlobalGradeLoading] = useState(false);
+
+  const groupsById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
 
   useEffect(() => {
     if (exams && groups) {
@@ -43,6 +48,25 @@ export default function DashboardPage() {
       });
     }
   }, [exams, groups]);
+
+  useEffect(() => {
+    if (!user?.id || examsLoading) return;
+    let cancelled = false;
+    (async () => {
+      setGlobalGradeLoading(true);
+      try {
+        const { globalAveragePercent } = await fetchTeacherExamAverageSummaries(exams, groupsById);
+        if (!cancelled) setGlobalGradePercent(globalAveragePercent);
+      } catch {
+        if (!cancelled) setGlobalGradePercent(null);
+      } finally {
+        if (!cancelled) setGlobalGradeLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, examsLoading, exams, groupsById]);
 
   /** Más recientes primero (ya vienen desc). */
   const recentExams = [...exams].slice(0, RECENTS_MAX);
@@ -117,8 +141,16 @@ export default function DashboardPage() {
             <TrendingUp className="h-3.5 w-3.5 shrink-0 text-orange-600 sm:h-4 sm:w-4" />
           </CardHeader>
           <CardContent className="pb-3 pt-0">
-            <div className="text-xl font-bold sm:text-2xl">--</div>
-            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">General</p>
+            <div className="text-xl font-bold tabular-nums sm:text-2xl">
+              {examsLoading || globalGradeLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin sm:h-6 sm:w-6" />
+              ) : globalGradePercent != null ? (
+                `${globalGradePercent}%`
+              ) : (
+                '—'
+              )}
+            </div>
+            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">General (todos los exámenes)</p>
           </CardContent>
         </Card>
         </Link>

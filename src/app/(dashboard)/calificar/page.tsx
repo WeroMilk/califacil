@@ -12,20 +12,22 @@ import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
   CALIFACIL_OMR_GUIDE_ASPECT_RATIO,
+  CALIFACIL_VIEWFINDER_GUIDE,
   chunkQuestions,
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
 import {
   autoOrientCalifacilSheet,
+  califacilGeometryTableBounds,
   califacilImageToJpegDataUrl,
+  califacilViewfinderNormRect,
   fileToImage,
   isCalifacilExamSheetLikely,
   prepareCalifacilScanInput,
   scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
   type CalifacilOmrScanGeometry,
-  type OmrScanMetaResult,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
@@ -55,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -68,7 +71,25 @@ import {
   stopScanningHum,
 } from '@/lib/scanSounds';
 
-type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
+type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando' | 'ver_resultados';
+
+type MobileSheetSnapshot = {
+  sheetIndex: number;
+  previewUrl: string;
+  geometry: CalifacilOmrScanGeometry;
+  questionIds: string[];
+  selectionsByQuestionId: Record<string, string>;
+};
+
+async function cloneObjectUrl(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
 
 /** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
 const MIN_AUTO_READ_RATIO = 0.9;
@@ -163,6 +184,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Marco naranja de referencia: coincide con la tabla detectada si hay geometría; si no, la guía del visor. */
+function califacilReviewOrangeFrameRect(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): { x: number; y: number; w: number; h: number } | null {
+  return (
+    califacilGeometryTableBounds(geometry, rowCount) ??
+    califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
+  );
+}
+
 export default function CalificarPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -209,8 +241,6 @@ export default function CalificarPage() {
   const liveLockedAnswersRef = useRef<Record<string, string>>({});
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
   const liveCompleteSoundPlayedRef = useRef(false);
-  const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
-  const autoCaptureAndCompareRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
   /** Permite abrir la cámara en el mismo clic que pone `phase` en `capturar` (evita doble toque). */
@@ -235,6 +265,19 @@ export default function CalificarPage() {
     wrong: number;
     total: number;
   } | null>(null);
+
+  const [mobileSheetSnapshots, setMobileSheetSnapshots] = useState<MobileSheetSnapshot[]>([]);
+  const [mobileResultsDraft, setMobileResultsDraft] = useState<Record<string, string>>({});
+  const [resultsSheetIdx, setResultsSheetIdx] = useState(0);
+  const mobileCaptureBusyRef = useRef(false);
+  const phaseRef = useRef<Phase>('elegir');
+  const finalizeCapturedSheetRef = useRef<
+    (
+      source: HTMLImageElement | HTMLCanvasElement,
+      fallbackFile?: File,
+      opts?: { skipReviewUi?: boolean }
+    ) => Promise<{ success: boolean; chunkDraft?: Record<string, string> }>
+  >(async () => ({ success: false }));
 
   const publishedExams = useMemo(
     () => (exams as Exam[]).filter((e) => e.status === 'published'),
@@ -267,24 +310,13 @@ export default function CalificarPage() {
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
     [currentChunk, examVirtualKeyByQuestionId]
   );
-  const mobileGuideClipRect = useMemo(() => {
-    if (!isMobile || !reviewOmrGeometry) return null;
-    const W = Math.max(1, reviewOmrGeometry.imageWidth);
-    const H = Math.max(1, reviewOmrGeometry.imageHeight);
-    const guideW = Math.min(W * 0.86, W - 2);
-    const guideH = guideW / CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
-    if (guideH > H * 0.98) return null;
-    const cx = W * 0.5;
-    const cy = H * 0.62;
-    const left = Math.max(0, Math.min(W - guideW, cx - guideW * 0.5));
-    const top = Math.max(0, Math.min(H - guideH, cy - guideH * 0.5));
-    return {
-      x: left / W,
-      y: top / H,
-      w: guideW / W,
-      h: guideH / H,
-    };
-  }, [isMobile, reviewOmrGeometry]);
+  const reviewOrangeFrameRect = useMemo(
+    () =>
+      reviewOmrGeometry
+        ? califacilReviewOrangeFrameRect(reviewOmrGeometry, currentChunk.length)
+        : null,
+    [reviewOmrGeometry, currentChunk.length]
+  );
 
   /** Comparación borrador vs clave automática solo en la hoja actual (p. ej. 4/10 · 40%). */
   const chunkKeyComparison = useMemo(() => {
@@ -402,7 +434,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.'
+        ? 'Alinea las esquinas grises con los cuadros naranjas del examen o pulsa «Tomar foto».'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -843,6 +875,8 @@ export default function CalificarPage() {
     [exam, examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheets, supportsCalifacil]
   );
 
+  finalizeCapturedSheetRef.current = finalizeCapturedSheet;
+
   useEffect(() => {
     if (!exam?.id) {
       setAllowedGroupIds([]);
@@ -887,6 +921,17 @@ export default function CalificarPage() {
   }, [phase]);
 
   useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  const clearMobileSnapshots = useCallback(() => {
+    setMobileSheetSnapshots((prev) => {
+      for (const s of prev) URL.revokeObjectURL(s.previewUrl);
+      return [];
+    });
+  }, []);
+
+  useEffect(() => {
     if (phase !== 'capturar' && cameraOpen) {
       stopLiveCamera();
     }
@@ -918,6 +963,9 @@ export default function CalificarPage() {
 
   const resetFlow = useCallback(() => {
     stopLiveCamera();
+    clearMobileSnapshots();
+    setMobileResultsDraft({});
+    setResultsSheetIdx(0);
     setReviewQualityHint(null);
     setPhase('elegir');
     setSheetIndex(0);
@@ -927,7 +975,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Abre la cámara para detectar respuestas en vivo.'
+        ? 'Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.'
         : 'Sube una imagen escaneada para leer respuestas.'
     );
     setPreviewUrl((u) => {
@@ -936,7 +984,7 @@ export default function CalificarPage() {
     });
     setReviewOmrGeometry(null);
     setSelectedStudentId('');
-  }, [stopLiveCamera, isMobile]);
+  }, [stopLiveCamera, isMobile, clearMobileSnapshots]);
 
   const handleStudentChange = (studentId: string) => {
     if (!canGradeStudents) {
@@ -944,8 +992,16 @@ export default function CalificarPage() {
       return;
     }
     setSelectedStudentId(studentId);
-    if (!studentId) return;
-    const canAutoStart =
+    if (!studentId) {
+      if (isMobile) {
+        clearMobileSnapshots();
+        setMobileResultsDraft({});
+        setResultsSheetIdx(0);
+        setPhase('elegir');
+      }
+      return;
+    }
+    const canSessionStart =
       Boolean(examId) &&
       Boolean(exam) &&
       !examLoading &&
@@ -954,9 +1010,25 @@ export default function CalificarPage() {
       questions.length <= maxQuestions &&
       virtualKey.issues.length === 0 &&
       sortedStudents.some((s) => s.id === studentId);
-    if (!canAutoStart) return;
+    if (!canSessionStart) return;
     resumeScanAudioContext();
     stopLiveCamera();
+    if (isMobile) {
+      clearMobileSnapshots();
+      setPhase('elegir');
+      setSheetIndex(0);
+      setConfirmedByQuestionId({});
+      setDraftSelections({});
+      setLiveDraftSelections({});
+      setLiveResolvedCount(0);
+      setLiveStatus('Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.');
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setReviewOmrGeometry(null);
+      return;
+    }
     flushSync(() => {
       setPhase('capturar');
       setSheetIndex(0);
@@ -965,9 +1037,7 @@ export default function CalificarPage() {
       setLiveDraftSelections({});
       setLiveResolvedCount(0);
       setLiveStatus(
-        isMobile
-          ? 'Abre la cámara para detectar respuestas en vivo.'
-          : 'Sube una imagen escaneada para leer respuestas.'
+        'Sube una imagen escaneada para leer respuestas.'
       );
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
@@ -975,9 +1045,6 @@ export default function CalificarPage() {
       });
       setReviewOmrGeometry(null);
     });
-    if (isMobile) {
-      void startLiveCameraRef.current?.({ skipPhaseGuard: true });
-    }
   };
 
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1009,7 +1076,7 @@ export default function CalificarPage() {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
-    if (!opts?.skipPhaseGuard && phase !== 'capturar') {
+    if (!opts?.skipPhaseGuard && phaseRef.current !== 'capturar') {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
@@ -1083,7 +1150,8 @@ export default function CalificarPage() {
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
-        if (!examId || !exam || phase !== 'capturar') {
+        if (isMobile && mobileCaptureBusyRef.current) return;
+        if (!examId || !exam || phaseRef.current !== 'capturar') {
           stopScanningHum();
           return;
         }
@@ -1177,7 +1245,9 @@ export default function CalificarPage() {
           setLiveResolvedCount(mergedResolved);
 
           if (chunk.length > 0) {
-            if (mergedResolved >= chunk.length) {
+            if (isMobile) {
+              stopScanningHum();
+            } else if (mergedResolved >= chunk.length) {
               stopScanningHum();
               if (!liveCompleteSoundPlayedRef.current) {
                 liveCompleteSoundPlayedRef.current = true;
@@ -1211,14 +1281,17 @@ export default function CalificarPage() {
             setLiveStatus('Poca luz detectada: activé flash automáticamente.');
           }
           if (mergedResolved >= chunk.length && chunk.length > 0) {
-            const nextStatus = 'Detección completa. Toca «Revisar y confirmar».';
+            const nextStatus = isMobile
+              ? 'Lectura estable: capturando en automático o pulsa «Tomar foto».'
+              : 'Detección completa. Toca «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
           } else if (mergedResolved >= minResolved) {
-            const nextStatus =
-              'Lecturas capturadas. Completa faltantes o pulsa «Revisar y confirmar».';
+            const nextStatus = isMobile
+              ? 'Casi listo: mantén fijo el encuadre o usa «Tomar foto».'
+              : 'Lecturas capturadas. Completa faltantes o pulsa «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1262,12 +1335,37 @@ export default function CalificarPage() {
 
           if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
-            await showAutoCaptureSnapshot(oriented);
-            const nextStatus =
-              'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.';
-            if (nextStatus !== hotLoopStatus) {
-              hotLoopStatus = nextStatus;
-              setLiveStatus(nextStatus);
+            if (isMobile) {
+              if (mobileCaptureBusyRef.current) {
+                return;
+              }
+              mobileCaptureBusyRef.current = true;
+              try {
+                const videoCap = videoRef.current;
+                if (!videoCap || videoCap.readyState < 2) return;
+                const fw = videoCap.videoWidth;
+                const fh = videoCap.videoHeight;
+                const fullCanvas = document.createElement('canvas');
+                fullCanvas.width = fw;
+                fullCanvas.height = fh;
+                const fctx = fullCanvas.getContext('2d', { willReadFrequently: true });
+                if (!fctx) return;
+                fctx.drawImage(videoCap, 0, 0, fw, fh);
+                const result = await finalizeCapturedSheetRef.current(fullCanvas);
+                if (result.success) {
+                  playScanCompleteChime();
+                }
+              } finally {
+                mobileCaptureBusyRef.current = false;
+              }
+            } else {
+              await showAutoCaptureSnapshot(oriented);
+              const nextStatus =
+                'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.';
+              if (nextStatus !== hotLoopStatus) {
+                hotLoopStatus = nextStatus;
+                setLiveStatus(nextStatus);
+              }
             }
           }
         } finally {
@@ -1294,7 +1392,6 @@ export default function CalificarPage() {
     isMobile,
     mapRawToDraft,
     omrCols,
-    phase,
     resetLiveReadings,
     setTorchEnabled,
     showAutoCaptureSnapshot,
@@ -1303,13 +1400,6 @@ export default function CalificarPage() {
   ]);
 
   startLiveCameraRef.current = startLiveCamera;
-
-  useEffect(() => {
-    if (!useLiveCameraUi) return;
-    if (!examId || !exam || !supportsCalifacil) return;
-    if (phase !== 'capturar' || cameraOpen || scanBusy) return;
-    void startLiveCamera();
-  }, [useLiveCameraUi, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -1337,6 +1427,33 @@ export default function CalificarPage() {
     setConfirmedByQuestionId(mergedNow);
 
     const isLast = sheetIndex >= totalSheets - 1;
+
+    const pushMobileSheetSnapshot = async () => {
+      if (!isMobile || !previewUrl || !reviewOmrGeometry) return;
+      const cloned = await cloneObjectUrl(previewUrl);
+      if (!cloned) return;
+      const selections: Record<string, string> = {};
+      for (const q of chunk) selections[q.id] = effectiveDraft[q.id]!.trim();
+      let geom: CalifacilOmrScanGeometry;
+      try {
+        geom = structuredClone(reviewOmrGeometry);
+      } catch {
+        geom = JSON.parse(JSON.stringify(reviewOmrGeometry)) as CalifacilOmrScanGeometry;
+      }
+      setMobileSheetSnapshots((prev) => [
+        ...prev,
+        {
+          sheetIndex,
+          previewUrl: cloned,
+          geometry: geom,
+          questionIds: chunk.map((q) => q.id),
+          selectionsByQuestionId: selections,
+        },
+      ]);
+    };
+
+    await pushMobileSheetSnapshot();
+
     if (!isLast) {
       setSheetIndex((s) => s + 1);
       setReviewOmrGeometry(null);
@@ -1346,10 +1463,10 @@ export default function CalificarPage() {
       });
       setDraftSelections({});
       resetLiveReadings();
-      setPhase('capturar');
+      setPhase(isMobile ? 'elegir' : 'capturar');
       toast.success(
         isMobile
-          ? `Hoja ${sheetIndex + 1} guardada. Captura la siguiente.`
+          ? `Hoja ${sheetIndex + 1} guardada. Pulsa «Tomar foto» para la siguiente hoja.`
           : `Hoja ${sheetIndex + 1} guardada. Importa la foto de la siguiente hoja.`
       );
       return;
@@ -1358,17 +1475,48 @@ export default function CalificarPage() {
     await submitAll(mergedNow);
   };
 
-  const autoCaptureAndCompare = async (mergedDraft: Record<string, string>) => {
-    if (autoFinalizeInProgressRef.current) return;
-    autoFinalizeInProgressRef.current = true;
-    try {
-      setDraftSelections(mergedDraft);
-      setLiveDraftSelections(mergedDraft);
-      setLiveStatus('Hoja detectada y capturada automáticamente. Procesando...');
-      await confirmCurrentSheet(mergedDraft);
-    } finally {
-      autoFinalizeInProgressRef.current = false;
+  const persistStudentAnswers = async (merged: Record<string, string>) => {
+    const studentId = selectedStudentId;
+    if (!studentId || !exam || !examId) {
+      throw new Error('missing_context');
     }
+    const effectiveKey = examVirtualKeyByQuestionId;
+    const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
+    const mcTotal = mcQuestions.length;
+    if (Object.keys(effectiveKey).length !== mcTotal) {
+      throw new Error('incomplete_key');
+    }
+
+    let correctCount = 0;
+    const rows = questions.map((question: Question) => {
+      const answerText = (merged[question.id] ?? '').trim();
+      const expected = (effectiveKey[question.id] ?? '').trim();
+      const gotIdx = resolveOptionIndexFromValue(question.options, answerText);
+      const wantIdx = resolveOptionIndexFromValue(question.options, expected);
+      const isCorrect =
+        question.type === 'multiple_choice'
+          ? gotIdx !== null && wantIdx !== null && gotIdx === wantIdx
+          : null;
+      if (isCorrect) correctCount++;
+
+      return {
+        exam_id: examId,
+        student_id: studentId,
+        question_id: question.id,
+        answer_text: answerText,
+        is_correct: isCorrect,
+        score: isCorrect ? 1 : 0,
+      };
+    });
+
+    const { error: answersError } = await supabase.from('answers').upsert(rows, {
+      onConflict: 'exam_id,student_id,question_id',
+    });
+    if (answersError) throw answersError;
+
+    const pct = calculatePercentage(correctCount, mcTotal);
+    const wrong = Math.max(0, mcTotal - correctCount);
+    return { pct, correct: correctCount, wrong, total: mcTotal };
   };
 
   const submitAll = async (merged: Record<string, string>) => {
@@ -1393,51 +1541,11 @@ export default function CalificarPage() {
     setPhase('guardando');
 
     try {
-      const studentId = selectedStudentId;
-      const effectiveKey = examVirtualKeyByQuestionId;
-      const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
-      const mcTotal = mcQuestions.length;
-      if (Object.keys(effectiveKey).length !== mcTotal) {
-        toast.error('Clave automática incompleta. Revisa que cada reactivo tenga respuesta correcta válida.');
-        setPhase('elegir');
-        return;
+      const stats = await persistStudentAnswers(merged);
+      setAutoGradeStats(stats);
+      if (isMobile) {
+        setMobileResultsDraft({ ...merged });
       }
-
-      let correctCount = 0;
-      const rows = questions.map((question: Question) => {
-        const answerText = (merged[question.id] ?? '').trim();
-        const expected = (effectiveKey[question.id] ?? '').trim();
-        const gotIdx = resolveOptionIndexFromValue(question.options, answerText);
-        const wantIdx = resolveOptionIndexFromValue(question.options, expected);
-        const isCorrect =
-          question.type === 'multiple_choice'
-            ? gotIdx !== null && wantIdx !== null && gotIdx === wantIdx
-            : null;
-        if (isCorrect) correctCount++;
-
-        return {
-          exam_id: examId,
-          student_id: studentId,
-          question_id: question.id,
-          answer_text: answerText,
-          is_correct: isCorrect,
-          score: isCorrect ? 1 : 0,
-        };
-      });
-
-      const { error: answersError } = await supabase.from('answers').upsert(rows, {
-        onConflict: 'exam_id,student_id,question_id',
-      });
-      if (answersError) throw answersError;
-
-      const pct = calculatePercentage(correctCount, mcTotal);
-      const wrong = Math.max(0, mcTotal - correctCount);
-      setAutoGradeStats({
-        pct,
-        correct: correctCount,
-        wrong,
-        total: mcTotal,
-      });
       setAutoGradeDialogOpen(true);
       toast.success('Calificación guardada.');
 
@@ -1455,6 +1563,12 @@ export default function CalificarPage() {
       setLiveResolvedCount(0);
       liveLockedAnswersRef.current = {};
     } catch (err: unknown) {
+      const code = err instanceof Error ? err.message : '';
+      if (code === 'incomplete_key') {
+        toast.error('Clave automática incompleta. Revisa que cada reactivo tenga respuesta correcta válida.');
+        setPhase('elegir');
+        return;
+      }
       const msg =
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: string }).message)
@@ -1466,176 +1580,73 @@ export default function CalificarPage() {
     }
   };
 
-  const commitGradeFromLive = useCallback(async () => {
-    if (!examId || !exam || phase !== 'capturar') {
-      toast.error('Selecciona un examen válido antes de revisar y confirmar.');
+  const saveMobileResultsEdits = async () => {
+    if (!isMobile || phase !== 'ver_resultados') return;
+    if (!exam || !examId) return;
+    for (const q of questions) {
+      if (!mobileResultsDraft[q.id]?.trim()) {
+        toast.error(`Falta la respuesta de la pregunta ${questions.findIndex((x) => x.id === q.id) + 1}`);
+        return;
+      }
+    }
+    if (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId)) {
+      toast.error('Alumno no válido.');
       return;
     }
-    const chunk = sheets[sheetIndex] ?? [];
-    if (chunk.length === 0) return;
-
+    if (!canGradeStudents) {
+      toast.error('Calificación bloqueada.');
+      return;
+    }
     setScanBusy(true);
     await yieldForSpinnerPaint();
     try {
-      const mergedChunk: Record<string, string> = { ...draftSelections };
-      for (const q of chunk) {
-        const live = liveDraftSelections[q.id]?.trim();
-        if (live) mergedChunk[q.id] = live;
-      }
-
-      const missing = chunk.filter((q) => !mergedChunk[q.id]?.trim());
-      if (missing.length > 0) {
-        toast.message(
-          `Faltan ${missing.length} respuesta(s). Puedes revisarlas y completarlas manualmente antes de guardar.`
-        );
-      }
-
-      let orientedForPreview: HTMLCanvasElement | null = null;
-      const video = videoRef.current;
-      if (video && video.readyState >= 2 && video.videoWidth >= 40) {
-        const frame = document.createElement('canvas');
-        frame.width = video.videoWidth;
-        frame.height = video.videoHeight;
-        const ctx = frame.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, frame.width, frame.height);
-          orientedForPreview = frame;
-        }
-      }
-
-      let visionToastShown = false;
-      if (
-        CALIFACIL_VISION_POLICY.onLiveCommitVision &&
-        examId &&
-        orientedForPreview &&
-        chunk.length > 0
-      ) {
-        const si = sheetIndexRef.current;
-        const rowsPayload = chunk.map((q, i) => ({
-          questionId: q.id,
-          globalNumber: si * 10 + i + 1,
-          options: q.options ?? [],
-        }));
-        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
-        try {
-          const imageBase64 = califacilImageToJpegDataUrl(orientedForPreview);
-          const res = await fetchVisionOmr({
-            examId,
-            imageBase64,
-            rows: rowsPayload,
-            omrColumnCount: omrCols,
-            focusNumbers,
-          });
-          const payload = (await res.json().catch(() => ({}))) as {
-            selections?: Record<string, string>;
-            code?: string;
-            error?: string;
-          };
-          if (res.ok && payload.selections) {
-            for (let i = 0; i < chunk.length; i++) {
-              const q = chunk[i];
-              const text = (payload.selections![q.id] ?? '').trim();
-              const opts = q.options ?? [];
-              if (text && opts.includes(text)) {
-                mergedChunk[q.id] = text;
-              }
-            }
-            visionToastShown = true;
-            toast.message('Lectura verificada con visión (revisa antes de guardar).');
-          } else if (res.status === 503 && payload.code === 'NO_KEY') {
-            visionToastShown = true;
-            toast.message('Lectura automática sin verificación IA (sin clave en el servidor).');
-          }
-        } catch {
-          /* mantener lectura OMR local */
-        }
-      }
-
-      let omrReviewMeta: OmrScanMetaResult | null = null;
-      let previewSource: HTMLCanvasElement | null = orientedForPreview;
-      if (orientedForPreview) {
-        omrReviewMeta = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, {
-          skipGuideCrop: true,
-          geometryMode: 'croppedBox',
-          preserveInputCanvas: true,
+      await persistStudentAnswers(mobileResultsDraft);
+      toast.success('Cambios guardados en la nube.');
+    } catch (err: unknown) {
+      const code = err instanceof Error ? err.message : '';
+      if (code === 'incomplete_key') {
+        toast.error('Clave automática incompleta.');
+      } else {
+        toast.error('No se pudo guardar', {
+          description: 'Revisa tu conexión y permisos.',
         });
-      }
-
-      if (isMobile && orientedForPreview && omrReviewMeta) {
-        const currentResolved = chunk.reduce((acc, q) => (mergedChunk[q.id]?.trim() ? acc + 1 : acc), 0);
-        const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
-        if (currentResolved < minResolved) {
-          const recoveredOriented =
-            autoOrientCalifacilSheet(orientedForPreview, omrCols, {
-              useGuideCrop: false,
-              allowTiltSweep: true,
-            }) ?? orientedForPreview;
-          const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoveredOriented, omrCols, {
-            skipGuideCrop: true,
-            geometryMode: 'auto',
-            preserveInputCanvas: false,
-          });
-          const recoveryDraft = mapRawToDraft(recoveryMeta.picks, chunk).draft;
-          let added = 0;
-          for (const q of chunk) {
-            const curr = mergedChunk[q.id]?.trim() ?? '';
-            const next = recoveryDraft[q.id]?.trim() ?? '';
-            if (!curr && next) {
-              mergedChunk[q.id] = next;
-              added++;
-            }
-          }
-          if (added > 0) {
-            omrReviewMeta = recoveryMeta;
-            previewSource = recoveredOriented;
-            toast.message(`Recuperación automática: ${added} respuesta(s) adicionales detectadas.`);
-          }
-        }
-      }
-
-      setReviewOmrGeometry(omrReviewMeta?.geometry ?? null);
-
-      setDraftSelections(mergedChunk);
-
-      if (previewSource && omrReviewMeta) {
-        await setPreviewFromSource(omrReviewMeta.reviewSourceCanvas ?? previewSource);
-      } else if (!previewSource) {
-        setPreviewUrl((u) => {
-          if (u) URL.revokeObjectURL(u);
-          return null;
-        });
-      }
-
-      setReviewQualityHint(
-        CALIFACIL_VISION_POLICY.onLiveCommitVision
-          ? 'Revisa cada opción; si hay clave de IA se ha intentado una segunda lectura de la foto.'
-          : 'Revisa y corrige cada opción si hace falta; la lectura en vivo es orientativa.'
-      );
-      setPhase('revisar_hoja');
-      setLiveStatus('Revisa cada respuesta y confirma con «Guardar calificación».');
-      if (!visionToastShown) {
-        toast.message('Revisa las lecturas antes de confirmar.');
       }
     } finally {
       setScanBusy(false);
     }
-  }, [
-    draftSelections,
-    exam,
-    examId,
-    isMobile,
-    liveDraftSelections,
-    mapRawToDraft,
-    omrCols,
-    phase,
-    setPreviewFromSource,
-    setPreviewUrl,
-    sheetIndex,
-    sheets,
-  ]);
+  };
+
+  const captureMobilePhotoManually = async () => {
+    if (!isMobile || scanBusy || mobileCaptureBusyRef.current) return;
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth < 40) {
+      toast.error('La cámara no está lista.');
+      return;
+    }
+    mobileCaptureBusyRef.current = true;
+    setScanBusy(true);
+    await yieldForSpinnerPaint();
+    try {
+      const fw = video.videoWidth;
+      const fh = video.videoHeight;
+      const fullCanvas = document.createElement('canvas');
+      fullCanvas.width = fw;
+      fullCanvas.height = fh;
+      const fctx = fullCanvas.getContext('2d', { willReadFrequently: true });
+      if (!fctx) return;
+      fctx.drawImage(video, 0, 0, fw, fh);
+      await finalizeCapturedSheet(fullCanvas);
+    } finally {
+      mobileCaptureBusyRef.current = false;
+      setScanBusy(false);
+    }
+  };
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
+    clearMobileSnapshots();
+    setMobileResultsDraft({});
+    setResultsSheetIdx(0);
     setReviewQualityHint(null);
     setSelectedStudentId('');
     setPhase('elegir');
@@ -1647,20 +1658,25 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     stablePartialTicksRef.current = 0;
     liveLockedAnswersRef.current = {};
+    setReviewOmrGeometry(null);
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
       return null;
     });
     setLiveStatus(
       isMobile
-        ? 'Abre la cámara para detectar respuestas en vivo.'
+        ? 'Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.'
         : 'Sube una imagen escaneada para leer respuestas.'
     );
     toast.message('Elige otro alumno para escanear su examen.');
-  }, [isMobile, stopLiveCamera]);
+  }, [isMobile, stopLiveCamera, clearMobileSnapshots]);
 
-  submitAllRef.current = submitAll;
-  autoCaptureAndCompareRef.current = autoCaptureAndCompare;
+  const exitMobileResultsView = useCallback(() => {
+    clearMobileSnapshots();
+    setMobileResultsDraft({});
+    setResultsSheetIdx(0);
+    setPhase('elegir');
+  }, [clearMobileSnapshots]);
 
   const scanAgainInLive = () => {
     const chunk = sheets[sheetIndex] ?? [];
@@ -1690,6 +1706,9 @@ export default function CalificarPage() {
                 {autoGradeStats.pct}%
               </div>
               <p className="text-center text-sm text-gray-600">{getGradeLabel(autoGradeStats.pct)}</p>
+              <p className="text-center text-sm font-semibold text-gray-800">
+                {autoGradeStats.correct}/{autoGradeStats.total} aciertos · {autoGradeStats.pct}%
+              </p>
               <div className="grid grid-cols-2 gap-3 text-center text-sm">
                 <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2">
                   <div className="text-xs text-green-800">Correctas</div>
@@ -1704,43 +1723,91 @@ export default function CalificarPage() {
             </div>
           )}
           <DialogFooter className="flex-col gap-2 sm:flex-col">
-            {examId ? (
-              <Button type="button" variant="outline" className="w-full" asChild>
-                <Link href={`/exams/results/${examId}`}>
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
-                  Ver en panel de resultados
-                </Link>
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              className="w-full bg-orange-600 hover:bg-orange-700"
-              onClick={() => {
-                setSelectedStudentId('');
-                setAutoGradeDialogOpen(false);
-              }}
-            >
-              Elegir otro alumno
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              onClick={() => setAutoGradeDialogOpen(false)}
-            >
-              Cerrar
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full text-gray-600"
-              onClick={() => {
-                setAutoGradeDialogOpen(false);
-                router.push('/dashboard');
-              }}
-            >
-              Ir al inicio del dashboard
-            </Button>
+            {isMobile ? (
+              <>
+                <Button
+                  type="button"
+                  className="w-full bg-orange-600 hover:bg-orange-700"
+                  onClick={() => {
+                    setAutoGradeDialogOpen(false);
+                    setResultsSheetIdx(0);
+                    setPhase('ver_resultados');
+                  }}
+                >
+                  Ver resultados
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setAutoGradeDialogOpen(false);
+                    switchToAnotherStudentScan();
+                  }}
+                >
+                  Calificar otro alumno
+                </Button>
+                {examId ? (
+                  <Button type="button" variant="outline" className="w-full" asChild>
+                    <Link href={`/exams/results/${examId}`}>
+                      <LayoutDashboard className="mr-2 h-4 w-4" />
+                      Ver en panel de resultados
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full text-gray-600"
+                  onClick={() => {
+                    setAutoGradeDialogOpen(false);
+                    router.push('/dashboard');
+                  }}
+                >
+                  Ir al inicio del dashboard
+                </Button>
+              </>
+            ) : (
+              <>
+                {examId ? (
+                  <Button type="button" variant="outline" className="w-full" asChild>
+                    <Link href={`/exams/results/${examId}`}>
+                      <LayoutDashboard className="mr-2 h-4 w-4" />
+                      Ver en panel de resultados
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  className="w-full bg-orange-600 hover:bg-orange-700"
+                  onClick={() => {
+                    setSelectedStudentId('');
+                    setAutoGradeDialogOpen(false);
+                  }}
+                >
+                  Elegir otro alumno
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => setAutoGradeDialogOpen(false)}
+                >
+                  Cerrar
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full text-gray-600"
+                  onClick={() => {
+                    setAutoGradeDialogOpen(false);
+                    router.push('/dashboard');
+                  }}
+                >
+                  Ir al inicio del dashboard
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1749,7 +1816,7 @@ export default function CalificarPage() {
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
-            ? 'Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).'
+            ? 'Alinea los cuadritos naranjas impresos con las esquinas grises; la foto se toma sola cuando la lectura es estable, o pulsa «Tomar foto».'
             : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
@@ -1768,7 +1835,7 @@ export default function CalificarPage() {
                 setExamId(v);
                 resetFlow();
               }}
-              disabled={examsLoading || phase === 'guardando'}
+              disabled={examsLoading || phase === 'guardando' || (isMobile && phase === 'ver_resultados')}
             >
               <SelectTrigger>
                 <SelectValue placeholder={examsLoading ? 'Cargando…' : 'Elige un examen'} />
@@ -1927,7 +1994,9 @@ export default function CalificarPage() {
                   students={sortedStudents}
                   value={selectedStudentId}
                   onValueChange={handleStudentChange}
-                  disabled={phase === 'guardando' || !canGradeStudents}
+                  disabled={
+                    phase === 'guardando' || (isMobile && phase === 'ver_resultados') || !canGradeStudents
+                  }
                   placeholder="Busca y elige al alumno"
                   searchPlaceholder="Escribe para buscar…"
                   emptyText="Ningún alumno coincide."
@@ -1944,6 +2013,28 @@ export default function CalificarPage() {
                 </p>
               </div>
 
+              {isMobile && canGradeStudents && selectedStudentId && phase === 'elegir' && (
+                <div className="space-y-2 rounded-lg border border-orange-200 bg-orange-50/90 p-3">
+                  <p className="text-sm font-medium text-orange-950">
+                    Listo para hoja {sheetIndex + 1} de {totalSheets}
+                  </p>
+                  <p className="text-xs text-orange-900/90">
+                    Pulsa para abrir la cámara. Encuadra la zona CaliFacil: en papel hay esquinas naranjas; en
+                    pantalla, esquinas grises difuminadas.
+                  </p>
+                  <Button
+                    type="button"
+                    className="w-full bg-orange-600 hover:bg-orange-700"
+                    disabled={scanBusy}
+                    onClick={() => {
+                      setPhase('capturar');
+                      void startLiveCamera();
+                    }}
+                  >
+                    Tomar foto
+                  </Button>
+                </div>
+              )}
             </>
           )}
 
@@ -2001,24 +2092,22 @@ export default function CalificarPage() {
                             muted
                             className="aspect-[4/3] min-h-[12rem] w-full bg-black object-cover"
                           />
-                          {showAutoSnapshot && autoSnapshotUrl ? (
-                            <>
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={autoSnapshotUrl}
-                                alt="Snapshot automático de captura"
-                                className="absolute inset-0 z-[2] h-full w-full object-cover"
-                              />
-                              <div className="absolute left-1/2 top-3 z-[3] -translate-x-1/2 rounded-full bg-green-600/95 px-3 py-1 text-xs font-semibold text-white shadow">
-                                Captura automática realizada
-                              </div>
-                            </>
-                          ) : null}
                           <div className="pointer-events-none absolute inset-0 bg-black/20" />
                           <div
-                            className="pointer-events-none absolute left-1/2 top-[62%] w-[86%] -translate-x-1/2 -translate-y-1/2 rounded-lg border-[2.5px] border-orange-400/95 shadow-[0_0_0_9999px_rgba(0,0,0,0.2)]"
-                            style={{ aspectRatio: `${CALIFACIL_OMR_GUIDE_ASPECT_RATIO} / 1` }}
-                          />
+                            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+                            style={{
+                              left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
+                              top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
+                              width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
+                              aspectRatio: `${CALIFACIL_OMR_GUIDE_ASPECT_RATIO} / 1`,
+                            }}
+                          >
+                            <div className="absolute inset-0 rounded-lg border border-white/25 shadow-[0_0_0_9999px_rgba(0,0,0,0.22)]" />
+                            <span className="absolute -left-1 -top-1 block h-4 w-4 rounded-tl-md bg-gray-400/50 blur-[3px]" />
+                            <span className="absolute -right-1 -top-1 block h-4 w-4 rounded-tr-md bg-gray-400/50 blur-[3px]" />
+                            <span className="absolute -bottom-1 -left-1 block h-4 w-4 rounded-bl-md bg-gray-400/50 blur-[3px]" />
+                            <span className="absolute -bottom-1 -right-1 block h-4 w-4 rounded-br-md bg-gray-400/50 blur-[3px]" />
+                          </div>
                         </div>
                         <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
                           {liveStatus}
@@ -2035,28 +2124,48 @@ export default function CalificarPage() {
                           </Button>
                         )}
                         <div className="flex flex-col gap-2">
-                          <div className="flex gap-2">
-                            <Button
-                              className={cn(
-                                'flex-1 bg-orange-600 hover:bg-orange-700',
-                                scanBusy && 'disabled:opacity-100'
-                              )}
-                              onClick={() => void commitGradeFromLive()}
-                              disabled={scanBusy}
-                            >
-                              {scanBusy ? (
-                                <Loader2
-                                  className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                                  aria-hidden
-                                />
-                              ) : (
-                                'Revisar y confirmar'
-                              )}
-                            </Button>
-                            <Button variant="outline" className="flex-1" onClick={scanAgainInLive}>
-                              Escanear otra vez
-                            </Button>
-                          </div>
+                          <Button
+                            type="button"
+                            className={cn(
+                              'w-full bg-orange-600 hover:bg-orange-700',
+                              scanBusy && 'disabled:opacity-100'
+                            )}
+                            disabled={scanBusy}
+                            onClick={() => void captureMobilePhotoManually()}
+                          >
+                            {scanBusy ? (
+                              <Loader2
+                                className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                                aria-hidden
+                              />
+                            ) : (
+                              'Tomar foto'
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full"
+                            onClick={() => galleryInputRef.current?.click()}
+                            disabled={scanBusy}
+                          >
+                            Subir foto…
+                          </Button>
+                          <Button variant="outline" className="w-full" onClick={scanAgainInLive}>
+                            Reiniciar lectura en vivo
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full"
+                            disabled={scanBusy}
+                            onClick={() => {
+                              stopLiveCamera();
+                              setPhase('elegir');
+                            }}
+                          >
+                            Volver
+                          </Button>
                           <Button
                             type="button"
                             variant="secondary"
@@ -2066,17 +2175,6 @@ export default function CalificarPage() {
                           >
                             Escanear examen de otro alumno
                           </Button>
-                          {!isMobile ? (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="w-full"
-                              onClick={() => galleryInputRef.current?.click()}
-                              disabled={scanBusy}
-                            >
-                              O subir imagen desde la computadora
-                            </Button>
-                          ) : null}
                         </div>
                       </div>
                     )}
@@ -2126,14 +2224,14 @@ export default function CalificarPage() {
                       alt="Vista previa del recuadro CaliFacil"
                       className="relative z-0 block max-h-96 w-auto max-w-full"
                     />
-                    {mobileGuideClipRect ? (
+                    {reviewOrangeFrameRect ? (
                       <div
                         className="pointer-events-none absolute rounded-lg border-[2.5px] border-orange-400/95"
                         style={{
-                          left: `${mobileGuideClipRect.x * 100}%`,
-                          top: `${mobileGuideClipRect.y * 100}%`,
-                          width: `${mobileGuideClipRect.w * 100}%`,
-                          height: `${mobileGuideClipRect.h * 100}%`,
+                          left: `${reviewOrangeFrameRect.x * 100}%`,
+                          top: `${reviewOrangeFrameRect.y * 100}%`,
+                          width: `${reviewOrangeFrameRect.w * 100}%`,
+                          height: `${reviewOrangeFrameRect.h * 100}%`,
                         }}
                         aria-hidden
                       />
@@ -2145,7 +2243,7 @@ export default function CalificarPage() {
                         expectedPicks={expectedChunkPicks}
                         expectedOpacity={overlayOpacity / 100}
                         rowCount={currentChunk.length}
-                        clipRect={mobileGuideClipRect}
+                        clipRect={null}
                       />
                     ) : null}
                   </div>
@@ -2219,7 +2317,12 @@ export default function CalificarPage() {
                     variant="outline"
                     className="flex-1"
                     onClick={() => {
-                      setPhase('capturar');
+                      if (isMobile) {
+                        stopLiveCamera();
+                        setPhase('elegir');
+                      } else {
+                        setPhase('capturar');
+                      }
                       setReviewOmrGeometry(null);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
@@ -2241,6 +2344,144 @@ export default function CalificarPage() {
                 </div>
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isMobile && phase === 'ver_resultados' && exam && mobileSheetSnapshots.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Resultados guardados</CardTitle>
+            <CardDescription>
+              {selectedStudentName.trim() || 'Alumno'} · Revisa cada hoja; puedes corregir y volver a guardar en la
+              nube.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Tabs
+              value={String(resultsSheetIdx)}
+              onValueChange={(v) => {
+                const n = Number(v);
+                setResultsSheetIdx(Number.isFinite(n) ? n : 0);
+              }}
+            >
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
+                {mobileSheetSnapshots.map((snap, i) => (
+                  <TabsTrigger key={`rs-tab-${snap.sheetIndex}-${i}`} value={String(i)} className="text-xs">
+                    Hoja {snap.sheetIndex + 1}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {mobileSheetSnapshots.map((snap, tabIdx) => {
+                const chunk = sheets[snap.sheetIndex] ?? [];
+                const orangeFrameRect = califacilReviewOrangeFrameRect(snap.geometry, chunk.length);
+                let rCorrect = 0;
+                for (const q of chunk) {
+                  const draftText = mobileResultsDraft[q.id]?.trim() ?? '';
+                  const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
+                  if (!expectedText) continue;
+                  const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
+                  const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
+                  if (pi !== null && ei !== null && pi === ei) rCorrect++;
+                }
+                const rTotal = chunk.length;
+                const rPct = rTotal > 0 ? calculatePercentage(rCorrect, rTotal) : 0;
+                const tabExpectedPicks = draftSelectionsToColumnPicks(chunk, examVirtualKeyByQuestionId);
+                const tabPicks = draftSelectionsToColumnPicks(chunk, mobileResultsDraft);
+                return (
+                  <TabsContent key={`rs-content-${tabIdx}`} value={String(tabIdx)} className="mt-4 space-y-4">
+                    <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
+                      <div className="relative inline-block max-h-96 max-w-full">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={snap.previewUrl}
+                          alt={`Hoja ${snap.sheetIndex + 1}`}
+                          className="relative z-0 block max-h-96 w-auto max-w-full"
+                        />
+                        {orangeFrameRect ? (
+                          <div
+                            className="pointer-events-none absolute rounded-lg border-[2.5px] border-orange-400/95"
+                            style={{
+                              left: `${orangeFrameRect.x * 100}%`,
+                              top: `${orangeFrameRect.y * 100}%`,
+                              width: `${orangeFrameRect.w * 100}%`,
+                              height: `${orangeFrameRect.h * 100}%`,
+                            }}
+                            aria-hidden
+                          />
+                        ) : null}
+                        <CalifacilOmrReviewOverlay
+                          geometry={snap.geometry}
+                          picks={tabPicks}
+                          expectedPicks={tabExpectedPicks}
+                          expectedOpacity={overlayOpacity / 100}
+                          rowCount={chunk.length}
+                          clipRect={null}
+                        />
+                      </div>
+                    </div>
+                    {canGradeStudents && chunk.length > 0 ? (
+                      <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
+                        <div className="text-sm font-semibold text-emerald-950">
+                          <span className="tabular-nums">{rCorrect}</span>
+                          <span className="text-emerald-800"> / </span>
+                          <span className="tabular-nums">{rTotal}</span>
+                          <span className="mx-1.5 text-emerald-700">·</span>
+                          <span className={`tabular-nums ${getGradeColor(rPct)}`}>{rPct}%</span>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-snug text-emerald-900/85">
+                          Verde = acierto, rojo = opción leída incorrecta, naranja = respuesta correcta esperada.
+                        </p>
+                      </div>
+                    ) : null}
+                    {chunk.map((q, idx) => {
+                      const globalNum = snap.sheetIndex * 10 + idx + 1;
+                      const opts = q.options ?? [];
+                      const val = mobileResultsDraft[q.id]?.trim() ?? '';
+                      return (
+                        <div key={`${tabIdx}-${q.id}`} className="flex flex-col gap-1">
+                          <Label className="text-xs text-gray-600">Pregunta {globalNum}</Label>
+                          <Select
+                            value={val ? val : SELECT_NO_OPTION}
+                            onValueChange={(v) => {
+                              setMobileResultsDraft((prev) => ({
+                                ...prev,
+                                [q.id]: v === SELECT_NO_OPTION ? '' : v,
+                              }));
+                            }}
+                          >
+                            <SelectTrigger className="w-full max-w-md">
+                              <SelectValue placeholder="Elegir opción leída" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={SELECT_NO_OPTION}>Elegir opción leída</SelectItem>
+                              {opts.map((opt, oi) => (
+                                <SelectItem key={opt} value={opt}>
+                                  {String.fromCharCode(65 + oi)}. {opt}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      );
+                    })}
+                  </TabsContent>
+                );
+              })}
+            </Tabs>
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row">
+              <Button
+                type="button"
+                className="flex-1 bg-orange-600 hover:bg-orange-700"
+                disabled={scanBusy}
+                onClick={() => void saveMobileResultsEdits()}
+              >
+                Guardar cambios
+              </Button>
+              <Button type="button" variant="outline" className="flex-1" onClick={exitMobileResultsView}>
+                Listo
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

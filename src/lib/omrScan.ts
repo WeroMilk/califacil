@@ -3,7 +3,7 @@
  * Debe coincidir con el layout de `printExam.ts` (tabla 10 filas × N columnas de burbujas).
  */
 
-import { CALIFACIL_OMR_GUIDE_ASPECT_RATIO } from '@/lib/printExam';
+import { CALIFACIL_OMR_GUIDE_ASPECT_RATIO, CALIFACIL_VIEWFINDER_GUIDE } from '@/lib/printExam';
 
 export const CALIFACIL_OMR_SCAN = {
   /** Fracción inferior de la imagen donde cae el recuadro CaliFacil impreso */
@@ -143,6 +143,65 @@ export type CalifacilOmrScanGeometry = {
   /** 10 filas × `cols` celdas de opción (solo cuerpo de tabla, sin cabecera). */
   cells: OmrNormRect[][];
 };
+
+/**
+ * Rectángulo normalizado (0–1) del mismo marco que el visor CaliFacil, para superponer sobre la imagen.
+ */
+export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect | null {
+  if (W < 80 || H < 80) return null;
+  const ar = CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
+  const { widthFrac, centerXFrac, centerYFrac } = CALIFACIL_VIEWFINDER_GUIDE;
+  const rectW = Math.min(W * widthFrac, W - 2);
+  const rectH = rectW / ar;
+  if (rectH > H * 0.98) return null;
+  const cx = W * centerXFrac;
+  const cy = H * centerYFrac;
+  let left = Math.round(cx - rectW / 2);
+  let top = Math.round(cy - rectH / 2);
+  const rw = Math.round(rectW);
+  const rh = Math.round(rectH);
+  left = Math.max(0, Math.min(left, W - rw));
+  top = Math.max(0, Math.min(top, H - rh));
+  if (rw < 100 || rh < 48 || left + rw > W || top + rh > H) return null;
+  return { x: left / W, y: top / H, w: rw / W, h: rh / H };
+}
+
+/**
+ * Caja que envuelve todas las celdas OMR detectadas (más un pequeño margen), para alinear
+ * el marco naranja de revisión con el overlay verde/rojo.
+ */
+export function califacilGeometryTableBounds(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): OmrNormRect | null {
+  const rows = Math.min(10, Math.max(0, rowCount), geometry.cells.length);
+  if (rows <= 0) return null;
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  let any = false;
+  for (let r = 0; r < rows; r++) {
+    const rowCells = geometry.cells[r];
+    if (!rowCells?.length) continue;
+    for (let c = 0; c < rowCells.length; c++) {
+      const cell = rowCells[c];
+      if (!cell) continue;
+      any = true;
+      minX = Math.min(minX, cell.x);
+      minY = Math.min(minY, cell.y);
+      maxX = Math.max(maxX, cell.x + cell.w);
+      maxY = Math.max(maxY, cell.y + cell.h);
+    }
+  }
+  if (!any || minX >= maxX || minY >= maxY) return null;
+  const pad = 0.012;
+  const x = Math.max(0, minX - pad);
+  const y = Math.max(0, minY - pad);
+  const x2 = Math.min(1, maxX + pad);
+  const y2 = Math.min(1, maxY + pad);
+  return { x, y, w: x2 - x, h: y2 - y };
+}
 
 type ScanDetailedResult = {
   picks: (number | null)[];
@@ -1203,26 +1262,19 @@ function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElemen
 }
 
 /**
- * Recorta la región equivalente al marco naranja en Calificar (centrado 50%/62%, ancho 86%, misma relación de aspecto).
+ * Recorta la región equivalente al marco guía en Calificar (CALIFACIL_VIEWFINDER_GUIDE + mismo aspect ratio).
  * Alinea el análisis OMR con lo que el usuario encuadra en cámara.
  */
 export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   const W = canvas.width;
   const H = canvas.height;
-  if (W < 80 || H < 80) return null;
-  const ar = CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
-  const rectW = Math.min(W * 0.86, W - 2);
-  const rectH = rectW / ar;
-  if (rectH > H * 0.98) return null;
-  const cx = W * 0.5;
-  const cy = H * 0.62;
-  let left = Math.round(cx - rectW / 2);
-  let top = Math.round(cy - rectH / 2);
-  const rw = Math.round(rectW);
-  const rh = Math.round(rectH);
-  left = Math.max(0, Math.min(left, W - rw));
-  top = Math.max(0, Math.min(top, H - rh));
+  const norm = califacilViewfinderNormRect(W, H);
+  if (!norm) return null;
+  const left = Math.round(norm.x * W);
+  const top = Math.round(norm.y * H);
+  const rw = Math.round(norm.w * W);
+  const rh = Math.round(norm.h * H);
   if (rw < 100 || rh < 48 || left + rw > W || top + rh > H) return null;
   const out = document.createElement('canvas');
   out.width = rw;

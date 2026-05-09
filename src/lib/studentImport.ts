@@ -45,6 +45,29 @@ function isTemplateJunk(value: string): boolean {
   return false;
 }
 
+/**
+ * Excel en Windows suele exportar CSV en Windows-1252 o UTF-16; interpretarlo como UTF-8
+ * corrompe Ñ/tildes y el navegador muestra � (U+FFFD).
+ */
+function decodeStudentImportCsvBytes(bytes: Uint8Array): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(bytes);
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be').decode(bytes);
+  }
+  let offset = 0;
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    offset = 3;
+  }
+  const payload = bytes.subarray(offset);
+  const asUtf8 = new TextDecoder('utf-8').decode(payload);
+  if (asUtf8.includes('\uFFFD')) {
+    return new TextDecoder('windows-1252').decode(payload);
+  }
+  return asUtf8;
+}
+
 function rowToName(row: Record<string, unknown>): string | null {
   const last = readByKeys(row, LASTNAME_KEYS);
   const first = readByKeys(row, FIRSTNAME_KEYS);
@@ -78,20 +101,16 @@ export function parseStudentNamesFromXlsxArrayBuffer(buffer: ArrayBuffer): strin
   return rows.map(rowToName).filter((n): n is string => Boolean(n));
 }
 
-export function parseStudentNamesFromCsvFile(file: File): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    Papa.parse<Record<string, unknown>>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const names = (results.data || [])
-          .map((row) => rowToName(row))
-          .filter((n): n is string => Boolean(n));
-        resolve(names);
-      },
-      error: (err) => reject(err),
-    });
+export async function parseStudentNamesFromCsvFile(file: File): Promise<string[]> {
+  const buf = await file.arrayBuffer();
+  const text = decodeStudentImportCsvBytes(new Uint8Array(buf));
+  const result = Papa.parse<Record<string, unknown>>(text, {
+    header: true,
+    skipEmptyLines: true,
   });
+  return (result.data || [])
+    .map((row) => rowToName(row))
+    .filter((n): n is string => Boolean(n));
 }
 
 /** CSV (exportado desde Excel o nativo) o Excel `.xlsx` / `.xls`. */

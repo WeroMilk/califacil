@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
@@ -13,9 +13,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ArrowLeft,
+  ChevronsUpDown,
   QrCode,
   Copy,
   Download,
@@ -96,6 +98,17 @@ function buildQuestionPayload(draft: QuestionDraft) {
   };
 }
 
+function summarizeAssignedGroups(ids: string[], groups: { id: string; name: string }[]): string {
+  if (ids.length === 0) return 'Selecciona uno o más grupos';
+  const names = ids
+    .map((id) => groups.find((g) => g.id === id)?.name)
+    .filter((n): n is string => Boolean(n));
+  if (names.length === 0) return 'Selecciona uno o más grupos';
+  if (names.length === 1) return names[0];
+  if (names.length <= 3) return names.join(', ');
+  return `${names.length} grupos seleccionados`;
+}
+
 function draftFromQuestion(question: Question): QuestionDraft {
   return {
     text: question.text || '',
@@ -119,6 +132,7 @@ export default function ExamDetailPage() {
   const [assignedGroupIds, setAssignedGroupIds] = useState<string[]>([]);
   const [loadingAssignedGroups, setLoadingAssignedGroups] = useState(false);
   const [savingAssignedGroups, setSavingAssignedGroups] = useState(false);
+  const [groupsPickerOpen, setGroupsPickerOpen] = useState(false);
   const [newQuestion, setNewQuestion] = useState<QuestionDraft>({
     text: '',
     type: 'multiple_choice',
@@ -153,6 +167,21 @@ export default function ExamDetailPage() {
       cancelled = true;
     };
   }, [exam?.id, exam?.group_id]);
+
+  const assignedGroupsSummary = useMemo(
+    () => summarizeAssignedGroups(assignedGroupIds, groups),
+    [assignedGroupIds, groups]
+  );
+
+  const toggleAssignedGroup = (groupId: string, enabled: boolean) => {
+    setAssignedGroupIds((prev) =>
+      enabled
+        ? prev.includes(groupId)
+          ? prev
+          : [...prev, groupId]
+        : prev.filter((id) => id !== groupId)
+    );
+  };
 
   const handleSaveAssignedGroups = async () => {
     if (!exam) return;
@@ -400,27 +429,44 @@ export default function ExamDetailPage() {
             ) : groups.length === 0 ? (
               <p className="text-sm text-gray-500">No tienes grupos creados.</p>
             ) : (
-              groups.map((group) => {
-                const checked = assignedGroupIds.includes(group.id);
-                return (
-                  <label key={group.id} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(value) => {
-                        const enabled = value === true;
-                        setAssignedGroupIds((prev) =>
-                          enabled
-                            ? prev.includes(group.id)
-                              ? prev
-                              : [...prev, group.id]
-                            : prev.filter((id) => id !== group.id)
-                        );
-                      }}
-                    />
-                    <span>{group.name}</span>
-                  </label>
-                );
-              })
+              <Popover open={groupsPickerOpen} onOpenChange={setGroupsPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    aria-label="Seleccionar grupos del examen"
+                    aria-expanded={groupsPickerOpen}
+                    className="h-auto min-h-10 w-full max-w-md justify-between gap-2 py-2 pr-3 text-left font-normal"
+                  >
+                    <span className="line-clamp-2 text-sm leading-snug">{assignedGroupsSummary}</span>
+                    <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" aria-hidden />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  className="max-h-72 w-[calc(100vw-2rem)] max-w-md overflow-hidden p-0 sm:w-auto"
+                  onOpenAutoFocus={(e) => e.preventDefault()}
+                >
+                  <p className="border-b px-3 py-2 text-xs text-muted-foreground">Marca uno o varios grupos</p>
+                  <div className="max-h-[min(16rem,calc(100vh-14rem))] overflow-y-auto p-2">
+                    {groups.map((group) => {
+                      const checked = assignedGroupIds.includes(group.id);
+                      return (
+                        <label
+                          key={group.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-accent/60"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) => toggleAssignedGroup(group.id, value === true)}
+                          />
+                          <span className="min-w-0 flex-1 leading-snug">{group.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
             )}
 
             <div className="pt-2">
