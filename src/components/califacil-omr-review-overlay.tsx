@@ -56,7 +56,7 @@ export function CalifacilOmrReviewOverlay({
     <svg
       className="pointer-events-none absolute left-0 top-0 h-full w-full"
       viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
+      preserveAspectRatio="xMidYMid meet"
       shapeRendering="geometricPrecision"
       aria-hidden
     >

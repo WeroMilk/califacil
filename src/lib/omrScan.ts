@@ -2916,7 +2916,8 @@ export function scanCalifacilOmrSheetWithMeta(
   }
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
-  const reviewCanvas = opts?.preserveInputCanvas ? canvas : bestReviewCanvas;
+  /** Misma variante de píxeles que eligió la geometría (evita desajuste visual en revisión). */
+  const reviewCanvas = opts?.preserveInputCanvas ? (bestReviewCanvas ?? canvas) : bestReviewCanvas;
   return {
     picks: best.picks,
     rows: best.rows,

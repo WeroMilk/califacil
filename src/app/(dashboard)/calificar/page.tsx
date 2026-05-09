@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -192,6 +192,56 @@ function califacilReviewOrangeFrameRect(
   return (
     califacilGeometryTableBounds(geometry, rowCount) ??
     califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
+  );
+}
+
+/** Imagen + overlay: mismo aspecto que `geometry` para que el SVG no se estire respecto al JPEG. */
+function CalifacilReviewImageStack({
+  previewUrl,
+  alt,
+  geometry,
+  orangeFrameRect,
+  overlay,
+}: {
+  previewUrl: string;
+  alt: string;
+  geometry: CalifacilOmrScanGeometry;
+  orangeFrameRect: { x: number; y: number; w: number; h: number } | null;
+  overlay: ReactNode;
+}) {
+  const W = Math.max(1, geometry.imageWidth);
+  const H = Math.max(1, geometry.imageHeight);
+  return (
+    <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
+      <div
+        className="relative overflow-hidden rounded-md bg-neutral-200/50"
+        style={{
+          width: `min(100%, calc(24rem * ${W} / ${H}))`,
+          aspectRatio: `${W} / ${H}`,
+          maxHeight: '24rem',
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={previewUrl}
+          alt={alt}
+          className="absolute inset-0 z-0 h-full w-full object-contain object-center"
+        />
+        {orangeFrameRect ? (
+          <div
+            className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
+            style={{
+              left: `${orangeFrameRect.x * 100}%`,
+              top: `${orangeFrameRect.y * 100}%`,
+              width: `${orangeFrameRect.w * 100}%`,
+              height: `${orangeFrameRect.h * 100}%`,
+            }}
+            aria-hidden
+          />
+        ) : null}
+        <div className="pointer-events-none absolute inset-0 z-[2]">{overlay}</div>
+      </div>
+    </div>
   );
 }
 
@@ -2373,27 +2423,13 @@ export default function CalificarPage() {
 
             {previewUrl && phase === 'revisar_hoja' && (
               <div className="space-y-2">
-                <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
-                  <div className="relative inline-block max-h-96 max-w-full">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={previewUrl}
-                      alt="Vista previa del recuadro CaliFacil"
-                      className="relative z-0 block max-h-96 w-auto max-w-full"
-                    />
-                    {reviewOrangeFrameRect ? (
-                      <div
-                        className="pointer-events-none absolute rounded-lg border-[2.5px] border-orange-400/95"
-                        style={{
-                          left: `${reviewOrangeFrameRect.x * 100}%`,
-                          top: `${reviewOrangeFrameRect.y * 100}%`,
-                          width: `${reviewOrangeFrameRect.w * 100}%`,
-                          height: `${reviewOrangeFrameRect.h * 100}%`,
-                        }}
-                        aria-hidden
-                      />
-                    ) : null}
-                    {reviewOmrGeometry ? (
+                {reviewOmrGeometry ? (
+                  <CalifacilReviewImageStack
+                    previewUrl={previewUrl}
+                    alt="Vista previa del examen escaneado"
+                    geometry={reviewOmrGeometry}
+                    orangeFrameRect={reviewOrangeFrameRect}
+                    overlay={
                       <CalifacilOmrReviewOverlay
                         geometry={reviewOmrGeometry}
                         picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
@@ -2402,9 +2438,20 @@ export default function CalificarPage() {
                         rowCount={currentChunk.length}
                         clipRect={null}
                       />
-                    ) : null}
+                    }
+                  />
+                ) : (
+                  <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
+                    <div className="relative inline-block max-h-96 max-w-full">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={previewUrl}
+                        alt="Vista previa del examen escaneado"
+                        className="relative z-0 block max-h-96 w-auto max-w-full"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
                 {canGradeStudents && currentChunk.length > 0 ? (
                   <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
                     <div className="text-sm font-semibold text-emerald-950">
@@ -2547,26 +2594,12 @@ export default function CalificarPage() {
                 const tabPicks = draftSelectionsToColumnPicks(chunk, mobileResultsDraft);
                 return (
                   <TabsContent key={`rs-content-${tabIdx}`} value={String(tabIdx)} className="mt-4 space-y-4">
-                    <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
-                      <div className="relative inline-block max-h-96 max-w-full">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={snap.previewUrl}
-                          alt={`Hoja ${snap.sheetIndex + 1}`}
-                          className="relative z-0 block max-h-96 w-auto max-w-full"
-                        />
-                        {orangeFrameRect ? (
-                          <div
-                            className="pointer-events-none absolute rounded-lg border-[2.5px] border-orange-400/95"
-                            style={{
-                              left: `${orangeFrameRect.x * 100}%`,
-                              top: `${orangeFrameRect.y * 100}%`,
-                              width: `${orangeFrameRect.w * 100}%`,
-                              height: `${orangeFrameRect.h * 100}%`,
-                            }}
-                            aria-hidden
-                          />
-                        ) : null}
+                    <CalifacilReviewImageStack
+                      previewUrl={snap.previewUrl}
+                      alt={`Hoja ${snap.sheetIndex + 1}`}
+                      geometry={snap.geometry}
+                      orangeFrameRect={orangeFrameRect}
+                      overlay={
                         <CalifacilOmrReviewOverlay
                           geometry={snap.geometry}
                           picks={tabPicks}
@@ -2575,8 +2608,8 @@ export default function CalificarPage() {
                           rowCount={chunk.length}
                           clipRect={null}
                         />
-                      </div>
-                    </div>
+                      }
+                    />
                     {canGradeStudents && chunk.length > 0 ? (
                       <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
                         <div className="text-sm font-semibold text-emerald-950">
