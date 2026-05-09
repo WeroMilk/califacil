@@ -22,6 +22,23 @@ export const CALIFACIL_VIEWFINDER_GUIDE = {
   aspectRatio: 8.5 / 11,
 } as const;
 
+/**
+ * Banda `.califacil-omr` dentro del alto del bundle de impresión (`--sheet-inner-height: 11in − 16mm`),
+ * para superponer en cámara las esquinas naranjas sobre los cuadros negros del pie.
+ */
+export const CALIFACIL_OMR_BAND_IN_PRINT_PAGE = (() => {
+  const letterMm = 11 * 25.4;
+  const trimMm = 16;
+  const bundleHmm = letterMm - trimMm;
+  const bottomGapMm = 5;
+  const bandHmm = 70;
+  const topMm = bundleHmm - bottomGapMm - bandHmm;
+  return {
+    topFrac: topMm / bundleHmm,
+    heightFrac: bandHmm / bundleHmm,
+  } as const;
+})();
+
 export type CalifacilVirtualKeyRow = {
   questionId: string;
   questionNumber: number;
@@ -184,6 +201,10 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
+      <span class="omr-align-corner omr-align-corner--tl" aria-hidden="true"></span>
+      <span class="omr-align-corner omr-align-corner--tr" aria-hidden="true"></span>
+      <span class="omr-align-corner omr-align-corner--bl" aria-hidden="true"></span>
+      <span class="omr-align-corner omr-align-corner--br" aria-hidden="true"></span>
       <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
       <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-version="2">
         ${thead}
@@ -401,6 +422,19 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
 
       print-color-adjust: exact;
     }
+    .omr-align-corner {
+      position: absolute;
+      width: 5.5pt;
+      height: 5.5pt;
+      background: #000;
+      z-index: 3;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .omr-align-corner--tl { top: -0.8pt; left: -0.8pt; }
+    .omr-align-corner--tr { top: -0.8pt; right: -0.8pt; }
+    .omr-align-corner--bl { bottom: -0.8pt; left: -0.8pt; }
+    .omr-align-corner--br { bottom: -0.8pt; right: -0.8pt; }
     .omr-title {
       font-size: 6.4pt;
       font-weight: bold;

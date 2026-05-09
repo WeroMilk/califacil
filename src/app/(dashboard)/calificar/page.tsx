@@ -11,6 +11,7 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
+  CALIFACIL_OMR_BAND_IN_PRINT_PAGE,
   CALIFACIL_VIEWFINDER_GUIDE,
   chunkQuestions,
   califacilOmrColumnCount,
@@ -98,8 +99,8 @@ const STABLE_PARTIAL_TICKS = 3;
 const STABLE_FULL_TICKS = 2;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
-/** Resolución máxima usada para escaneo en vivo móvil (mejora fluidez). */
-const MOBILE_SCAN_MAX_WIDTH = 960;
+/** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
+const MOBILE_SCAN_MAX_WIDTH = 720;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -231,6 +232,8 @@ export default function CalificarPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
+  const liveDraftDisplaySigRef = useRef('');
+  const liveResolvedDisplayedRef = useRef(-1);
   const stablePartialTicksRef = useRef(0);
   const stableFullTicksRef = useRef(0);
   const lowVisibilityTicksRef = useRef(0);
@@ -428,13 +431,15 @@ export default function CalificarPage() {
     glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     liveLockedAnswersRef.current = {};
+    liveDraftDisplaySigRef.current = '';
+    liveResolvedDisplayedRef.current = -1;
     liveCompleteSoundPlayedRef.current = false;
     stopScanningHum();
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Encuadra la hoja carta completa: alinea las esquinas grises con los cuadros negros de las esquinas del papel, o pulsa «Tomar foto».'
+        ? 'Encuadra la hoja: el marco blanco es la carta; las esquinas naranjas deben coincidir con los cuadros negros del pie CaliFacil. Pulsa «Tomar foto» cuando quieras.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -443,7 +448,7 @@ export default function CalificarPage() {
   const stopLiveCamera = useCallback(() => {
     stopScanningHum();
     if (liveTickRef.current !== null) {
-      window.clearInterval(liveTickRef.current);
+      window.clearTimeout(liveTickRef.current);
       liveTickRef.current = null;
     }
     if (typeof document !== 'undefined' && document.fullscreenElement) {
@@ -1171,23 +1176,44 @@ export default function CalificarPage() {
       setFlashSupported(supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
-      const liveScanIntervalMs = isMobile ? 900 : 750;
       const scanCanvas = document.createElement('canvas');
       const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
       let hotLoopStatus = '';
 
-      liveTickRef.current = window.setInterval(async () => {
-        if (liveBusyRef.current) return;
-        if (isMobile && mobileCaptureBusyRef.current) return;
-        if (!examId || !exam || phaseRef.current !== 'capturar') {
+      const scheduleLiveScan = (delayMs: number) => {
+        if (liveTickRef.current !== null) {
+          window.clearTimeout(liveTickRef.current);
+        }
+        liveTickRef.current = window.setTimeout(() => {
+          void runLiveScanLoop();
+        }, delayMs);
+      };
+
+      const runLiveScanLoop = async () => {
+        let nextDelay = isMobile ? 700 : 600;
+        if (!streamRef.current || !examId || !exam || phaseRef.current !== 'capturar') {
           stopScanningHum();
+          liveTickRef.current = null;
           return;
         }
-        const video = videoRef.current;
-        if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) return;
-        if (!scanCtx) return;
+        if (liveBusyRef.current) {
+          scheduleLiveScan(100);
+          return;
+        }
+        if (isMobile && mobileCaptureBusyRef.current) {
+          scheduleLiveScan(200);
+          return;
+        }
+
         liveBusyRef.current = true;
         try {
+          const video = videoRef.current;
+          if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) {
+            nextDelay = 100;
+            return;
+          }
+          if (!scanCtx) return;
+
           let targetW = video.videoWidth;
           let targetH = video.videoHeight;
           if (isMobile && targetW > MOBILE_SCAN_MAX_WIDTH) {
@@ -1212,15 +1238,24 @@ export default function CalificarPage() {
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
             let resolvedNoExam = 0;
+            let noExamSig = '';
             for (const q of chunk) {
               const locked = locksNoExam[q.id]?.trim();
               mergedNoExam[q.id] = locked || '';
+              noExamSig += `${locked ?? ''}\n`;
               if (locked) resolvedNoExam++;
             }
-            setLiveDraftSelections(mergedNoExam);
-            setLiveResolvedCount(resolvedNoExam);
+            if (
+              noExamSig !== liveDraftDisplaySigRef.current ||
+              resolvedNoExam !== liveResolvedDisplayedRef.current
+            ) {
+              liveDraftDisplaySigRef.current = noExamSig;
+              liveResolvedDisplayedRef.current = resolvedNoExam;
+              setLiveDraftSelections(mergedNoExam);
+              setLiveResolvedCount(resolvedNoExam);
+            }
             const nextStatus =
-              'No se detecta la tabla. Encuadra la hoja carta completa (esquinas negras alineadas con la guía).';
+              'No se ve la tabla CaliFacil. Encuadra la hoja completa y alinea los cuadros negros del pie con las esquinas naranjas del visor.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1236,7 +1271,7 @@ export default function CalificarPage() {
               autotorchTriedRef.current = true;
               void setTorchEnabled(true);
               setLiveStatus(
-                'Activé el flash automáticamente para mejorar detección. Mantén la hoja completa dentro del marco.'
+                'Activé el flash automáticamente para mejorar detección. Mantén la hoja dentro del marco.'
               );
               if (!glareHintShownRef.current) {
                 glareHintShownRef.current = true;
@@ -1257,6 +1292,7 @@ export default function CalificarPage() {
           const locks = liveLockedAnswersRef.current;
           const mergedLive: Record<string, string> = {};
           let mergedResolved = 0;
+          let draftSig = '';
           for (const q of chunk) {
             const locked = locks[q.id]?.trim();
             if (locked) {
@@ -1270,9 +1306,20 @@ export default function CalificarPage() {
                 mergedResolved++;
               }
             }
+            draftSig += `${mergedLive[q.id] ?? ''}\n`;
           }
-          setLiveDraftSelections(mergedLive);
-          setLiveResolvedCount(mergedResolved);
+          if (draftSig !== liveDraftDisplaySigRef.current) {
+            liveDraftDisplaySigRef.current = draftSig;
+            setLiveDraftSelections(mergedLive);
+          }
+          if (mergedResolved !== liveResolvedDisplayedRef.current) {
+            liveResolvedDisplayedRef.current = mergedResolved;
+            setLiveResolvedCount(mergedResolved);
+          }
+
+          if (isMobile && mergedResolved >= chunk.length && chunk.length > 0) {
+            nextDelay = 1050;
+          }
 
           if (chunk.length > 0) {
             if (isMobile) {
@@ -1327,13 +1374,15 @@ export default function CalificarPage() {
               setLiveStatus(nextStatus);
             }
           } else if (mergedResolved >= Math.ceil(chunk.length * 0.3)) {
-            const nextStatus = 'Casi listo: alinea mejor la hoja con el marco y aumenta la luz.';
+            const nextStatus =
+              'Casi listo: alinea los cuadros negros del pie con las esquinas naranjas y mejora la luz.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
           } else {
-            const nextStatus = 'Ajusta la cámara: toda la hoja dentro del marco; evita cortes y sombras.';
+            const nextStatus =
+              'Ajusta la cámara: hoja carta dentro del marco blanco; esquinas naranjas sobre los cuadros negros del CaliFacil.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1400,8 +1449,18 @@ export default function CalificarPage() {
           }
         } finally {
           liveBusyRef.current = false;
+          if (streamRef.current && examId && exam && phaseRef.current === 'capturar') {
+            scheduleLiveScan(nextDelay);
+          } else {
+            if (liveTickRef.current !== null) {
+              window.clearTimeout(liveTickRef.current);
+              liveTickRef.current = null;
+            }
+          }
         }
-      }, liveScanIntervalMs);
+      };
+
+      scheduleLiveScan(100);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".';
@@ -1846,7 +1905,7 @@ export default function CalificarPage() {
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
-            ? 'Cámara a pantalla completa: alinea los cuadros negros de las esquinas del papel con el marco; la foto puede tomarse sola cuando la lectura es estable, o pulsa «Tomar foto».'
+            ? 'Cámara a pantalla completa: marco blanco ≈ hoja carta; esquinas naranjas sobre los cuadros negros del pie CaliFacil. La foto puede tomarse sola cuando la lectura es estable.'
             : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
@@ -2049,8 +2108,9 @@ export default function CalificarPage() {
                     Listo para hoja {sheetIndex + 1} de {totalSheets}
                   </p>
                   <p className="text-xs text-orange-900/90">
-                    Se abrirá la cámara a pantalla completa. Fotografía la hoja impresa completa (carta): encuadra con
-                    el marco las esquinas negras de referencia impresas.
+                    La cámara abre a pantalla completa. Encuadra la hoja con el marco blanco y alinea las{' '}
+                    <strong>esquinas naranjas</strong> de la pantalla con los <strong>cuadros negros</strong> del pie
+                    CaliFacil.
                   </p>
                   <Button
                     type="button"
@@ -2149,11 +2209,31 @@ export default function CalificarPage() {
                     aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio} / 1`,
                   }}
                 >
-                  <div className="absolute inset-0 rounded-md border-2 border-white/35 shadow-[0_0_0_200vmax_rgba(0,0,0,0.35)]" />
-                  <span className="absolute -left-1 -top-1 block h-4 w-4 rounded-tl-md bg-white/35 blur-[3px]" />
-                  <span className="absolute -right-1 -top-1 block h-4 w-4 rounded-tr-md bg-white/35 blur-[3px]" />
-                  <span className="absolute -bottom-1 -left-1 block h-4 w-4 rounded-bl-md bg-white/35 blur-[3px]" />
-                  <span className="absolute -bottom-1 -right-1 block h-4 w-4 rounded-br-md bg-white/35 blur-[3px]" />
+                  <div className="absolute inset-0 rounded-md border-2 border-white/40 shadow-[0_0_0_200vmax_rgba(0,0,0,0.38)]" />
+                  <div
+                    className="pointer-events-none absolute left-0 right-0 rounded-[2px] border border-orange-400/25"
+                    style={{
+                      top: `${CALIFACIL_OMR_BAND_IN_PRINT_PAGE.topFrac * 100}%`,
+                      height: `${CALIFACIL_OMR_BAND_IN_PRINT_PAGE.heightFrac * 100}%`,
+                    }}
+                  >
+                    <span
+                      className="absolute -left-1 -top-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      aria-hidden
+                    />
+                    <span
+                      className="absolute -right-1 -top-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      aria-hidden
+                    />
+                    <span
+                      className="absolute -bottom-1 -left-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      aria-hidden
+                    />
+                    <span
+                      className="absolute -bottom-1 -right-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      aria-hidden
+                    />
+                  </div>
                 </div>
               </>
             )}
@@ -2244,7 +2324,7 @@ export default function CalificarPage() {
             <CardDescription>
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
               {isMobile
-                ? 'Fotografía la hoja carta completa (encuadrada con las esquinas negras de referencia en el papel).'
+                ? 'Fotografía la hoja completa; alinea los cuadros negros del recuadro CaliFacil con las esquinas naranjas del visor.'
                 : 'Puedes pasar foto de la hoja completa o solo del pie: debe verse entera la tabla (N.º, A–D) y las marcas.'}
             </CardDescription>
           </CardHeader>
