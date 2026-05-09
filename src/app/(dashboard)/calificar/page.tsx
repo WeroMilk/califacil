@@ -11,7 +11,6 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
-  CALIFACIL_OMR_BAND_IN_PRINT_PAGE,
   CALIFACIL_VIEWFINDER_GUIDE,
   chunkQuestions,
   califacilOmrColumnCount,
@@ -489,7 +488,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Encuadra la hoja: el marco blanco es la carta; las esquinas naranjas deben coincidir con los cuadros negros del pie CaliFacil. Pulsa «Tomar foto» cuando quieras.'
+        ? 'Encuadra la hoja: el marco blanco sigue los bordes del papel; las esquinas naranjas deben coincidir con los cuatro cuadros negros impresos en las esquinas de la hoja. Pulsa «Tomar foto» cuando quieras.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -1305,7 +1304,7 @@ export default function CalificarPage() {
               setLiveResolvedCount(resolvedNoExam);
             }
             const nextStatus =
-              'No se ve la tabla CaliFacil. Encuadra la hoja completa y alinea los cuadros negros del pie con las esquinas naranjas del visor.';
+              'No se ve la tabla CaliFacil. Encuadra toda la hoja y alinea las esquinas naranjas con los cuadros negros de las esquinas del papel.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1425,14 +1424,14 @@ export default function CalificarPage() {
             }
           } else if (mergedResolved >= Math.ceil(chunk.length * 0.3)) {
             const nextStatus =
-              'Casi listo: alinea los cuadros negros del pie con las esquinas naranjas y mejora la luz.';
+              'Casi listo: alinea las esquinas naranjas con los cuadros negros de las esquinas del papel y mejora la luz.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
           } else {
             const nextStatus =
-              'Ajusta la cámara: hoja carta dentro del marco blanco; esquinas naranjas sobre los cuadros negros del CaliFacil.';
+              'Ajusta la cámara: toda la hoja dentro del marco blanco; las cuatro esquinas naranjas sobre los cuatro cuadros negros de la hoja impresa.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1955,7 +1954,7 @@ export default function CalificarPage() {
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
-            ? 'Cámara a pantalla completa: marco blanco ≈ hoja carta; esquinas naranjas sobre los cuadros negros del pie CaliFacil. La foto puede tomarse sola cuando la lectura es estable.'
+            ? 'Cámara a pantalla completa: marco blanco = hoja carta; esquinas naranjas = cuadros negros de las esquinas del papel. La foto puede tomarse sola cuando la lectura es estable.'
             : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
@@ -2158,9 +2157,9 @@ export default function CalificarPage() {
                     Listo para hoja {sheetIndex + 1} de {totalSheets}
                   </p>
                   <p className="text-xs text-orange-900/90">
-                    La cámara abre a pantalla completa. Encuadra la hoja con el marco blanco y alinea las{' '}
-                    <strong>esquinas naranjas</strong> de la pantalla con los <strong>cuadros negros</strong> del pie
-                    CaliFacil.
+                    La cámara abre a pantalla completa. Encuadra la hoja con el marco blanco y coloca las{' '}
+                    <strong>esquinas naranjas</strong> sobre los <strong>cuatro cuadros negros</strong> impresos en
+                    las esquinas de la hoja.
                   </p>
                   <Button
                     type="button"
@@ -2259,28 +2258,22 @@ export default function CalificarPage() {
                     aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio} / 1`,
                   }}
                 >
-                  <div className="absolute inset-0 rounded-md border-2 border-white/40 shadow-[0_0_0_200vmax_rgba(0,0,0,0.38)]" />
-                  <div
-                    className="pointer-events-none absolute left-0 right-0 rounded-[2px] border border-orange-400/25"
-                    style={{
-                      top: `${CALIFACIL_OMR_BAND_IN_PRINT_PAGE.topFrac * 100}%`,
-                      height: `${CALIFACIL_OMR_BAND_IN_PRINT_PAGE.heightFrac * 100}%`,
-                    }}
-                  >
+                  <div className="relative h-full w-full">
+                    <div className="absolute inset-0 rounded-md border-2 border-white/40 shadow-[0_0_0_200vmax_rgba(0,0,0,0.38)]" />
                     <span
-                      className="absolute -left-1 -top-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      className="absolute -left-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
                       aria-hidden
                     />
                     <span
-                      className="absolute -right-1 -top-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      className="absolute -right-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
                       aria-hidden
                     />
                     <span
-                      className="absolute -bottom-1 -left-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      className="absolute -bottom-1 -left-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
                       aria-hidden
                     />
                     <span
-                      className="absolute -bottom-1 -right-1 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                      className="absolute -bottom-1 -right-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
                       aria-hidden
                     />
                   </div>
@@ -2374,7 +2367,7 @@ export default function CalificarPage() {
             <CardDescription>
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
               {isMobile
-                ? 'Fotografía la hoja completa; alinea los cuadros negros del recuadro CaliFacil con las esquinas naranjas del visor.'
+                ? 'Fotografía la hoja completa; alinea las esquinas naranjas con los cuadros negros de las cuatro esquinas del papel impreso.'
                 : 'Puedes pasar foto de la hoja completa o solo del pie: debe verse entera la tabla (N.º, A–D) y las marcas.'}
             </CardDescription>
           </CardHeader>
