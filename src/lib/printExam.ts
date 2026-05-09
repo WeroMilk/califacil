@@ -10,15 +10,16 @@ export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 2.92;
 
 /**
  * Marco del visor en Calificar (cámara y recorte `cropCanvasToCalifacilGuideOverlay`):
- * misma geometría en móvil, desktop y revisión de respaldo.
- * Ajustar con las esquinas naranjas impresas sobre la foto de prueba.
+ * encuadre de la **hoja carta completa** (8.5×11 in vertical), no solo del pie CaliFacil.
+ * Debe coincidir con los cuadros negros de esquina impresos en cada página.
  */
 export const CALIFACIL_VIEWFINDER_GUIDE = {
-  /** Fracción del ancho de la imagen */
-  widthFrac: 0.9,
+  /** Fracción del ancho del fotograma para el rectángulo guía */
+  widthFrac: 0.92,
   centerXFrac: 0.5,
-  /** Centro vertical del marco (0 = arriba). Encuadre típico “solo CaliFacil”. */
-  centerYFrac: 0.58,
+  centerYFrac: 0.5,
+  /** Relación ancho÷alto del papel (carta vertical). */
+  aspectRatio: 8.5 / 11,
 } as const;
 
 export type CalifacilVirtualKeyRow = {
@@ -183,10 +184,6 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <span class="omr-align-corner omr-align-corner--tl" aria-hidden="true"></span>
-      <span class="omr-align-corner omr-align-corner--tr" aria-hidden="true"></span>
-      <span class="omr-align-corner omr-align-corner--bl" aria-hidden="true"></span>
-      <span class="omr-align-corner omr-align-corner--br" aria-hidden="true"></span>
       <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
       <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-version="2">
         ${thead}
@@ -213,6 +210,20 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       page-break-after: auto;
       break-after: auto;
     }
+    /** Referencia al fotografiar con el móvil: alinear con el marco de cámara (hoja carta completa). */
+    .sheet-align-corner {
+      position: absolute;
+      width: 6pt;
+      height: 6pt;
+      background: #000;
+      z-index: 6;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .sheet-align-corner--tl { top: 0; left: 0; }
+    .sheet-align-corner--tr { top: 0; right: 0; }
+    .sheet-align-corner--bl { bottom: 0; left: 0; }
+    .sheet-align-corner--br { bottom: 0; right: 0; }
     /**
      * Chromium suele partir el impreso entre Hermanos flex (preguntas vs OMR) y mandar sólo CaliFacil a la hoja siguiente.
      * El aside OMR está position:absolute al fondo de .print-page-omr-bundle (misma altura física estable + break-inside: avoid).
@@ -390,19 +401,6 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
 
       print-color-adjust: exact;
     }
-    .omr-align-corner {
-      position: absolute;
-      width: 5pt;
-      height: 5pt;
-      background: #ea580c;
-      z-index: 2;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .omr-align-corner--tl { top: -0.8pt; left: -0.8pt; }
-    .omr-align-corner--tr { top: -0.8pt; right: -0.8pt; }
-    .omr-align-corner--bl { bottom: -0.8pt; left: -0.8pt; }
-    .omr-align-corner--br { bottom: -0.8pt; right: -0.8pt; }
     .omr-title {
       font-size: 6.4pt;
       font-weight: bold;
@@ -590,7 +588,12 @@ ${firstPageBlock}
     </div>`;
 
       return `
-  <section class="${sectionClass}">${bodyInner}
+  <section class="${sectionClass}">
+    <span class="sheet-align-corner sheet-align-corner--tl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--tr" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--bl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--br" aria-hidden="true"></span>
+${bodyInner}
   </section>`;
     })
     .join('');

@@ -3,7 +3,7 @@
  * Debe coincidir con el layout de `printExam.ts` (tabla 10 filas × N columnas de burbujas).
  */
 
-import { CALIFACIL_OMR_GUIDE_ASPECT_RATIO, CALIFACIL_VIEWFINDER_GUIDE } from '@/lib/printExam';
+import { CALIFACIL_VIEWFINDER_GUIDE } from '@/lib/printExam';
 
 export const CALIFACIL_OMR_SCAN = {
   /** Fracción inferior de la imagen donde cae el recuadro CaliFacil impreso */
@@ -145,15 +145,20 @@ export type CalifacilOmrScanGeometry = {
 };
 
 /**
- * Rectángulo normalizado (0–1) del mismo marco que el visor CaliFacil, para superponer sobre la imagen.
+ * Rectángulo normalizado (0–1) del mismo marco que el visor (hoja carta completa), para superponer o recortar.
  */
 export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect | null {
   if (W < 80 || H < 80) return null;
-  const ar = CALIFACIL_OMR_GUIDE_ASPECT_RATIO;
-  const { widthFrac, centerXFrac, centerYFrac } = CALIFACIL_VIEWFINDER_GUIDE;
-  const rectW = Math.min(W * widthFrac, W - 2);
-  const rectH = rectW / ar;
-  if (rectH > H * 0.98) return null;
+  const { widthFrac, centerXFrac, centerYFrac, aspectRatio: ar } = CALIFACIL_VIEWFINDER_GUIDE;
+  const maxW = Math.min(W * widthFrac, W - 2);
+  const maxH = H * 0.98;
+  let rectW = maxW;
+  let rectH = rectW / ar;
+  if (rectH > maxH) {
+    rectH = maxH;
+    rectW = rectH * ar;
+  }
+  if (rectW < 80 || rectH < 80) return null;
   const cx = W * centerXFrac;
   const cy = H * centerYFrac;
   let left = Math.round(cx - rectW / 2);
@@ -1262,7 +1267,7 @@ function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElemen
 }
 
 /**
- * Recorta la región equivalente al marco guía en Calificar (CALIFACIL_VIEWFINDER_GUIDE + mismo aspect ratio).
+ * Recorta la región equivalente al marco guía en Calificar (hoja carta, CALIFACIL_VIEWFINDER_GUIDE).
  * Alinea el análisis OMR con lo que el usuario encuadra en cámara.
  */
 export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
@@ -1288,9 +1293,8 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
 /** Opciones para preparar imagen antes de orientar / escanear CaliFacil */
 export type PrepareCalifacilScanInputOptions = {
   /**
-   * Si es true (predeterminado), recorta al mismo encuadre que el marco naranja en cámara en vivo.
-   * Pon `false` para fotos de página completa o archivo subido: el recorte artificial puede quitar el borde
-   * del recuadro negro y empeorar la corrección de perspectiva frente al encuadre real de la cámara.
+   * Si es true (predeterminado), recorta al encuadre de hoja carta del visor móvil.
+   * Pon `false` para fotos ya recortadas o archivo subido desde escritorio.
    */
   useGuideCrop?: boolean;
 };

@@ -11,7 +11,6 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
-  CALIFACIL_OMR_GUIDE_ASPECT_RATIO,
   CALIFACIL_VIEWFINDER_GUIDE,
   chunkQuestions,
   califacilOmrColumnCount,
@@ -228,6 +227,7 @@ export default function CalificarPage() {
   const [flashOn, setFlashOn] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const mobileCameraShellRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
@@ -434,7 +434,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Alinea las esquinas grises con los cuadros naranjas del examen o pulsa «Tomar foto».'
+        ? 'Encuadra la hoja carta completa: alinea las esquinas grises con los cuadros negros de las esquinas del papel, o pulsa «Tomar foto».'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -445,6 +445,9 @@ export default function CalificarPage() {
     if (liveTickRef.current !== null) {
       window.clearInterval(liveTickRef.current);
       liveTickRef.current = null;
+    }
+    if (typeof document !== 'undefined' && document.fullscreenElement) {
+      void document.exitFullscreen?.().catch(() => undefined);
     }
     void setTorchEnabled(false);
     if (streamRef.current) {
@@ -555,12 +558,12 @@ export default function CalificarPage() {
       if (!examCanvas || !isCalifacilExamSheetLikely(examCanvas, omrCols)) {
         setLiveStatus(
           isMobile
-            ? 'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso del examen.'
+            ? 'No se detecta la tabla CaliFacil. Haz la foto de la hoja carta completa, recta y bien iluminada.'
             : 'No se detecta la tabla CaliFacil. Prueba una foto más nítida de la hoja completa o del pie con la tabla N.º / A–D.'
         );
         toast.error(
           isMobile
-            ? 'No se reconoce el examen CaliFacil. Centra el recuadro con la tabla de casillas A–D.'
+            ? 'No se reconoce el examen CaliFacil. Incluye la hoja impresa completa y que se vea el pie con las casillas A–D.'
             : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
         );
         return { success: false };
@@ -568,7 +571,7 @@ export default function CalificarPage() {
       let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
       let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
         skipGuideCrop: true,
-        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
+        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
         fixedTemplateAnchor: Boolean(fallbackFile),
       });
@@ -585,7 +588,7 @@ export default function CalificarPage() {
 
         const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoverySource, omrCols, {
           skipGuideCrop: true,
-          geometryMode: fallbackFile ? 'fullSheet' : 'auto',
+          geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
           preserveInputCanvas: false,
           fixedTemplateAnchor: Boolean(fallbackFile),
         });
@@ -809,13 +812,13 @@ export default function CalificarPage() {
         setLiveResolvedCount(mergedResolved);
         setLiveStatus(
           isMobile
-            ? 'Lectura insuficiente: acerca el recuadro, mejora luz y evita sombras.'
+            ? 'Lectura insuficiente: aléjate si la hoja no entra en foco, mejora la luz y evita sombras.'
             : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
         );
         if (!allowManualReview) {
           toast.error(
             isMobile
-              ? 'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
+              ? 'La captura no tiene calidad suficiente. Vuelve a fotografiar la hoja completa con buena luz.'
               : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
           );
           return { success: false };
@@ -950,6 +953,31 @@ export default function CalificarPage() {
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
   }, [attachStreamToVideo, cameraOpen]);
+
+  useEffect(() => {
+    if (!isMobile || phase !== 'capturar') return;
+    let cancelled = false;
+    const tryEnter = () => {
+      if (cancelled) return;
+      const el = mobileCameraShellRef.current;
+      if (!el) return;
+      const anyEl = el as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+      };
+      const req = el.requestFullscreen?.bind(el) ?? anyEl.webkitRequestFullscreen?.bind(el);
+      if (req) void Promise.resolve(req()).catch(() => undefined);
+    };
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(tryEnter);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+      if (typeof document !== 'undefined' && document.fullscreenElement) {
+        void document.exitFullscreen?.().catch(() => undefined);
+      }
+    };
+  }, [isMobile, phase]);
 
   useEffect(() => {
     scanBusyRef.current = scanBusy;
@@ -1192,7 +1220,7 @@ export default function CalificarPage() {
             setLiveDraftSelections(mergedNoExam);
             setLiveResolvedCount(resolvedNoExam);
             const nextStatus =
-              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y casillas).';
+              'No se detecta la tabla. Encuadra la hoja carta completa (esquinas negras alineadas con la guía).';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1207,7 +1235,9 @@ export default function CalificarPage() {
             ) {
               autotorchTriedRef.current = true;
               void setTorchEnabled(true);
-              setLiveStatus('Activé el flash automáticamente para mejorar detección. Mantén el recuadro centrado.');
+              setLiveStatus(
+                'Activé el flash automáticamente para mejorar detección. Mantén la hoja completa dentro del marco.'
+              );
               if (!glareHintShownRef.current) {
                 glareHintShownRef.current = true;
                 toast.message('Si hay reflejo, inclina ligeramente el celular y evita brillo directo.');
@@ -1220,7 +1250,7 @@ export default function CalificarPage() {
             skipGuideCrop: true,
             qnumSweep: 'live',
             columnShiftSweep: 'live',
-            geometryMode: 'croppedBox',
+            geometryMode: 'fullSheet',
             preserveInputCanvas: true,
           });
           const mapped = mapRawToDraft(raw, chunk);
@@ -1297,13 +1327,13 @@ export default function CalificarPage() {
               setLiveStatus(nextStatus);
             }
           } else if (mergedResolved >= Math.ceil(chunk.length * 0.3)) {
-            const nextStatus = 'Casi listo: centra mejor el recuadro y aumenta luz.';
+            const nextStatus = 'Casi listo: alinea mejor la hoja con el marco y aumenta la luz.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
           } else {
-            const nextStatus = 'Ajusta cámara: acerca la banda CaliFacil y evita sombras.';
+            const nextStatus = 'Ajusta la cámara: toda la hoja dentro del marco; evita cortes y sombras.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1816,7 +1846,7 @@ export default function CalificarPage() {
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
-            ? 'Alinea los cuadritos naranjas impresos con las esquinas grises; la foto se toma sola cuando la lectura es estable, o pulsa «Tomar foto».'
+            ? 'Cámara a pantalla completa: alinea los cuadros negros de las esquinas del papel con el marco; la foto puede tomarse sola cuando la lectura es estable, o pulsa «Tomar foto».'
             : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
@@ -2019,8 +2049,8 @@ export default function CalificarPage() {
                     Listo para hoja {sheetIndex + 1} de {totalSheets}
                   </p>
                   <p className="text-xs text-orange-900/90">
-                    Pulsa para abrir la cámara. Encuadra la zona CaliFacil: en papel hay esquinas naranjas; en
-                    pantalla, esquinas grises difuminadas.
+                    Se abrirá la cámara a pantalla completa. Fotografía la hoja impresa completa (carta): encuadra con
+                    el marco las esquinas negras de referencia impresas.
                   </p>
                   <Button
                     type="button"
@@ -2041,7 +2071,171 @@ export default function CalificarPage() {
         </CardContent>
       </Card>
 
-      {(phase === 'capturar' || phase === 'revisar_hoja') && exam && (
+      {useLiveCameraUi && phase === 'capturar' && exam && (
+        <div
+          ref={mobileCameraShellRef}
+          className="fixed inset-0 z-[100] flex flex-col bg-black text-white"
+          style={{
+            paddingTop: 'env(safe-area-inset-top)',
+            paddingBottom: 'env(safe-area-inset-bottom)',
+          }}
+        >
+          <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/15 px-3 py-2">
+            <div className="min-w-0 pr-2">
+              <p className="truncate text-sm font-semibold">
+                Hoja {sheetIndex + 1} de {totalSheets}
+              </p>
+              <p className="text-[11px] text-white/70">
+                Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} · Encuadra la hoja carta
+                completa
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-white hover:bg-white/10 hover:text-white"
+              disabled={scanBusy}
+              onClick={() => {
+                stopLiveCamera();
+                setPhase('elegir');
+              }}
+            >
+              Volver
+            </Button>
+          </div>
+
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            onChange={handleGalleryFile}
+          />
+
+          <div className="relative min-h-0 flex-1 bg-black">
+            {!cameraOpen ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
+                <div className="flex items-center gap-2 text-sm text-orange-100">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Abriendo cámara en vivo…
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full max-w-xs"
+                  onClick={() => void startLiveCamera()}
+                >
+                  Reintentar cámara
+                </Button>
+              </div>
+            ) : (
+              <>
+                {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 h-full w-full bg-black object-cover"
+                />
+                <div className="pointer-events-none absolute inset-0 bg-black/25" />
+                <div
+                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+                  style={{
+                    left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
+                    top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
+                    width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
+                    aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio} / 1`,
+                  }}
+                >
+                  <div className="absolute inset-0 rounded-md border-2 border-white/35 shadow-[0_0_0_200vmax_rgba(0,0,0,0.35)]" />
+                  <span className="absolute -left-1 -top-1 block h-4 w-4 rounded-tl-md bg-white/35 blur-[3px]" />
+                  <span className="absolute -right-1 -top-1 block h-4 w-4 rounded-tr-md bg-white/35 blur-[3px]" />
+                  <span className="absolute -bottom-1 -left-1 block h-4 w-4 rounded-bl-md bg-white/35 blur-[3px]" />
+                  <span className="absolute -bottom-1 -right-1 block h-4 w-4 rounded-br-md bg-white/35 blur-[3px]" />
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="shrink-0 space-y-2 border-t border-white/15 bg-black/90 px-3 py-3">
+            <div className="rounded-md border border-orange-400/35 bg-orange-950/50 px-2.5 py-2 text-xs leading-snug text-orange-50">
+              {liveStatus}
+            </div>
+            {flashSupported && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
+                onClick={() => void setTorchEnabled(!flashOn)}
+              >
+                <Zap className="mr-2 h-4 w-4" />
+                {flashOn ? 'Apagar flash' : 'Encender flash'}
+              </Button>
+            )}
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                className={cn(
+                  'w-full bg-orange-600 hover:bg-orange-700',
+                  scanBusy && 'disabled:opacity-100'
+                )}
+                disabled={scanBusy}
+                onClick={() => void captureMobilePhotoManually()}
+              >
+                {scanBusy ? (
+                  <Loader2
+                    className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                    aria-hidden
+                  />
+                ) : (
+                  'Tomar foto'
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
+                onClick={() => galleryInputRef.current?.click()}
+                disabled={scanBusy}
+              >
+                Subir foto…
+              </Button>
+              <Button
+                variant="secondary"
+                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
+                onClick={scanAgainInLive}
+              >
+                Reiniciar lectura en vivo
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
+                disabled={scanBusy}
+                onClick={() => {
+                  stopLiveCamera();
+                  setPhase('elegir');
+                }}
+              >
+                Cerrar cámara
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full border-white/30 text-white hover:bg-white/10"
+                onClick={switchToAnotherStudentScan}
+                disabled={scanBusy}
+              >
+                Escanear examen de otro alumno
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {((phase === 'revisar_hoja') || (phase === 'capturar' && !useLiveCameraUi)) && exam && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">
@@ -2050,7 +2244,7 @@ export default function CalificarPage() {
             <CardDescription>
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
               {isMobile
-                ? 'Incluye en la foto el recuadro negro CaliFacil del pie de página.'
+                ? 'Fotografía la hoja carta completa (encuadrada con las esquinas negras de referencia en el papel).'
                 : 'Puedes pasar foto de la hoja completa o solo del pie: debe verse entera la tabla (N.º, A–D) y las marcas.'}
             </CardDescription>
           </CardHeader>
@@ -2064,153 +2258,36 @@ export default function CalificarPage() {
                   className="sr-only"
                   onChange={handleGalleryFile}
                 />
-                {useLiveCameraUi ? (
-                  <>
-                    {!cameraOpen ? (
-                      <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-900">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Abriendo cámara en vivo...
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="mt-3 w-full"
-                          onClick={() => void startLiveCamera()}
-                        >
-                          Reintentar cámara
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="relative overflow-hidden rounded-lg border bg-black/90">
-                          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                          <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="aspect-[4/3] min-h-[12rem] w-full bg-black object-cover"
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
+                    <p className="text-sm text-gray-700">
+                      En ordenador sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
+                      CaliFácil con preguntas y tabla al pie) o recorta solo el recuadro CaliFacil. Se leen las
+                      casillas A–D y al guardar se califica comparando con la clave del examen.
+                    </p>
+                    <Button
+                      type="button"
+                      className={cn(
+                        'mt-4 bg-orange-600 hover:bg-orange-700',
+                        scanBusy && 'disabled:opacity-100'
+                      )}
+                      disabled={scanBusy}
+                      onClick={() => galleryInputRef.current?.click()}
+                    >
+                      {scanBusy ? (
+                        <>
+                          <Loader2
+                            className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                            aria-hidden
                           />
-                          <div className="pointer-events-none absolute inset-0 bg-black/20" />
-                          <div
-                            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
-                            style={{
-                              left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
-                              top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
-                              width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
-                              aspectRatio: `${CALIFACIL_OMR_GUIDE_ASPECT_RATIO} / 1`,
-                            }}
-                          >
-                            <div className="absolute inset-0 rounded-lg border border-white/25 shadow-[0_0_0_9999px_rgba(0,0,0,0.22)]" />
-                            <span className="absolute -left-1 -top-1 block h-4 w-4 rounded-tl-md bg-gray-400/50 blur-[3px]" />
-                            <span className="absolute -right-1 -top-1 block h-4 w-4 rounded-tr-md bg-gray-400/50 blur-[3px]" />
-                            <span className="absolute -bottom-1 -left-1 block h-4 w-4 rounded-bl-md bg-gray-400/50 blur-[3px]" />
-                            <span className="absolute -bottom-1 -right-1 block h-4 w-4 rounded-br-md bg-gray-400/50 blur-[3px]" />
-                          </div>
-                        </div>
-                        <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
-                          {liveStatus}
-                        </div>
-                        {flashSupported && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full"
-                            onClick={() => void setTorchEnabled(!flashOn)}
-                          >
-                            <Zap className="mr-2 h-4 w-4" />
-                            {flashOn ? 'Apagar flash' : 'Encender flash'}
-                          </Button>
-                        )}
-                        <div className="flex flex-col gap-2">
-                          <Button
-                            type="button"
-                            className={cn(
-                              'w-full bg-orange-600 hover:bg-orange-700',
-                              scanBusy && 'disabled:opacity-100'
-                            )}
-                            disabled={scanBusy}
-                            onClick={() => void captureMobilePhotoManually()}
-                          >
-                            {scanBusy ? (
-                              <Loader2
-                                className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                                aria-hidden
-                              />
-                            ) : (
-                              'Tomar foto'
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full"
-                            onClick={() => galleryInputRef.current?.click()}
-                            disabled={scanBusy}
-                          >
-                            Subir foto…
-                          </Button>
-                          <Button variant="outline" className="w-full" onClick={scanAgainInLive}>
-                            Reiniciar lectura en vivo
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full"
-                            disabled={scanBusy}
-                            onClick={() => {
-                              stopLiveCamera();
-                              setPhase('elegir');
-                            }}
-                          >
-                            Volver
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="w-full"
-                            onClick={switchToAnotherStudentScan}
-                            disabled={scanBusy}
-                          >
-                            Escanear examen de otro alumno
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
-                      <p className="text-sm text-gray-700">
-                        En ordenador sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
-                        CaliFácil con preguntas y tabla al pie) o recorta solo el recuadro CaliFacil. Se leen las
-                        casillas A–D y al guardar se califica comparando con la clave del examen.
-                      </p>
-                      <Button
-                        type="button"
-                        className={cn(
-                          'mt-4 bg-orange-600 hover:bg-orange-700',
-                          scanBusy && 'disabled:opacity-100'
-                        )}
-                        disabled={scanBusy}
-                        onClick={() => galleryInputRef.current?.click()}
-                      >
-                        {scanBusy ? (
-                          <>
-                            <Loader2
-                              className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                              aria-hidden
-                            />
-                            Leyendo imagen…
-                          </>
-                        ) : (
-                          'Elegir imagen…'
-                        )}
-                      </Button>
-                    </div>
+                          Leyendo imagen…
+                        </>
+                      ) : (
+                        'Elegir imagen…'
+                      )}
+                    </Button>
                   </div>
-                )}
+                </div>
               </div>
             )}
 
