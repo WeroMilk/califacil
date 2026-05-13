@@ -46,12 +46,18 @@ export const PLAN_MONTHLY_EXAM_LIMIT: Record<PlanKey, number> = {
   pro: 30,
 };
 
-/** Cuenta interna para pruebas: sin pago ni cupos de IA. */
-const CALIFACIL_SUPERUSER_EMAIL = 'admin@califacil.com';
+/**
+ * Cuentas con acceso completo sin suscripción Stripe ni límites de plan en la app.
+ * (Login/dashboard, generación de preguntas con IA, etc.)
+ */
+const CALIFACIL_SUPERUSER_EMAILS = new Set([
+  'admin@califacil.com',
+  'profeivanith@gmail.com',
+]);
 
 export function isCalifacilSuperUserEmail(email: string | null | undefined) {
   if (!email) return false;
-  return email.trim().toLowerCase() === CALIFACIL_SUPERUSER_EMAIL;
+  return CALIFACIL_SUPERUSER_EMAILS.has(email.trim().toLowerCase());
 }
 
 export function resolvePlanKey(raw: string | null | undefined): PlanKey {

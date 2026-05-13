@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { CheckCircle2, Loader2, LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
-import { BILLING_PLANS, isSubscriptionActive, type PlanKey } from '@/lib/billing';
+import { BILLING_PLANS, isCalifacilSuperUserEmail, isSubscriptionActive, type PlanKey } from '@/lib/billing';
 import { Button } from '@/components/ui/button';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 
@@ -47,6 +47,10 @@ export default function BillingPage() {
   useEffect(() => {
     if (!loading && !user) {
       router.replace('/login');
+      return;
+    }
+    if (user && isCalifacilSuperUserEmail(user.email)) {
+      router.replace('/dashboard');
       return;
     }
     if (user) {
