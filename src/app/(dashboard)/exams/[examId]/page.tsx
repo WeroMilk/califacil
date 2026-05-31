@@ -240,12 +240,12 @@ export default function ExamDetailPage() {
   }, [exam]);
 
   useEffect(() => {
-    if (!exam || exam.status !== 'published') return;
+    if (!exam || exam.status === 'draft') return;
     if (exam.qr_code) {
       setQrCodeUrl(exam.qr_code);
       return;
     }
-    if (!qrCodeUrl) {
+    if (exam.status === 'published' && !qrCodeUrl) {
       void generateQRCode();
     }
   }, [exam, qrCodeUrl, generateQRCode]);
@@ -289,6 +289,13 @@ export default function ExamDetailPage() {
   };
 
   const handleClose = async () => {
+    if (
+      !window.confirm(
+        '¿Cerrar este examen? Los alumnos ya no podrán enviar respuestas, pero podrás ver los resultados y reabrirlo cuando quieras.'
+      )
+    ) {
+      return;
+    }
     try {
       const response = await fetch(`/api/exams/${examId}`, {
         method: 'PATCH',
@@ -306,6 +313,27 @@ export default function ExamDetailPage() {
       }
     } catch {
       toast.error('Error al cerrar el examen');
+    }
+  };
+
+  const handleReopen = async () => {
+    try {
+      const response = await fetch(`/api/exams/${examId}`, {
+        method: 'PATCH',
+        headers: await dashboardAuthJsonHeaders(),
+        body: JSON.stringify({ status: 'published' }),
+      });
+
+      if (response.ok) {
+        toast.success('Examen reabierto');
+        window.location.reload();
+      } else if (response.status === 401) {
+        toast.error('Sesión expirada. Inicia sesión de nuevo.');
+      } else {
+        toast.error('No se pudo reabrir el examen');
+      }
+    } catch {
+      toast.error('Error al reabrir el examen');
     }
   };
 
@@ -395,19 +423,25 @@ export default function ExamDetailPage() {
               Publicar
             </Button>
           )}
+          {(exam.status === 'published' || exam.status === 'closed') && (
+            <Button
+              onClick={() => router.push(`/exams/results/${exam.id}`)}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              Ver Resultados
+            </Button>
+          )}
           {exam.status === 'published' && (
-            <>
-              <Button variant="outline" onClick={handleClose}>
-                <Lock className="mr-2 h-4 w-4" />
-                Cerrar
-              </Button>
-              <Button
-                onClick={() => router.push(`/exams/results/${exam.id}`)}
-                className="bg-orange-600 hover:bg-orange-700"
-              >
-                Ver Resultados
-              </Button>
-            </>
+            <Button variant="outline" onClick={handleClose}>
+              <Lock className="mr-2 h-4 w-4" />
+              Cerrar examen
+            </Button>
+          )}
+          {exam.status === 'closed' && (
+            <Button onClick={handleReopen} className="bg-green-600 hover:bg-green-700">
+              <Play className="mr-2 h-4 w-4" />
+              Reabrir examen
+            </Button>
           )}
         </div>
       </div>
@@ -494,7 +528,7 @@ export default function ExamDetailPage() {
             <FileText className="mr-2 h-4 w-4" />
             Preguntas ({exam.questions.length})
           </TabsTrigger>
-          {exam.status === 'published' && (
+          {(exam.status === 'published' || exam.status === 'closed') && (
             <TabsTrigger value="qr">
               <QrCode className="mr-2 h-4 w-4" />
               Código QR
@@ -630,7 +664,7 @@ export default function ExamDetailPage() {
           </Card>
         </TabsContent>
 
-        {exam.status === 'published' && (
+        {(exam.status === 'published' || exam.status === 'closed') && (
           <TabsContent value="qr">
             <Card>
               <CardHeader>

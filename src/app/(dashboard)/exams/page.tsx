@@ -270,7 +270,7 @@ function ExamCard({
               Ver
             </Button>
           </Link>
-          {exam.status === 'published' ? (
+          {exam.status === 'published' || exam.status === 'closed' ? (
             <div className="flex min-w-0 flex-1 flex-col items-stretch">
               <div className="mb-1 flex justify-end">
                 <Button

@@ -264,7 +264,7 @@ export default function DashboardPage() {
                         Detalles
                       </Button>
                     </Link>
-                    {exam.status === 'published' && (
+                    {(exam.status === 'published' || exam.status === 'closed') && (
                       <Link href={`/exams/results/${exam.id}`} className="min-w-0 flex-1">
                         <Button size="sm" className="h-8 w-full bg-orange-600 text-xs hover:bg-orange-700 sm:text-sm">
                           Resultados
