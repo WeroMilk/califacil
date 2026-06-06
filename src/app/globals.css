@@ -120,6 +120,28 @@
   overscroll-behavior: contain;
 }
 
+/* Pantalla completa simulada en móvil (iOS y navegadores sin Fullscreen API) */
+.exam-pseudo-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 80 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  background: rgb(255 255 255 / 0.97);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

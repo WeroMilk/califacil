@@ -31,11 +31,19 @@ import {
 } from '@/lib/utils';
 import { examForfeitMessages } from '@/lib/examForfeitMessages';
 import {
+  type ExamFullscreenMode,
+  EXAM_PSEUDO_FULLSCREEN_CLASS,
+  enterExamFullscreen,
+  exitExamFullscreenSafe,
+  isMobileExamDevice,
+} from '@/lib/examFullscreen';
+import {
   clearExamClientSession,
   readExamClientSession,
   useStudentExamProctoring,
   writeExamClientSession,
 } from '@/hooks/useStudentExamProctoring';
+import { cn } from '@/lib/utils';
 
 type PreStartBlock =
   | null
@@ -66,16 +74,6 @@ async function pickPreferredDesktopCameraDeviceId(excludeDeviceId?: string): Pro
     filtered[0] ??
     videos[0];
   return preferred?.deviceId ?? null;
-}
-
-async function exitExamFullscreenSafe() {
-  try {
-    if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
-      await document.exitFullscreen();
-    }
-  } catch {
-    /* ignore */
-  }
 }
 
 function preStartMessage(block: PreStartBlock): { title: string; body: string } | null {
@@ -142,11 +140,11 @@ export default function StudentExamPage() {
   const [clientSessionToken, setClientSessionToken] = useState<string | null>(null);
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
-  /** Solo true si requestFullscreen tuvo éxito; en móviles suele quedar false. */
-  const [fullscreenEnforced, setFullscreenEnforced] = useState(false);
+  const [fullscreenMode, setFullscreenMode] = useState<ExamFullscreenMode>('none');
   const [contentHidden, setContentHidden] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const examShellRef = useRef<HTMLDivElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
 
   const logAttemptEvent = useCallback(
@@ -162,10 +160,10 @@ export default function StudentExamPage() {
     studentId: selectedStudentId || null,
     clientSession: clientSessionToken,
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
-    enforceFullscreen: fullscreenEnforced,
+    fullscreenMode,
     onForfeit: (reason) => {
       void exitExamFullscreenSafe();
-      setFullscreenEnforced(false);
+      setFullscreenMode('none');
       setContentHidden(false);
       previewStreamRef.current = null;
       clearExamClientSession(examId, selectedStudentId);
@@ -260,7 +258,7 @@ export default function StudentExamPage() {
     setClientSessionToken(null);
     setForfeitReason(null);
     setPreStartBlock(null);
-    setFullscreenEnforced(false);
+    setFullscreenMode('none');
   }, [selectedStudentId, examId]);
 
   useEffect(() => {
@@ -345,12 +343,39 @@ export default function StudentExamPage() {
     document.addEventListener('cut', blockCopy, opts);
     document.addEventListener('contextmenu', blockCopy, opts);
     document.addEventListener('dragstart', blockCopy, opts);
+    document.addEventListener('selectstart', blockCopy, opts);
     return () => {
       document.removeEventListener('copy', blockCopy, opts);
       document.removeEventListener('cut', blockCopy, opts);
       document.removeEventListener('contextmenu', blockCopy, opts);
       document.removeEventListener('dragstart', blockCopy, opts);
+      document.removeEventListener('selectstart', blockCopy, opts);
     };
+  }, [hasStarted, submitted, forfeitReason]);
+
+  useEffect(() => {
+    if (!hasStarted || submitted || forfeitReason) return;
+    let cancelled = false;
+    const tryEnter = async () => {
+      if (cancelled) return;
+      const el = examShellRef.current;
+      if (!el) return;
+      const mode = await enterExamFullscreen(el);
+      if (!cancelled) setFullscreenMode(mode);
+    };
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => void tryEnter());
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [hasStarted, submitted, forfeitReason]);
+
+  useEffect(() => {
+    if (hasStarted && !submitted && !forfeitReason) return;
+    void exitExamFullscreenSafe();
+    setFullscreenMode('none');
   }, [hasStarted, submitted, forfeitReason]);
 
   const sortedStudents = useMemo(
@@ -449,19 +474,6 @@ export default function StudentExamPage() {
       previewStreamRef.current = stream;
       bindStream(stream);
 
-      let enforced = false;
-      if (typeof document !== 'undefined') {
-        const el = document.documentElement;
-        if (typeof el.requestFullscreen === 'function') {
-          try {
-            await el.requestFullscreen();
-            enforced = true;
-          } catch {
-            /* Navegador o permisos: seguimos sin exigir salida de fullscreen */
-          }
-        }
-      }
-      setFullscreenEnforced(enforced);
       setHasStarted(true);
       void rpcLogExamAttemptEvent(examId, selectedStudentId, token, 'exam_started');
     } catch {
@@ -603,7 +615,7 @@ export default function StudentExamPage() {
       previewStreamRef.current = null;
       clearExamClientSession(examId, studentId);
       setClientSessionToken(null);
-      setFullscreenEnforced(false);
+      setFullscreenMode('none');
       await exitExamFullscreenSafe();
 
       const totalPoints = examMaxScore(questions);
@@ -619,7 +631,7 @@ export default function StudentExamPage() {
       }
     } catch {
       await exitExamFullscreenSafe();
-      setFullscreenEnforced(false);
+      setFullscreenMode('none');
       toast.error('Error al enviar el examen');
     } finally {
       setSubmitting(false);
@@ -728,13 +740,25 @@ export default function StudentExamPage() {
                   <ul className="list-inside list-disc space-y-1 text-amber-900/90">
                     <li>La cámara frontal debe estar activa todo el tiempo.</li>
                     <li>
-                      En computadora, si el navegador lo permite, entrarás en pantalla completa: no la
-                      cierres hasta terminar o el examen se anula.
+                      Entrarás en pantalla completa (en el celular se activa automáticamente): no la cierres
+                      ni salgas hasta terminar o el examen se anula.
                     </li>
-                    <li>No cambies de pestaña ni cierres esta ventana; si lo haces, el examen se anula.</li>
-                    <li>No tomes capturas de pantalla; el contenido se oculta si sales de la pestaña.</li>
+                    <li>
+                      No cambies de pestaña, de aplicación ni minimices el navegador; si lo haces, el examen
+                      se anula.
+                    </li>
+                    <li>
+                      No tomes capturas ni grabes la pantalla; el contenido se oculta si sales de la
+                      aplicación.
+                    </li>
                     <li>Solo hay un intento por alumno.</li>
                   </ul>
+                  {isMobileExamDevice() && (
+                    <p className="mt-3 text-xs text-amber-800/90">
+                      En celular o tablet usa el navegador en vertical, con buena conexión y sin abrir otras
+                      apps hasta enviar el examen.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -787,14 +811,22 @@ export default function StudentExamPage() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8 select-none">
+    <div
+      ref={examShellRef}
+      className={cn(
+        'relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8 select-none touch-manipulation',
+        fullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
+        '[&_input]:select-text [&_textarea]:select-text'
+      )}
+      style={{ WebkitTouchCallout: 'none' }}
+    >
       {contentHidden && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-gray-900/95 p-6 text-center text-white backdrop-blur-md">
           <div>
             <AlertCircle className="mx-auto mb-4 h-12 w-12 text-amber-400" />
             <p className="text-lg font-semibold">Contenido oculto</p>
             <p className="mt-2 text-sm text-gray-300">
-              Vuelve a esta pestaña de inmediato o el examen se anulará.
+              Vuelve a esta pestaña o aplicación de inmediato o el examen se anulará.
             </p>
           </div>
         </div>

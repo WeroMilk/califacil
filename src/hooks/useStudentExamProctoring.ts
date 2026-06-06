@@ -1,10 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
+import type { ExamFullscreenMode } from '@/lib/examFullscreen';
+import { isNativeFullscreenActive } from '@/lib/examFullscreen';
 import { rpcVoidStudentExamAttempt } from '@/lib/examAttemptRpc';
 
 const VISIBILITY_GRACE_MS = 2800;
 const FULLSCREEN_EXIT_GRACE_MS = 2800;
+
+const FULLSCREEN_CHANGE_EVENTS = [
+  'fullscreenchange',
+  'webkitfullscreenchange',
+  'mozfullscreenchange',
+  'MSFullscreenChange',
+] as const;
 
 export const examClientSessionKey = (examId: string, studentId: string) =>
   `califacil_exam_session_${examId}_${studentId}`;
@@ -31,8 +40,8 @@ export function useStudentExamProctoring(options: {
   clientSession: string | null;
   /** true solo mientras se responde el examen (no en pantalla previa) */
   active: boolean;
-  /** Si el navegador entró a pantalla completa al iniciar, salir anula el intento. */
-  enforceFullscreen: boolean;
+  /** Modo de pantalla completa activo; 'none' = sin exigir permanencia en FS. */
+  fullscreenMode: ExamFullscreenMode;
   onForfeit: (reason: string) => void;
   onVisibilityHidden?: () => void;
   onVisibilityVisible?: () => void;
@@ -42,6 +51,7 @@ export function useStudentExamProctoring(options: {
   const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fullscreenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forfeitOnceRef = useRef(false);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const optsRef = useRef(options);
   optsRef.current = options;
 
@@ -145,9 +155,15 @@ export function useStudentExamProctoring(options: {
       void forfeit('left_page');
     };
 
+    const onFreeze = () => {
+      logEvent('tab_hidden', { source: 'freeze' });
+      optsRef.current.onVisibilityHidden?.();
+      scheduleVisibilityForfeit('tab_hidden');
+    };
+
     const onFullscreenChange = () => {
-      if (!optsRef.current.enforceFullscreen || forfeitOnceRef.current) return;
-      if (!document.fullscreenElement) {
+      if (optsRef.current.fullscreenMode !== 'native' || forfeitOnceRef.current) return;
+      if (!isNativeFullscreenActive()) {
         logEvent('left_fullscreen');
         scheduleFullscreenForfeit();
       } else {
@@ -157,12 +173,18 @@ export function useStudentExamProctoring(options: {
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
-    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('freeze', onFreeze as EventListener);
+    for (const evt of FULLSCREEN_CHANGE_EVENTS) {
+      document.addEventListener(evt, onFullscreenChange);
+    }
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
-      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('freeze', onFreeze as EventListener);
+      for (const evt of FULLSCREEN_CHANGE_EVENTS) {
+        document.removeEventListener(evt, onFullscreenChange);
+      }
       clearHiddenTimer();
       clearFullscreenTimer();
     };
@@ -170,12 +192,52 @@ export function useStudentExamProctoring(options: {
     options.active,
     options.studentId,
     options.clientSession,
-    options.enforceFullscreen,
+    options.fullscreenMode,
     forfeit,
     clearHiddenTimer,
     clearFullscreenTimer,
     logEvent,
   ]);
+
+  useEffect(() => {
+    if (!options.active) {
+      void wakeLockRef.current?.release().catch(() => undefined);
+      wakeLockRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+
+    const acquireWakeLock = async () => {
+      if (cancelled || typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        wakeLockRef.current.addEventListener('release', () => {
+          if (!cancelled && optsRef.current.active) {
+            void acquireWakeLock();
+          }
+        });
+      } catch {
+        /* permisos o batería baja */
+      }
+    };
+
+    void acquireWakeLock();
+
+    const onVisibilityForWakeLock = () => {
+      if (document.visibilityState === 'visible' && !cancelled) {
+        void acquireWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityForWakeLock);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisibilityForWakeLock);
+      void wakeLockRef.current?.release().catch(() => undefined);
+      wakeLockRef.current = null;
+    };
+  }, [options.active]);
 
   return { bindStream, stopStream, logEvent };
 }

@@ -1327,6 +1327,30 @@ export type CaptureCalifacilGuideFrameOptions = {
   maxSide?: number;
 };
 
+/** Fotograma completo del sensor (sin recorte al marco guía). */
+export function captureVideoFullFrame(
+  video: HTMLVideoElement,
+  opts?: CaptureCalifacilGuideFrameOptions
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const fw = video.videoWidth;
+  const fh = video.videoHeight;
+  if (fw < 40 || fh < 40) return null;
+
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = fw;
+  fullCanvas.height = fh;
+  const ctx = fullCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, fw, fh);
+
+  const maxSide = opts?.maxSide;
+  if (maxSide && maxSide > 0) {
+    return drawSourceToCanvas(fullCanvas, maxSide);
+  }
+  return drawSourceToCanvas(fullCanvas, 1400);
+}
+
 /**
  * Captura el fotograma del video recortado al marco guía CaliFacil.
  * Con object-contain el fotograma completo coincide con el área visible; el recorte guía
@@ -1356,6 +1380,34 @@ export function captureCalifacilGuideFrame(
     return drawSourceToCanvas(cropped, maxSide);
   }
   return drawSourceToCanvas(cropped, 1400);
+}
+
+export type PrepareMobileCameraScanOptions = {
+  /** En vivo omitimos barrido fino de inclinación por rendimiento. */
+  live?: boolean;
+};
+
+/**
+ * Prepara fotograma de cámara móvil: orientación automática + detección de hoja.
+ * Usa el fotograma completo (no recorte guía) para que la perspectiva encuentre el papel.
+ */
+export function prepareMobileCameraScanCanvas(
+  source: HTMLCanvasElement,
+  columns: number,
+  opts?: PrepareMobileCameraScanOptions
+): { canvas: HTMLCanvasElement; sheetLikely: boolean } {
+  const oriented =
+    autoOrientCalifacilSheet(source, columns, {
+      useGuideCrop: false,
+      allowTiltSweep: !opts?.live,
+    }) ?? source;
+  const canvas =
+    oriented instanceof HTMLCanvasElement ? oriented : drawSourceToCanvas(oriented, 1400);
+  const safe = canvas ?? source;
+  return {
+    canvas: safe,
+    sheetLikely: isCalifacilExamSheetLikely(safe, columns),
+  };
 }
 
 /** Opciones para preparar imagen antes de orientar / escanear CaliFacil */
