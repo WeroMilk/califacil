@@ -3,7 +3,7 @@ import { resolveOptionIndexFromValue } from '@/lib/utils';
 
 /**
  * Relación ancho:alto del recuadro CaliFacil impreso (borde exterior del aside: título + tabla).
- * Calíbralo con captura real: debe coincidir con la caja `.califacil-omr` (--califacil-footer-band 70mm + padding).
+ * Calíbralo con captura real: debe coincidir con la caja `.califacil-omr` (--califacil-footer-band 76mm + padding).
  * Valor más bajo = guía más alta para un mismo ancho.
  */
 export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 2.92;
@@ -230,9 +230,9 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
      * .print-page-fill sigue en flex column para que el bloque de preguntas ocupe el hueco restante; padding-bottom reserva la franja del pie.
      */
     .print-page--with-omr {
-      --sheet-inner-height: calc(11in - 16mm);
-      --califacil-footer-band: 70mm;
-      --omr-bottom-gap: 5mm;
+      --sheet-inner-height: calc(11in - 8mm);
+      --califacil-footer-band: 76mm;
+      --omr-bottom-gap: 3mm;
       overflow: visible;
     }
     .print-page-omr-bundle {
@@ -258,6 +258,10 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       box-sizing: border-box;
       padding-bottom: calc(var(--califacil-footer-band) + var(--omr-bottom-gap));
     }
+    .print-page--with-omr .print-page-fill .questions-block {
+      overflow: hidden;
+      max-height: 100%;
+    }
     .print-page-omr-bundle > .califacil-omr {
       position: absolute;
       left: 0;
@@ -266,18 +270,38 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       margin: 0;
       height: var(--califacil-footer-band);
       min-height: var(--califacil-footer-band);
-      max-height: var(--califacil-footer-band);
       width: auto;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      z-index: 1;
+      z-index: 2;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .print-page--with-omr .print-page-omr-bundle .omr-title {
       flex-shrink: 0;
+    }
+    .print-page--with-omr .print-page-omr-bundle .omr-table {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .print-page--with-omr .meta-grid {
+      margin-bottom: 10pt;
+    }
+    .print-page--with-omr .question {
+      margin-bottom: 2.5pt;
+    }
+    .print-page--with-omr .question + .question {
+      padding-top: 2pt;
+    }
+    .print-page--with-omr .q-num {
+      font-size: 8pt;
+      line-height: 1.12;
+    }
+    .print-page--with-omr .opt-inline {
+      font-size: 7.2pt;
+      line-height: 1.14;
     }
     .print-page--break {
       page-break-after: always;
@@ -300,21 +324,6 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       border-bottom: 1px solid #000;
       padding-bottom: 2pt;
       margin-bottom: 2pt;
-    }
-    .sheet-banner-wrap {
-      width: 100%;
-      background: #fff;
-      line-height: 0;
-      display: flex;
-      justify-content: center;
-    }
-    .sheet-banner {
-      width: 100%;
-      height: auto;
-      max-height: 0.62in;
-      object-fit: contain;
-      object-position: center;
-      display: block;
     }
     .sheet-header-text {
       width: 100%;
@@ -391,21 +400,19 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     .califacil-omr {
       position: relative;
       margin: 0;
-
-      padding: 3pt 4pt 4pt;
-
+      padding: 2.5pt 4pt 3pt;
       border: 1.7pt solid #000;
       break-inside: avoid-page;
       page-break-inside: avoid;
       -webkit-print-color-adjust: exact;
-
       print-color-adjust: exact;
     }
-      font-size: 6.4pt;
+    .omr-title {
+      font-size: 6pt;
       font-weight: bold;
       text-align: center;
-      margin: 0 0 3.5pt;
-      line-height: 1.2;
+      margin: 0 0 2pt;
+      line-height: 1.15;
     }
     .omr-table {
       width: 100%;
@@ -420,7 +427,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       font-weight: 800;
       text-align: center;
       vertical-align: middle;
-      padding: 2.3pt 2.6pt;
+      padding: 1.6pt 2pt;
       border: 0.8pt solid #000;
       background: #d8d8d8;
       color: #000;
@@ -448,16 +455,16 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       width: 9%;
       font-weight: bold;
       text-align: right;
-      padding: 2.2pt 4.2pt 2.2pt 2.4pt;
+      padding: 1.4pt 3pt 1.4pt 2pt;
       vertical-align: middle;
       border: 0.8pt solid #000;
       background: #efefef;
-      font-size: 7.4pt;
+      font-size: 7pt;
     }
     .omr-bubble-cell {
       text-align: center;
       vertical-align: middle;
-      padding: 1.9pt 3.2pt;
+      padding: 1.2pt 2.5pt;
       border: 0.8pt solid #000;
     }
     .omr-bubble-cell--muted {
@@ -468,15 +475,15 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       flex-direction: row;
       align-items: center;
       justify-content: center;
-      min-height: 11pt;
+      min-height: 9pt;
     }
     .omr-square {
-      width: 11pt;
-      height: 11pt;
-      min-width: 11pt;
-      min-height: 11pt;
-      border: 1.1pt solid #000;
-      border-radius: 1.5pt;
+      width: 9pt;
+      height: 9pt;
+      min-width: 9pt;
+      min-height: 9pt;
+      border: 1pt solid #000;
+      border-radius: 1.2pt;
       background: #fff;
       box-sizing: border-box;
       -webkit-print-color-adjust: exact;
@@ -499,6 +506,16 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     @media print {
       body { max-width: none; }
       .no-print { display: none; }
+      .print-page--with-omr .print-page-omr-bundle {
+        height: var(--sheet-inner-height);
+        min-height: var(--sheet-inner-height);
+        max-height: var(--sheet-inner-height);
+        overflow: hidden;
+      }
+      .print-page--with-omr .print-page-fill,
+      .print-page--with-omr .print-page-fill .questions-block {
+        overflow: hidden;
+      }
     }`;
 
 /**
@@ -510,7 +527,6 @@ export function buildPrintExamHtml(
 ): string {
   const includeAnswerKey = options.includeAnswerKey === true;
   const title = escapeHtml(exam.title);
-  const headerBannerUrl = `${options.baseUrl.replace(/\/$/, '')}/print-header-banner.png`;
 
   const omrCols = califacilOmrColumnCount(exam.questions);
 
@@ -554,9 +570,6 @@ export function buildPrintExamHtml(
 
       const sheetHeaderHtml = `
     <header class="sheet-header">
-      <div class="sheet-banner-wrap">
-        <img class="sheet-banner" src="${headerBannerUrl}" alt="" crossorigin="anonymous" />
-      </div>
       <div class="sheet-header-text">
         ${headerRight}
       </div>

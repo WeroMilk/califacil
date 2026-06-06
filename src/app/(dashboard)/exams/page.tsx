@@ -196,7 +196,7 @@ function ExamCard({
       }
       const base =
         exam.title.replace(/[^\w\s-áéíóúñÁÉÍÓÚÑ]/gi, '').slice(0, 60) || 'examen';
-      const ok = await downloadExamWord(full, base, window.location.origin);
+      const ok = await downloadExamWord(full, base);
       if (ok) {
         toast.success('Word descargado');
       } else {

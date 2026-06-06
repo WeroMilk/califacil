@@ -91,23 +91,13 @@ function addQuestionContent(docx: Docx, children: FileChild[], q: Question, inde
 
 /**
  * Genera un .docx alineado con la hoja de impresión (carta, hasta 10 preguntas por hoja,
- * banner, nombre/grupo/fecha y opciones de respuesta en texto).
+ * nombre/grupo/fecha y opciones de respuesta en texto).
  */
 export async function downloadExamWord(
   exam: ExamWithQuestions,
-  filenameBase: string,
-  baseUrl: string
+  filenameBase: string
 ): Promise<boolean> {
   if (typeof window === 'undefined') return false;
-
-  let bannerBuf: ArrayBuffer | null = null;
-  try {
-    const url = `${baseUrl.replace(/\/$/, '')}/print-header-banner.png`;
-    const res = await fetch(url);
-    if (res.ok) bannerBuf = await res.arrayBuffer();
-  } catch {
-    bannerBuf = null;
-  }
 
   try {
     const docx = await import('docx');
@@ -123,7 +113,6 @@ export async function downloadExamWord(
       PageBreak,
       AlignmentType,
       BorderStyle,
-      ImageRun,
       convertInchesToTwip,
     } = docx;
 
@@ -173,22 +162,6 @@ export async function downloadExamWord(
       const startIdx = pageIdx * 10;
       const rangeStart = startIdx + 1;
       const rangeEnd = startIdx + chunkQs.length;
-
-      if (bannerBuf) {
-        children.push(
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 60 },
-            children: [
-              new ImageRun({
-                type: 'png',
-                data: bannerBuf,
-                transformation: { width: 650, height: 70 },
-              }),
-            ],
-          })
-        );
-      }
 
       children.push(
         new Paragraph({
