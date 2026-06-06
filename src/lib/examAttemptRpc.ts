@@ -89,3 +89,24 @@ export async function rpcStudentAnswerCount(examId: string, studentId: string): 
   if (error) throw error;
   return typeof data === 'number' ? data : Number(data);
 }
+
+export async function rpcLogExamAttemptEvent(
+  examId: string,
+  studentId: string,
+  clientSession: string,
+  eventType: string,
+  metadata?: Record<string, unknown> | null
+): Promise<boolean> {
+  const { data, error } = await examPublicSupabase.rpc('log_exam_attempt_event', {
+    p_exam_id: examId,
+    p_student_id: studentId,
+    p_session: clientSession,
+    p_event_type: eventType,
+    p_metadata: metadata ?? null,
+  });
+  if (error) {
+    console.error('log_exam_attempt_event:', error);
+    return false;
+  }
+  return Boolean((data as { ok?: boolean })?.ok);
+}

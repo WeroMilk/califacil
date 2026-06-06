@@ -1,13 +1,29 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useExam, useExamResults } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { 
   ArrowLeft,
   FileSpreadsheet,
@@ -17,7 +33,8 @@ import {
   TrendingUp,
   CheckCircle,
   XCircle,
-  Clock
+  Clock,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { 
@@ -37,14 +54,23 @@ import { Answer, Question, Student } from '@/types';
 import {
   formatDate,
   calculatePercentage,
+  examMaxScore,
   getGradeLabel,
   getGradeColor,
   isMultipleChoiceAnswerCorrect,
+  questionPoints,
 } from '@/lib/utils';
+import {
+  examAttemptEventLabels,
+  formatAttemptDuration,
+  voidReasonLabel,
+} from '@/lib/examForfeitMessages';
 
 interface StudentResult {
   studentId: string;
   studentName: string;
+  groupId: string | null;
+  groupName: string;
   answers: Answer[];
   totalScore: number;
   maxScore: number;
@@ -102,6 +128,105 @@ function sanitizeExportFilenameBase(title: string): string {
   return title.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80) || 'examen';
 }
 
+type AssignedGroup = { id: string; name: string };
+
+type VoidedAttemptRow = {
+  student_id: string;
+  student_name: string;
+  group_id: string | null;
+  void_reason: string | null;
+  started_at: string;
+  closed_at: string;
+  duration_seconds: number;
+};
+
+type AttemptTimelineEvent = {
+  event_type: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+function buildQuestionAnalysisForAnswers(
+  questions: Question[],
+  answers: Answer[]
+): QuestionAnalysis[] {
+  return questions.map((question) => {
+    const questionAnswers = answers.filter((a) => a.question_id === question.id);
+    const correctAnswers =
+      question.type === 'multiple_choice'
+        ? questionAnswers.filter((a) =>
+            isMultipleChoiceAnswerCorrect(question.options, a.answer_text, question.correct_answer)
+          ).length
+        : questionAnswers.filter((a) => a.is_correct).length;
+
+    let incorrectAnswers = 0;
+    let blankAnswers = 0;
+    const optTally: Record<string, number> = {};
+
+    for (const a of questionAnswers) {
+      const text = (a.answer_text ?? '').trim();
+      if (question.type === 'multiple_choice') {
+        if (!text) {
+          blankAnswers++;
+          continue;
+        }
+        const ok = isMultipleChoiceAnswerCorrect(
+          question.options,
+          a.answer_text,
+          question.correct_answer
+        );
+        if (!ok) incorrectAnswers++;
+        optTally[text] = (optTally[text] ?? 0) + 1;
+      } else {
+        if (!text) blankAnswers++;
+        else if (a.is_correct === false) incorrectAnswers++;
+      }
+    }
+
+    const correctOpt = (question.correct_answer ?? '').trim();
+    const optionCounts: { label: string; count: number; isCorrectOption: boolean }[] =
+      question.type === 'multiple_choice'
+        ? Object.entries(optTally)
+            .map(([label, count]) => ({
+              label,
+              count,
+              isCorrectOption: label === correctOpt,
+            }))
+            .sort((x, y) => y.count - x.count)
+        : [];
+
+    return {
+      question,
+      totalAnswers: questionAnswers.length,
+      correctAnswers,
+      incorrectAnswers,
+      blankAnswers,
+      percentageCorrect: calculatePercentage(correctAnswers, questionAnswers.length),
+      optionCounts,
+    };
+  });
+}
+
+function buildGradeDistribution(results: StudentResult[]) {
+  const distribution = [
+    { range: '90-100', count: 0, label: 'Excelente', color: '#22c55e' },
+    { range: '80-89', count: 0, label: 'Muy bien', color: '#3b82f6' },
+    { range: '70-79', count: 0, label: 'Bien', color: '#eab308' },
+    { range: '60-69', count: 0, label: 'Suficiente', color: '#f97316' },
+    { range: '0-59', count: 0, label: 'Necesita mejorar', color: '#ef4444' },
+  ];
+
+  results.forEach((result) => {
+    if (result.percentage >= 90) distribution[0].count++;
+    else if (result.percentage >= 80) distribution[1].count++;
+    else if (result.percentage >= 70) distribution[2].count++;
+    else if (result.percentage >= 60) distribution[3].count++;
+    else distribution[4].count++;
+  });
+
+  return distribution;
+}
+
 export default function ExamResultsPage() {
   const params = useParams();
   const router = useRouter();
@@ -109,15 +234,77 @@ export default function ExamResultsPage() {
   const { exam, loading: examLoading } = useExam(examId);
   const { answers, loading: answersLoading } = useExamResults(examId);
   const [studentResults, setStudentResults] = useState<StudentResult[]>([]);
-  const [questionAnalysis, setQuestionAnalysis] = useState<QuestionAnalysis[]>([]);
-  const [gradeDistribution, setGradeDistribution] = useState<any[]>([]);
   const [selectedStudentBreakdownId, setSelectedStudentBreakdownId] = useState<string>('');
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<Record<string, boolean>>({});
+  const [assignedGroups, setAssignedGroups] = useState<AssignedGroup[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
+  const [voidedAttempts, setVoidedAttempts] = useState<VoidedAttemptRow[]>([]);
+  const [loadingVoided, setLoadingVoided] = useState(false);
+  const [retakeModalOpen, setRetakeModalOpen] = useState(false);
+  const [retakeTarget, setRetakeTarget] = useState<VoidedAttemptRow | null>(null);
+  const [retakeTimeline, setRetakeTimeline] = useState<{
+    duration_seconds: number;
+    void_reason: string | null;
+    last_10_seconds: AttemptTimelineEvent[];
+  } | null>(null);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
+  const [grantingRetake, setGrantingRetake] = useState(false);
+
+  useEffect(() => {
+    if (!examId) return;
+    let cancelled = false;
+    (async () => {
+      const { data: assignmentData } = await supabase
+        .from('exam_group_assignments')
+        .select('group_id')
+        .eq('exam_id', examId);
+      if (cancelled) return;
+      let groupIds = (assignmentData || []).map((r) => r.group_id as string);
+      if (groupIds.length === 0 && exam?.group_id) {
+        groupIds = [exam.group_id];
+      }
+      if (groupIds.length === 0) {
+        setAssignedGroups([]);
+        return;
+      }
+      const { data: groupsData } = await supabase.from('groups').select('id, name').in('id', groupIds);
+      if (cancelled) return;
+      setAssignedGroups((groupsData || []) as AssignedGroup[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [examId, exam?.group_id]);
+
+  useEffect(() => {
+    if (!examId) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingVoided(true);
+      try {
+        const res = await fetch(`/api/exams/${examId}/voided-attempts`, {
+          headers: await dashboardAuthJsonHeaders(),
+        });
+        const payload = (await res.json().catch(() => ({}))) as { attempts?: VoidedAttemptRow[] };
+        if (cancelled) return;
+        if (res.ok) {
+          setVoidedAttempts(payload.attempts ?? []);
+        }
+      } finally {
+        if (!cancelled) setLoadingVoided(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [examId]);
 
   useEffect(() => {
     if (!exam) return;
 
-    const applyResults = (studentNamesById: Record<string, string>) => {
+    const groupNameById = Object.fromEntries(assignedGroups.map((g) => [g.id, g.name]));
+
+    const applyResults = (studentMetaById: Record<string, { name: string; groupId: string | null }>) => {
       if (!exam) return;
 
       const answersByStudent = answers.reduce((acc, answer) => {
@@ -128,20 +315,28 @@ export default function ExamResultsPage() {
         return acc;
       }, {} as Record<string, Answer[]>);
 
+      const maxScore = examMaxScore(exam.questions);
       const results: StudentResult[] = Object.entries(answersByStudent).map(([studentId, studentAnswers]) => {
-        const maxScore = exam.questions.length;
         const totalScore = exam.questions.reduce((sum, q) => {
           const a = studentAnswers.find((x) => x.question_id === q.id);
           if (q.type === 'multiple_choice') {
-            return sum + (a && isMultipleChoiceAnswerCorrect(q.options, a.answer_text, q.correct_answer) ? 1 : 0);
+            return (
+              sum +
+              (a && isMultipleChoiceAnswerCorrect(q.options, a.answer_text, q.correct_answer)
+                ? questionPoints(q)
+                : 0)
+            );
           }
           const sc = a?.score;
           return sum + (typeof sc === 'number' ? sc : 0);
         }, 0);
-        const name = studentNamesById[studentId]?.trim();
+        const meta = studentMetaById[studentId];
+        const groupId = meta?.groupId ?? null;
         return {
           studentId,
-          studentName: name || `Estudiante ${studentId.slice(0, 8)}`,
+          studentName: meta?.name?.trim() || `Estudiante ${studentId.slice(0, 8)}`,
+          groupId,
+          groupName: groupId ? groupNameById[groupId] || 'Grupo' : '—',
           answers: studentAnswers,
           totalScore,
           maxScore,
@@ -151,82 +346,6 @@ export default function ExamResultsPage() {
       });
 
       setStudentResults(results.sort((a, b) => b.percentage - a.percentage));
-
-      const analysis: QuestionAnalysis[] = exam.questions.map((question) => {
-        const questionAnswers = answers.filter((a) => a.question_id === question.id);
-        const correctAnswers =
-          question.type === 'multiple_choice'
-            ? questionAnswers.filter((a) =>
-                isMultipleChoiceAnswerCorrect(question.options, a.answer_text, question.correct_answer)
-              ).length
-            : questionAnswers.filter((a) => a.is_correct).length;
-
-        let incorrectAnswers = 0;
-        let blankAnswers = 0;
-        const optTally: Record<string, number> = {};
-
-        for (const a of questionAnswers) {
-          const text = (a.answer_text ?? '').trim();
-          if (question.type === 'multiple_choice') {
-            if (!text) {
-              blankAnswers++;
-              continue;
-            }
-            const ok = isMultipleChoiceAnswerCorrect(
-              question.options,
-              a.answer_text,
-              question.correct_answer
-            );
-            if (!ok) incorrectAnswers++;
-            optTally[text] = (optTally[text] ?? 0) + 1;
-          } else {
-            if (!text) blankAnswers++;
-            else if (a.is_correct === false) incorrectAnswers++;
-          }
-        }
-
-        const correctOpt = (question.correct_answer ?? '').trim();
-        const optionCounts: { label: string; count: number; isCorrectOption: boolean }[] =
-          question.type === 'multiple_choice'
-            ? Object.entries(optTally)
-                .map(([label, count]) => ({
-                  label,
-                  count,
-                  isCorrectOption: label === correctOpt,
-                }))
-                .sort((x, y) => y.count - x.count)
-            : [];
-
-        return {
-          question,
-          totalAnswers: questionAnswers.length,
-          correctAnswers,
-          incorrectAnswers,
-          blankAnswers,
-          percentageCorrect: calculatePercentage(correctAnswers, questionAnswers.length),
-          optionCounts,
-        };
-      });
-
-      setQuestionAnalysis(analysis);
-
-      const distribution = [
-        { range: '90-100', count: 0, label: 'Excelente', color: '#22c55e' },
-        { range: '80-89', count: 0, label: 'Muy bien', color: '#3b82f6' },
-        { range: '70-79', count: 0, label: 'Bien', color: '#eab308' },
-        { range: '60-69', count: 0, label: 'Suficiente', color: '#f97316' },
-        { range: '0-59', count: 0, label: 'Necesita mejorar', color: '#ef4444' },
-      ];
-
-      results.forEach((result) => {
-        if (result.percentage >= 90) distribution[0].count++;
-        else if (result.percentage >= 80) distribution[1].count++;
-        else if (result.percentage >= 70) distribution[2].count++;
-        else if (result.percentage >= 60) distribution[3].count++;
-        else distribution[4].count++;
-      });
-
-      setGradeDistribution(distribution);
     };
 
     const uniqueIds = Array.from(new Set(answers.map((a) => a.student_id)));
@@ -237,23 +356,96 @@ export default function ExamResultsPage() {
 
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from('students').select('id, name').in('id', uniqueIds);
+      const { data } = await supabase.from('students').select('id, name, group_id').in('id', uniqueIds);
       if (cancelled) return;
-      const studentNamesById: Record<string, string> = {};
-      (data || []).forEach((row: Pick<Student, 'id' | 'name'>) => {
-        studentNamesById[row.id] = row.name;
+      const studentMetaById: Record<string, { name: string; groupId: string | null }> = {};
+      (data || []).forEach((row: Pick<Student, 'id' | 'name' | 'group_id'>) => {
+        studentMetaById[row.id] = { name: row.name, groupId: row.group_id };
       });
-      applyResults(studentNamesById);
+      applyResults(studentMetaById);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [exam, answers]);
+  }, [exam, answers, assignedGroups]);
 
   useEffect(() => {
     setExpandedQuestionIds({});
   }, [selectedStudentBreakdownId]);
+
+  const filteredStudentResults = useMemo(() => {
+    if (selectedGroupId === 'all') return studentResults;
+    return studentResults.filter((r) => r.groupId === selectedGroupId);
+  }, [studentResults, selectedGroupId]);
+
+  const filteredAnswers = useMemo(() => {
+    if (selectedGroupId === 'all') return answers;
+    const ids = new Set(filteredStudentResults.map((r) => r.studentId));
+    return answers.filter((a) => ids.has(a.student_id));
+  }, [answers, filteredStudentResults, selectedGroupId]);
+
+  const questionAnalysis = useMemo(() => {
+    if (!exam) return [];
+    return buildQuestionAnalysisForAnswers(exam.questions, filteredAnswers);
+  }, [exam, filteredAnswers]);
+
+  const gradeDistribution = useMemo(
+    () => buildGradeDistribution(filteredStudentResults),
+    [filteredStudentResults]
+  );
+
+  const openRetakeModal = async (attempt: VoidedAttemptRow) => {
+    setRetakeTarget(attempt);
+    setRetakeTimeline(null);
+    setRetakeModalOpen(true);
+    setLoadingTimeline(true);
+    try {
+      const res = await fetch(`/api/exams/${examId}/students/${attempt.student_id}/retake`, {
+        headers: await dashboardAuthJsonHeaders(),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        duration_seconds?: number;
+        void_reason?: string | null;
+        last_10_seconds?: AttemptTimelineEvent[];
+      };
+      if (res.ok) {
+        setRetakeTimeline({
+          duration_seconds: payload.duration_seconds ?? attempt.duration_seconds,
+          void_reason: payload.void_reason ?? attempt.void_reason,
+          last_10_seconds: payload.last_10_seconds ?? [],
+        });
+      }
+    } finally {
+      setLoadingTimeline(false);
+    }
+  };
+
+  const handleGrantRetake = async () => {
+    if (!retakeTarget) return;
+    setGrantingRetake(true);
+    try {
+      const res = await fetch(`/api/exams/${examId}/students/${retakeTarget.student_id}/retake`, {
+        method: 'POST',
+        headers: await dashboardAuthJsonHeaders(),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; hint?: string };
+      if (!res.ok) {
+        toast.error(payload.error || 'No se pudo otorgar la segunda oportunidad', {
+          description: payload.hint,
+        });
+        return;
+      }
+      toast.success('Segunda oportunidad otorgada');
+      setRetakeModalOpen(false);
+      setRetakeTarget(null);
+      setVoidedAttempts((prev) => prev.filter((a) => a.student_id !== retakeTarget.student_id));
+    } catch {
+      toast.error('Error al otorgar la segunda oportunidad');
+    } finally {
+      setGrantingRetake(false);
+    }
+  };
 
   const exportToExcel = () => {
     if (!exam) return;
@@ -262,8 +454,9 @@ export default function ExamResultsPage() {
       const base = sanitizeExportFilenameBase(exam.title);
 
       const estudiantesSheet = XLSX.utils.json_to_sheet(
-        studentResults.map((result) => ({
+        filteredStudentResults.map((result) => ({
           Estudiante: result.studentName,
+          Grupo: result.groupName,
           Puntaje: result.totalScore,
           Máximo: result.maxScore,
           Porcentaje: `${result.percentage}%`,
@@ -296,7 +489,7 @@ export default function ExamResultsPage() {
       XLSX.utils.book_append_sheet(wb, reactivosSheet, 'Reactivos');
 
       const detalleRows: Record<string, string | number>[] = [];
-      for (const result of studentResults) {
+      for (const result of filteredStudentResults) {
         for (const row of buildStudentQuestionBreakdownRows(result, exam.questions)) {
           detalleRows.push({
             Estudiante: result.studentName,
@@ -350,17 +543,17 @@ export default function ExamResultsPage() {
         doc.text(`Resultados: ${exam.title}`, margin, 20);
 
         doc.setFontSize(10);
-        const approved = studentResults.filter((r) => r.percentage >= 60).length;
-        const failed = studentResults.filter((r) => r.percentage < 60).length;
+        const approved = filteredStudentResults.filter((r) => r.percentage >= 60).length;
+        const failed = filteredStudentResults.filter((r) => r.percentage < 60).length;
         const avg =
-          studentResults.length > 0
+          filteredStudentResults.length > 0
             ? (
-                studentResults.reduce((sum, r) => sum + r.percentage, 0) / studentResults.length
+                filteredStudentResults.reduce((sum, r) => sum + r.percentage, 0) / filteredStudentResults.length
               ).toFixed(1)
             : '0';
 
         doc.text(
-          `Estudiantes: ${studentResults.length}  ·  Promedio: ${avg}%  ·  Aprobados: ${approved}  ·  Reprobados: ${failed}`,
+          `Estudiantes: ${filteredStudentResults.length}  ·  Promedio: ${avg}%  ·  Aprobados: ${approved}  ·  Reprobados: ${failed}`,
           margin,
           30
         );
@@ -383,9 +576,10 @@ export default function ExamResultsPage() {
 
         section('Estudiantes — resultados globales');
         (doc as any).autoTable({
-          head: [['Estudiante', 'Puntaje', '%', 'Calificación', 'Fecha']],
-          body: studentResults.map((result) => [
+          head: [['Estudiante', 'Grupo', 'Puntaje', '%', 'Calificación', 'Fecha']],
+          body: filteredStudentResults.map((result) => [
             result.studentName,
+            result.groupName,
             `${result.totalScore}/${result.maxScore}`,
             `${result.percentage}%`,
             getGradeLabel(result.percentage),
@@ -463,7 +657,7 @@ export default function ExamResultsPage() {
 
         section('Detalle por estudiante y pregunta');
         const detalleBody: string[][] = [];
-        for (const result of studentResults) {
+        for (const result of filteredStudentResults) {
           for (const row of buildStudentQuestionBreakdownRows(result, exam.questions)) {
             const estado =
               row.isCorrect === true
@@ -528,7 +722,7 @@ export default function ExamResultsPage() {
   }
 
   const selectedStudentForBreakdown =
-    studentResults.find((r) => r.studentId === selectedStudentBreakdownId) ?? null;
+    filteredStudentResults.find((r) => r.studentId === selectedStudentBreakdownId) ?? null;
 
   const breakdownRows: StudentQuestionBreakdown[] = selectedStudentForBreakdown
     ? buildStudentQuestionBreakdownRows(selectedStudentForBreakdown, exam.questions)
@@ -541,8 +735,8 @@ export default function ExamResultsPage() {
     }));
   };
 
-  const averageScore = studentResults.length > 0 
-    ? (studentResults.reduce((sum, r) => sum + r.percentage, 0) / studentResults.length).toFixed(1)
+  const averageScore = filteredStudentResults.length > 0 
+    ? (filteredStudentResults.reduce((sum, r) => sum + r.percentage, 0) / filteredStudentResults.length).toFixed(1)
     : '0';
 
   return (
@@ -578,7 +772,7 @@ export default function ExamResultsPage() {
             <Users className="h-3.5 w-3.5 shrink-0 text-orange-600 sm:h-4 sm:w-4" />
           </CardHeader>
           <CardContent className="px-3 pb-0 pt-0 sm:px-6">
-            <div className="text-lg font-bold tabular-nums sm:text-2xl">{studentResults.length}</div>
+            <div className="text-lg font-bold tabular-nums sm:text-2xl">{filteredStudentResults.length}</div>
           </CardContent>
         </Card>
 
@@ -599,7 +793,7 @@ export default function ExamResultsPage() {
           </CardHeader>
           <CardContent className="px-3 pb-0 pt-0 sm:px-6">
             <div className="text-lg font-bold tabular-nums sm:text-2xl">
-              {studentResults.filter(r => r.percentage >= 60).length}
+              {filteredStudentResults.filter(r => r.percentage >= 60).length}
             </div>
           </CardContent>
         </Card>
@@ -611,14 +805,33 @@ export default function ExamResultsPage() {
           </CardHeader>
           <CardContent className="px-3 pb-0 pt-0 sm:px-6">
             <div className="text-lg font-bold tabular-nums sm:text-2xl">
-              {studentResults.filter(r => r.percentage < 60).length}
+              {filteredStudentResults.filter(r => r.percentage < 60).length}
             </div>
           </CardContent>
         </Card>
       </div>
 
+      {assignedGroups.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-gray-600">Filtrar por grupo:</span>
+          <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="Todos los grupos" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los grupos</SelectItem>
+              {assignedGroups.map((g) => (
+                <SelectItem key={g.id} value={g.id}>
+                  {g.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <Tabs defaultValue="students" className="min-w-0 space-y-4 sm:space-y-6">
-        <TabsList className="grid h-auto w-full min-w-0 grid-cols-3 gap-1 rounded-lg bg-muted p-1 sm:inline-flex sm:h-9 sm:w-fit">
+        <TabsList className="grid h-auto w-full min-w-0 grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:inline-flex sm:h-9 sm:w-fit">
           <TabsTrigger value="students" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
             <Users className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
             <span className="truncate">Estudiantes</span>
@@ -632,6 +845,10 @@ export default function ExamResultsPage() {
             <span className="truncate sm:hidden">Reactivos</span>
             <span className="hidden truncate sm:inline">Reactivos (por pregunta)</span>
           </TabsTrigger>
+          <TabsTrigger value="voided" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
+            <span className="truncate">Anulados</span>
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="students">
@@ -643,7 +860,7 @@ export default function ExamResultsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {studentResults.length === 0 ? (
+              {filteredStudentResults.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   No hay resultados aún
                 </div>
@@ -652,9 +869,10 @@ export default function ExamResultsPage() {
                   <table className="w-full table-fixed text-sm">
                     <thead>
                       <tr className="border-b">
-                        <th className="w-[46%] py-2 pl-0 pr-2 text-left font-semibold sm:w-auto sm:py-3 sm:px-4 sm:pl-4">
+                        <th className="w-[36%] py-2 pl-0 pr-2 text-left font-semibold sm:w-auto sm:py-3 sm:px-4 sm:pl-4">
                           Estudiante
                         </th>
+                        <th className="hidden py-3 px-4 text-left font-semibold sm:table-cell">Grupo</th>
                         <th className="w-[22%] py-2 px-1 text-center font-semibold sm:w-auto sm:py-3 sm:px-4">
                           Puntaje
                         </th>
@@ -668,11 +886,12 @@ export default function ExamResultsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {studentResults.map((result) => (
+                      {filteredStudentResults.map((result) => (
                         <tr key={result.studentId} className="border-b hover:bg-gray-50">
                           <td className="py-2 pl-0 pr-2 font-medium [word-break:break-word] sm:py-3 sm:px-4 sm:pl-4">
                             {result.studentName}
                           </td>
+                          <td className="hidden py-3 px-4 text-gray-600 sm:table-cell">{result.groupName}</td>
                           <td className="py-2 px-1 text-center tabular-nums sm:py-3 sm:px-4">
                             {result.totalScore}/{result.maxScore}
                           </td>
@@ -709,7 +928,7 @@ export default function ExamResultsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {studentResults.length === 0 ? (
+              {filteredStudentResults.length === 0 ? (
                 <div className="text-sm text-gray-500">Aún no hay estudiantes con resultados.</div>
               ) : (
                 <>
@@ -721,7 +940,7 @@ export default function ExamResultsPage() {
                       onChange={(e) => setSelectedStudentBreakdownId(e.target.value)}
                     >
                       <option value="">Selecciona un alumno</option>
-                      {studentResults.map((result) => (
+                      {filteredStudentResults.map((result) => (
                         <option key={result.studentId} value={result.studentId}>
                           {result.studentName} ({result.percentage}%)
                         </option>
@@ -955,7 +1174,115 @@ export default function ExamResultsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="voided">
+          <Card>
+            <CardHeader>
+              <CardTitle>Intentos anulados</CardTitle>
+              <CardDescription>
+                Alumnos cuyo intento en línea fue anulado. Puedes revisar qué ocurrió y otorgar una segunda oportunidad.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loadingVoided ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-orange-600" />
+                </div>
+              ) : voidedAttempts.length === 0 ? (
+                <p className="py-6 text-center text-sm text-gray-500">No hay intentos anulados registrados.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="py-2 text-left font-semibold">Estudiante</th>
+                        <th className="py-2 text-left font-semibold">Duración</th>
+                        <th className="py-2 text-left font-semibold">Motivo</th>
+                        <th className="py-2 text-right font-semibold">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {voidedAttempts.map((attempt) => (
+                        <tr key={attempt.student_id} className="border-b">
+                          <td className="py-3 font-medium">{attempt.student_name}</td>
+                          <td className="py-3 text-gray-600">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock className="h-4 w-4" />
+                              {formatAttemptDuration(attempt.duration_seconds)}
+                            </span>
+                          </td>
+                          <td className="py-3 text-gray-600">{voidReasonLabel(attempt.void_reason)}</td>
+                          <td className="py-3 text-right">
+                            <Button size="sm" onClick={() => void openRetakeModal(attempt)}>
+                              Revisar y otorgar oportunidad
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      <Dialog open={retakeModalOpen} onOpenChange={setRetakeModalOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Revisión antes de segunda oportunidad</DialogTitle>
+            <DialogDescription>
+              {retakeTarget?.student_name
+                ? `Revisa el intento anulado de ${retakeTarget.student_name} antes de permitir un nuevo intento.`
+                : 'Revisa el intento anulado antes de permitir un nuevo intento.'}
+            </DialogDescription>
+          </DialogHeader>
+          {loadingTimeline ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-orange-600" />
+            </div>
+          ) : retakeTimeline ? (
+            <div className="space-y-4 text-sm">
+              <div className="rounded-lg border bg-gray-50 p-3">
+                <p className="font-medium text-gray-900">Tiempo en el examen</p>
+                <p className="mt-1 text-gray-700">{formatAttemptDuration(retakeTimeline.duration_seconds)}</p>
+              </div>
+              <div className="rounded-lg border bg-amber-50 p-3">
+                <p className="font-medium text-amber-900">Por qué se cerró el examen</p>
+                <p className="mt-1 text-amber-800">{voidReasonLabel(retakeTimeline.void_reason)}</p>
+              </div>
+              <div>
+                <p className="mb-2 font-medium text-gray-900">Últimos 10 segundos antes del cierre</p>
+                {retakeTimeline.last_10_seconds.length === 0 ? (
+                  <p className="text-gray-500">No hay eventos registrados en ese intervalo.</p>
+                ) : (
+                  <ul className="max-h-40 space-y-2 overflow-y-auto rounded-lg border p-3">
+                    {retakeTimeline.last_10_seconds.map((ev, idx) => (
+                      <li key={idx} className="text-gray-700">
+                        <span className="font-mono text-xs text-gray-500">
+                          {new Date(ev.created_at).toLocaleTimeString('es-ES')}
+                        </span>
+                        {' — '}
+                        {examAttemptEventLabels[ev.event_type] ?? ev.event_type}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRetakeModalOpen(false)} disabled={grantingRetake}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void handleGrantRetake()} disabled={grantingRetake || loadingTimeline}>
+              {grantingRetake ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Otorgar segunda oportunidad
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

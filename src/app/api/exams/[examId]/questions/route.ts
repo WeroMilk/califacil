@@ -49,6 +49,12 @@ export async function POST(
           q.illustration != null && String(q.illustration).trim() !== ''
             ? String(q.illustration)
             : null,
+        points:
+          typeof q.points === 'number' && q.points > 0
+            ? q.points
+            : q.points != null && Number(q.points) > 0
+              ? Number(q.points)
+              : 1,
       };
     });
 

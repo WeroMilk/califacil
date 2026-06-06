@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Info, LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
+import { Info, LayoutDashboard, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -35,6 +35,7 @@ import {
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
   calculatePercentage,
+  questionPoints,
   cn,
   getGradeColor,
   getGradeLabel,
@@ -508,7 +509,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Encuadra la hoja: el marco blanco sigue los bordes del papel; las esquinas naranjas deben coincidir con los cuatro cuadros negros impresos en las esquinas de la hoja. Pulsa «Tomar foto» cuando quieras.'
+        ? 'Encuadra la hoja: alinea las esquinas naranjas con los cuadros negros impresos. La captura es automática; también puedes tocar la pantalla.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -1486,7 +1487,7 @@ export default function CalificarPage() {
           }
           if (mergedResolved >= chunk.length && chunk.length > 0) {
             const nextStatus = isMobile
-              ? 'Lectura estable: capturando en automático o pulsa «Tomar foto».'
+              ? 'Lectura estable: capturando en automático o toca la pantalla.'
               : 'Detección completa. Toca «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
@@ -1494,7 +1495,7 @@ export default function CalificarPage() {
             }
           } else if (mergedResolved >= minResolved) {
             const nextStatus = isMobile
-              ? 'Casi listo: mantén fijo el encuadre o usa «Tomar foto».'
+              ? 'Casi listo: mantén fijo el encuadre o toca la pantalla para capturar.'
               : 'Lecturas capturadas. Completa faltantes o pulsa «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
@@ -1703,6 +1704,8 @@ export default function CalificarPage() {
     }
 
     let correctCount = 0;
+    let earnedPoints = 0;
+    let maxMcPoints = 0;
     const rows = questions.map((question: Question) => {
       const answerText = (merged[question.id] ?? '').trim();
       const expected = (effectiveKey[question.id] ?? '').trim();
@@ -1712,7 +1715,14 @@ export default function CalificarPage() {
         question.type === 'multiple_choice'
           ? gotIdx !== null && wantIdx !== null && gotIdx === wantIdx
           : null;
-      if (isCorrect) correctCount++;
+      const pts = questionPoints(question);
+      if (question.type === 'multiple_choice') {
+        maxMcPoints += pts;
+        if (isCorrect) {
+          correctCount++;
+          earnedPoints += pts;
+        }
+      }
 
       return {
         exam_id: examId,
@@ -1720,7 +1730,7 @@ export default function CalificarPage() {
         question_id: question.id,
         answer_text: answerText,
         is_correct: isCorrect,
-        score: isCorrect ? 1 : 0,
+        score: isCorrect ? pts : 0,
       };
     });
 
@@ -1729,7 +1739,7 @@ export default function CalificarPage() {
     });
     if (answersError) throw answersError;
 
-    const pct = calculatePercentage(correctCount, mcTotal);
+    const pct = calculatePercentage(earnedPoints, maxMcPoints);
     const wrong = Math.max(0, mcTotal - correctCount);
     return { pct, correct: correctCount, wrong, total: mcTotal };
   };
@@ -1893,16 +1903,6 @@ export default function CalificarPage() {
     setResultsSheetIdx(0);
     setPhase('elegir');
   }, [clearMobileSnapshots]);
-
-  const scanAgainInLive = () => {
-    const chunk = sheets[sheetIndex] ?? [];
-    setDraftSelections((prev) => {
-      const next = { ...prev };
-      for (const q of chunk) delete next[q.id];
-      return next;
-    });
-    resetLiveReadings();
-  };
 
   if (!user) return null;
 
@@ -2300,7 +2300,7 @@ export default function CalificarPage() {
             onChange={handleGalleryFile}
           />
 
-          <div ref={mobileVideoViewportRef} className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
+          <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 bg-black">
             {!cameraOpen ? (
               <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
                 <div className="flex items-center gap-2 text-sm text-orange-100">
@@ -2317,127 +2317,81 @@ export default function CalificarPage() {
                 </Button>
               </div>
             ) : (
-              <div
-                className="relative max-h-full max-w-full"
-                style={videoAspect ? { aspectRatio: `${videoAspect}` } : undefined}
+              <button
+                type="button"
+                className="relative flex h-full w-full items-center justify-center bg-black disabled:cursor-wait"
+                disabled={scanBusy}
+                aria-label="Capturar foto del examen"
+                onClick={() => void captureMobilePhotoManually()}
               >
-                {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="block h-full w-full max-h-full max-w-full bg-black object-contain object-center"
-                />
-                <div className="pointer-events-none absolute inset-0 bg-black/20" />
                 <div
-                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
-                  style={{
-                    left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
-                    top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
-                    width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
-                    aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio}`,
-                  }}
+                  className="relative max-h-full w-full max-w-full"
+                  style={
+                    videoAspect
+                      ? { aspectRatio: `${videoAspect}`, maxHeight: '100%' }
+                      : { height: '100%', width: '100%' }
+                  }
                 >
-                  <div className="relative h-full w-full">
-                    <div className="absolute inset-0 rounded-md border-2 border-white/40 shadow-[0_0_0_200vmax_rgba(0,0,0,0.38)]" />
-                    <span
-                      className="absolute -left-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
-                      aria-hidden
-                    />
-                    <span
-                      className="absolute -right-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
-                      aria-hidden
-                    />
-                    <span
-                      className="absolute -bottom-1 -left-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
-                      aria-hidden
-                    />
-                    <span
-                      className="absolute -bottom-1 -right-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="pointer-events-none block h-full w-full max-h-full max-w-full bg-black object-contain object-center"
+                  />
+                  <div className="pointer-events-none absolute inset-0 bg-black/15" />
+                  <div
+                    className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+                    style={{
+                      left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
+                      top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
+                      width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
+                      aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio}`,
+                    }}
+                  >
+                    <div className="relative h-full w-full">
+                      <div className="absolute inset-0 rounded-md border-2 border-white/40 shadow-[0_0_0_200vmax_rgba(0,0,0,0.38)]" />
+                      <span
+                        className="absolute -left-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                        aria-hidden
+                      />
+                      <span
+                        className="absolute -right-1 -top-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                        aria-hidden
+                      />
+                      <span
+                        className="absolute -bottom-1 -left-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                        aria-hidden
+                      />
+                      <span
+                        className="absolute -bottom-1 -right-1 z-10 block size-4 rounded-sm bg-orange-500/70 shadow-md ring-1 ring-orange-200/50"
+                        aria-hidden
+                      />
+                    </div>
+                  </div>
+                </div>
+                {scanBusy ? (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35">
+                    <Loader2
+                      className="h-10 w-10 animate-spin text-orange-400 motion-reduce:animate-none [animation-duration:750ms]"
                       aria-hidden
                     />
                   </div>
-                </div>
-              </div>
+                ) : null}
+              </button>
             )}
-          </div>
-
-          <div
-            className="shrink-0 space-y-2 border-t border-white/15 bg-black/90 px-3 pt-3"
-            style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
-          >
-            <div className="rounded-md border border-orange-400/35 bg-orange-950/50 px-2.5 py-2 text-xs leading-snug text-orange-50">
-              {liveStatus}
-            </div>
-            {flashSupported && (
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
-                onClick={() => void setTorchEnabled(!flashOn)}
-              >
-                <Zap className="mr-2 h-4 w-4" />
-                {flashOn ? 'Apagar flash' : 'Encender flash'}
-              </Button>
-            )}
-            <div className="flex flex-col gap-2">
-              <Button
-                type="button"
-                className={cn(
-                  'w-full bg-orange-600 hover:bg-orange-700',
-                  scanBusy && 'disabled:opacity-100'
-                )}
-                disabled={scanBusy}
-                onClick={() => void captureMobilePhotoManually()}
-              >
-                {scanBusy ? (
-                  <Loader2
-                    className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                    aria-hidden
-                  />
-                ) : (
-                  'Tomar foto'
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
-                onClick={() => galleryInputRef.current?.click()}
-                disabled={scanBusy}
-              >
-                Subir foto…
-              </Button>
-              <Button
-                variant="secondary"
-                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
-                onClick={scanAgainInLive}
-              >
-                Reiniciar lectura en vivo
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full border-white/20 bg-white/10 text-white hover:bg-white/20"
-                disabled={scanBusy}
-                onClick={() => {
-                  stopLiveCamera();
-                  setPhase('elegir');
+            {cameraOpen ? (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
+                style={{
+                  background:
+                    'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
                 }}
               >
-                Cerrar cámara
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full border-white/30 text-white hover:bg-white/10"
-                onClick={switchToAnotherStudentScan}
-                disabled={scanBusy}
-              >
-                Escanear examen de otro alumno
-              </Button>
-            </div>
+                <p className="text-center text-xs leading-snug text-orange-50">{liveStatus}</p>
+              </div>
+            ) : null}
           </div>
         </div>
       )}

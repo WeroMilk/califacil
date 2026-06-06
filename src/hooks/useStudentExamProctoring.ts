@@ -34,6 +34,9 @@ export function useStudentExamProctoring(options: {
   /** Si el navegador entró a pantalla completa al iniciar, salir anula el intento. */
   enforceFullscreen: boolean;
   onForfeit: (reason: string) => void;
+  onVisibilityHidden?: () => void;
+  onVisibilityVisible?: () => void;
+  onLogEvent?: (eventType: string, metadata?: Record<string, unknown>) => void;
 }) {
   const streamRef = useRef<MediaStream | null>(null);
   const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,6 +57,10 @@ export function useStudentExamProctoring(options: {
       clearTimeout(fullscreenTimerRef.current);
       fullscreenTimerRef.current = null;
     }
+  }, []);
+
+  const logEvent = useCallback((eventType: string, metadata?: Record<string, unknown>) => {
+    optsRef.current.onLogEvent?.(eventType, metadata);
   }, []);
 
   const forfeit = useCallback(
@@ -81,11 +88,12 @@ export function useStudentExamProctoring(options: {
       const vt = stream.getVideoTracks()[0];
       if (vt) {
         vt.addEventListener('ended', () => {
+          logEvent('camera_stopped');
           void forfeit('camera_stopped');
         });
       }
     },
-    [forfeit]
+    [forfeit, logEvent]
   );
 
   const stopStream = useCallback(() => {
@@ -114,6 +122,7 @@ export function useStudentExamProctoring(options: {
     const scheduleFullscreenForfeit = () => {
       clearFullscreenTimer();
       fullscreenTimerRef.current = setTimeout(() => {
+        logEvent('left_fullscreen');
         void forfeit('left_fullscreen');
       }, FULLSCREEN_EXIT_GRACE_MS);
     };
@@ -121,19 +130,25 @@ export function useStudentExamProctoring(options: {
     const onVisibility = () => {
       if (forfeitOnceRef.current) return;
       if (document.visibilityState === 'hidden') {
+        logEvent('tab_hidden');
+        optsRef.current.onVisibilityHidden?.();
         scheduleVisibilityForfeit('tab_hidden');
       } else {
+        logEvent('tab_visible');
+        optsRef.current.onVisibilityVisible?.();
         clearHiddenTimer();
       }
     };
 
     const onPageHide = () => {
+      logEvent('left_page');
       void forfeit('left_page');
     };
 
     const onFullscreenChange = () => {
       if (!optsRef.current.enforceFullscreen || forfeitOnceRef.current) return;
       if (!document.fullscreenElement) {
+        logEvent('left_fullscreen');
         scheduleFullscreenForfeit();
       } else {
         clearFullscreenTimer();
@@ -159,7 +174,8 @@ export function useStudentExamProctoring(options: {
     forfeit,
     clearHiddenTimer,
     clearFullscreenTimer,
+    logEvent,
   ]);
 
-  return { bindStream, stopStream };
+  return { bindStream, stopStream, logEvent };
 }

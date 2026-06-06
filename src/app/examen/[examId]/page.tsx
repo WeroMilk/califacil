@@ -7,6 +7,7 @@ import { examPublicSupabase } from '@/lib/supabase';
 import {
   rpcCompleteStudentExamAttempt,
   rpcGetStudentExamAttempt,
+  rpcLogExamAttemptEvent,
   rpcStartStudentExamAttempt,
   rpcStudentAnswerCount,
 } from '@/lib/examAttemptRpc';
@@ -22,10 +23,13 @@ import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
 import {
   calculatePercentage,
+  examMaxScore,
   getGradeLabel,
   getGradeColor,
   isMultipleChoiceAnswerCorrect,
+  questionPoints,
 } from '@/lib/utils';
+import { examForfeitMessages } from '@/lib/examForfeitMessages';
 import {
   clearExamClientSession,
   readExamClientSession,
@@ -42,14 +46,7 @@ type PreStartBlock =
   | { type: 'rpc_error' }
   | { type: 'answers_exist' };
 
-const forfeitMessages: Record<string, string> = {
-  tab_hidden:
-    'Saliste del examen (cambio de pestaña o aplicación). El intento quedó anulado y no puedes volver a presentarlo.',
-  left_page: 'Cerraste o abandonaste la página del examen. El intento quedó anulado.',
-  camera_stopped: 'La cámara se desactivó durante el examen. El intento quedó anulado.',
-  left_fullscreen:
-    'Saliste del modo pantalla completa durante el examen. El intento quedó anulado y no puedes volver a presentarlo.',
-};
+const forfeitMessages = examForfeitMessages;
 
 const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 
@@ -147,9 +144,18 @@ export default function StudentExamPage() {
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
   /** Solo true si requestFullscreen tuvo éxito; en móviles suele quedar false. */
   const [fullscreenEnforced, setFullscreenEnforced] = useState(false);
+  const [contentHidden, setContentHidden] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+
+  const logAttemptEvent = useCallback(
+    (eventType: string, metadata?: Record<string, unknown>) => {
+      if (!selectedStudentId || !clientSessionToken) return;
+      void rpcLogExamAttemptEvent(examId, selectedStudentId, clientSessionToken, eventType, metadata ?? null);
+    },
+    [examId, selectedStudentId, clientSessionToken]
+  );
 
   const { bindStream, stopStream } = useStudentExamProctoring({
     examId,
@@ -160,12 +166,16 @@ export default function StudentExamPage() {
     onForfeit: (reason) => {
       void exitExamFullscreenSafe();
       setFullscreenEnforced(false);
+      setContentHidden(false);
       previewStreamRef.current = null;
       clearExamClientSession(examId, selectedStudentId);
       setClientSessionToken(null);
       setForfeitReason(reason);
       toast.error('Examen anulado', { duration: 6000 });
     },
+    onVisibilityHidden: () => setContentHidden(true),
+    onVisibilityVisible: () => setContentHidden(false),
+    onLogEvent: (eventType, metadata) => logAttemptEvent(eventType, metadata),
   });
 
   useEffect(() => {
@@ -325,6 +335,24 @@ export default function StudentExamPage() {
     return () => window.removeEventListener('beforeunload', fn);
   }, [hasStarted, submitted, forfeitReason]);
 
+  useEffect(() => {
+    if (!hasStarted || submitted || forfeitReason) return;
+    const blockCopy = (e: Event) => {
+      e.preventDefault();
+    };
+    const opts = { capture: true } as AddEventListenerOptions;
+    document.addEventListener('copy', blockCopy, opts);
+    document.addEventListener('cut', blockCopy, opts);
+    document.addEventListener('contextmenu', blockCopy, opts);
+    document.addEventListener('dragstart', blockCopy, opts);
+    return () => {
+      document.removeEventListener('copy', blockCopy, opts);
+      document.removeEventListener('cut', blockCopy, opts);
+      document.removeEventListener('contextmenu', blockCopy, opts);
+      document.removeEventListener('dragstart', blockCopy, opts);
+    };
+  }, [hasStarted, submitted, forfeitReason]);
+
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     [students]
@@ -435,6 +463,7 @@ export default function StudentExamPage() {
       }
       setFullscreenEnforced(enforced);
       setHasStarted(true);
+      void rpcLogExamAttemptEvent(examId, selectedStudentId, token, 'exam_started');
     } catch {
       toast.error('Error al iniciar. Si persiste, avisa a tu maestro (¿migración Supabase aplicada?).');
       setPreStartBlock({ type: 'rpc_error' });
@@ -445,9 +474,11 @@ export default function StudentExamPage() {
 
   const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers((prev) => ({ ...prev, [questionId]: answer }));
+    logAttemptEvent('answer_changed', { question_id: questionId });
   };
 
   const handleSubmit = async () => {
+    logAttemptEvent('submit_clicked');
     const unansweredQuestions = questions.filter((q) => !answers[q.id]);
     if (unansweredQuestions.length > 0) {
       toast.error(`Faltan ${unansweredQuestions.length} preguntas por responder`);
@@ -478,14 +509,15 @@ export default function StudentExamPage() {
               answerText,
               question.correct_answer
             );
+            const pts = questionPoints(question);
             return {
               exam_id: examId,
               student_id: studentId,
               question_id: question.id,
               answer_text: answerText,
               is_correct: isCorrect as boolean | null,
-              score: isCorrect ? 1 : 0,
-              _points: isCorrect ? 1 : 0,
+              score: isCorrect ? pts : 0,
+              _points: isCorrect ? pts : 0,
             };
           }
 
@@ -532,13 +564,13 @@ export default function StudentExamPage() {
                 _points: 0,
               };
             }
-            const sc = payload.score === 1 ? 1 : 0;
+            const sc = typeof payload.score === 'number' ? payload.score : 0;
             return {
               exam_id: examId,
               student_id: studentId,
               question_id: question.id,
               answer_text: answerText,
-              is_correct: sc === 1,
+              is_correct: sc > 0,
               score: sc,
               _points: sc,
             };
@@ -574,7 +606,7 @@ export default function StudentExamPage() {
       setFullscreenEnforced(false);
       await exitExamFullscreenSafe();
 
-      const totalPoints = questions.length;
+      const totalPoints = examMaxScore(questions);
       const obtainedPoints = graded.reduce((s, r) => s + r._points, 0);
       setScore(calculatePercentage(obtainedPoints, totalPoints));
       setSubmitted(true);
@@ -700,6 +732,7 @@ export default function StudentExamPage() {
                       cierres hasta terminar o el examen se anula.
                     </li>
                     <li>No cambies de pestaña ni cierres esta ventana; si lo haces, el examen se anula.</li>
+                    <li>No tomes capturas de pantalla; el contenido se oculta si sales de la pestaña.</li>
                     <li>Solo hay un intento por alumno.</li>
                   </ul>
                 </div>
@@ -754,7 +787,18 @@ export default function StudentExamPage() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8">
+    <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8 select-none">
+      {contentHidden && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-gray-900/95 p-6 text-center text-white backdrop-blur-md">
+          <div>
+            <AlertCircle className="mx-auto mb-4 h-12 w-12 text-amber-400" />
+            <p className="text-lg font-semibold">Contenido oculto</p>
+            <p className="mt-2 text-sm text-gray-300">
+              Vuelve a esta pestaña de inmediato o el examen se anulará.
+            </p>
+          </div>
+        </div>
+      )}
       {hasStarted &&
         !submitted &&
         !forfeitReason &&
@@ -806,7 +850,25 @@ export default function StudentExamPage() {
           </div>
         </div>
 
-        <div className="space-y-6">
+        <div className="relative space-y-6">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-[1] overflow-hidden opacity-[0.07]"
+          >
+            {Array.from({ length: 8 }).map((_, i) => (
+              <span
+                key={i}
+                className="absolute whitespace-nowrap text-sm font-semibold text-gray-900"
+                style={{
+                  top: `${(i * 14) % 100}%`,
+                  left: `${(i * 23) % 80}%`,
+                  transform: 'rotate(-24deg)',
+                }}
+              >
+                {selectedStudentName} · {exam.title}
+              </span>
+            ))}
+          </div>
           {questions.map((question, index) => (
             <Card key={question.id}>
               <CardContent className="p-6">

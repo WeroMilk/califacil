@@ -160,6 +160,7 @@ export default function CreateExamPage() {
         options: q.options || null,
         correct_answer: q.correct_answer || null,
         illustration: q.illustration || null,
+        points: 1,
       }));
 
       const response = await fetch(`/api/exams/${exam.id}/questions`, {

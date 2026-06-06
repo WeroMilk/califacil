@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { printExamDocument } from '@/lib/printExam';
 import { downloadExamWord } from '@/lib/wordExam';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -24,6 +26,7 @@ import {
   Eye,
   Download,
   Printer,
+  CopyPlus,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import type { Exam, ExamWithQuestions } from '@/types';
@@ -166,6 +169,7 @@ function ExamCard({
   exam: Exam;
   onDelete: (id: string) => void;
 }) {
+  const router = useRouter();
   const [menuBusy, setMenuBusy] = useState(false);
   const statusConfig = {
     draft: { label: 'Borrador', color: 'bg-yellow-100 text-yellow-700' },
@@ -222,6 +226,25 @@ function ExamCard({
     }
   };
 
+  const handleDuplicate = async () => {
+    setMenuBusy(true);
+    try {
+      const response = await fetch(`/api/exams/${exam.id}/duplicate`, {
+        method: 'POST',
+        headers: await dashboardAuthJsonHeaders(),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { examId?: string; error?: string };
+      if (!response.ok || !payload.examId) {
+        toast.error(payload.error || 'No se pudo duplicar el examen');
+        return;
+      }
+      toast.success('Examen duplicado');
+      router.push(`/exams/${payload.examId}`);
+    } finally {
+      setMenuBusy(false);
+    }
+  };
+
   return (
     <Card className="hover:shadow-lg transition-shadow">
       <CardHeader className="pb-3">
@@ -239,6 +262,10 @@ function ExamCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => void handleDuplicate()}>
+                <CopyPlus className="mr-2 h-4 w-4" />
+                Duplicar
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDownload}>
                 <Download className="mr-2 h-4 w-4" />
                 Descargar

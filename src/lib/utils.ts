@@ -37,6 +37,15 @@ export function calculatePercentage(score: number, maxScore: number): number {
   return Math.round((score / maxScore) * 100);
 }
 
+export function examMaxScore(questions: { points?: number | null }[]): number {
+  return questions.reduce((s, q) => s + (q.points ?? 1), 0);
+}
+
+export function questionPoints(question: { points?: number | null }): number {
+  const p = question.points ?? 1;
+  return p > 0 ? p : 1;
+}
+
 export function normalizeAnswerText(value: string | null | undefined): string {
   return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 }

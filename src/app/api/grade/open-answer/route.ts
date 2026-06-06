@@ -97,6 +97,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const { data: questionRow, error: questionErr } = await supabase
+      .from('questions')
+      .select('points')
+      .eq('id', questionId)
+      .eq('exam_id', examId)
+      .maybeSingle();
+
+    if (questionErr) {
+      console.error('questions lookup:', questionErr);
+      return NextResponse.json({ error: 'No se pudo cargar la pregunta' }, { status: 502 });
+    }
+
+    const questionPoints = Number(questionRow?.points ?? 1) || 1;
+
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
       return NextResponse.json(
@@ -152,9 +166,10 @@ isCorrect debe ser true solo si score es 1.`;
 
     const scoreNum = parsed.score === 1 ? 1 : 0;
     const is_correct = scoreNum === 1;
+    const weightedScore = is_correct ? questionPoints : 0;
 
     return NextResponse.json({
-      score: scoreNum,
+      score: weightedScore,
       is_correct,
       model: 'gpt-4o-mini',
     });

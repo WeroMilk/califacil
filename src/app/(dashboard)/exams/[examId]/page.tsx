@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -29,6 +30,9 @@ import {
   Trash2,
   Loader2,
   FileText,
+  CopyPlus,
+  Check,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -37,6 +41,7 @@ import { printExamDocument } from '@/lib/printExam';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { supabase } from '@/lib/supabase';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { examMaxScore } from '@/lib/utils';
 
 type QuestionDraft = {
   text: string;
@@ -44,6 +49,7 @@ type QuestionDraft = {
   optionsText: string;
   correctAnswer: string;
   illustration: string;
+  points: string;
 };
 
 function normalizeOptions(optionsText: string): string[] {
@@ -60,6 +66,11 @@ function buildQuestionPayload(draft: QuestionDraft) {
   if (!text) {
     return { ok: false as const, error: 'El texto de la pregunta es obligatorio' };
   }
+  const pointsNum = Number(draft.points);
+  if (!Number.isFinite(pointsNum) || pointsNum <= 0) {
+    return { ok: false as const, error: 'El valor de la pregunta debe ser mayor a 0' };
+  }
+  const points = Math.round(pointsNum * 100) / 100;
   if (draft.type === 'open_answer') {
     return {
       ok: true as const,
@@ -69,6 +80,7 @@ function buildQuestionPayload(draft: QuestionDraft) {
         options: null,
         correct_answer: draft.correctAnswer.trim() || null,
         illustration: draft.illustration.trim() || null,
+        points,
       },
     };
   }
@@ -94,6 +106,7 @@ function buildQuestionPayload(draft: QuestionDraft) {
       options,
       correct_answer: correct,
       illustration: draft.illustration.trim() || null,
+      points,
     },
   };
 }
@@ -116,6 +129,7 @@ function draftFromQuestion(question: Question): QuestionDraft {
     optionsText: (question.options || []).join('\n'),
     correctAnswer: question.correct_answer || '',
     illustration: question.illustration || '',
+    points: String(question.points ?? 1),
   };
 }
 
@@ -139,7 +153,12 @@ export default function ExamDetailPage() {
     optionsText: 'Opción A\nOpción B',
     correctAnswer: 'Opción A',
     illustration: '',
+    points: '1',
   });
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const newQuestionOptions = normalizeOptions(newQuestion.optionsText);
 
   useEffect(() => {
@@ -255,6 +274,60 @@ export default function ExamDetailPage() {
     navigator.clipboard.writeText(examUrl);
     toast.success('Enlace copiado al portapapeles');
   };
+
+  const handleSaveTitle = async () => {
+    if (!exam) return;
+    const trimmed = titleDraft.trim();
+    if (!trimmed) {
+      toast.error('El título no puede estar vacío');
+      return;
+    }
+    setSavingTitle(true);
+    try {
+      const response = await fetch(`/api/exams/${examId}`, {
+        method: 'PATCH',
+        headers: await dashboardAuthJsonHeaders(),
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!response.ok) {
+        toast.error('No se pudo actualizar el título');
+        return;
+      }
+      toast.success('Título actualizado');
+      setEditingTitle(false);
+      window.location.reload();
+    } catch {
+      toast.error('Error al actualizar el título');
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const handleDuplicate = async () => {
+    if (!exam) return;
+    setDuplicating(true);
+    try {
+      const response = await fetch(`/api/exams/${exam.id}/duplicate`, {
+        method: 'POST',
+        headers: await dashboardAuthJsonHeaders(),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { examId?: string; error?: string };
+      if (!response.ok || !payload.examId) {
+        toast.error(payload.error || 'No se pudo duplicar el examen');
+        return;
+      }
+      toast.success('Examen duplicado');
+      router.push(`/exams/${payload.examId}`);
+    } catch {
+      toast.error('Error al duplicar el examen');
+    } finally {
+      setDuplicating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (exam?.title) setTitleDraft(exam.title);
+  }, [exam?.title]);
 
   const handlePublish = async () => {
     try {
@@ -399,13 +472,63 @@ export default function ExamDetailPage() {
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
+              {editingTitle ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    className="h-9 max-w-md text-lg font-bold"
+                    disabled={savingTitle}
+                  />
+                  <Button size="icon" variant="outline" onClick={() => void handleSaveTitle()} disabled={savingTitle}>
+                    {savingTitle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingTitle(false);
+                      setTitleDraft(exam.title);
+                    }}
+                    disabled={savingTitle}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => setEditingTitle(true)}
+                    aria-label="Editar título"
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
               <Badge className={statusConfig[exam.status].color}>{statusConfig[exam.status].label}</Badge>
             </div>
             <p className="mt-1 text-sm text-gray-600 sm:text-base">{exam.description || 'Sin descripción'}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handleDuplicate()}
+            disabled={duplicating}
+          >
+            {duplicating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <CopyPlus className="mr-2 h-4 w-4" />
+            )}
+            Duplicar
+          </Button>
           {exam.questions.length > 0 && (
             <Button
               type="button"
@@ -537,6 +660,11 @@ export default function ExamDetailPage() {
         </TabsList>
 
         <TabsContent value="questions" className="space-y-4">
+          {exam.questions.length > 0 && (
+            <p className="text-sm font-medium text-gray-700">
+              Total del examen: {examMaxScore(exam.questions)} puntos
+            </p>
+          )}
           {exam.questions.map((question, index) => (
             <QuestionCard
               key={question.id}
@@ -567,28 +695,40 @@ export default function ExamDetailPage() {
                   placeholder="Escribe la pregunta..."
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Tipo</Label>
-                <Select
-                  value={newQuestion.type}
-                  onValueChange={(v: 'multiple_choice' | 'open_answer') =>
-                    setNewQuestion((prev) => ({
-                      ...prev,
-                      type: v,
-                      optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
-                      correctAnswer: v === 'multiple_choice' ? prev.correctAnswer || 'Opción A' : prev.correctAnswer,
-                      illustration: '',
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
-                    <SelectItem value="open_answer">Respuesta abierta</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Tipo</Label>
+                  <Select
+                    value={newQuestion.type}
+                    onValueChange={(v: 'multiple_choice' | 'open_answer') =>
+                      setNewQuestion((prev) => ({
+                        ...prev,
+                        type: v,
+                        optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
+                        correctAnswer: v === 'multiple_choice' ? prev.correctAnswer || 'Opción A' : prev.correctAnswer,
+                        illustration: '',
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
+                      <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Valor (puntos)</Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={newQuestion.points}
+                    onChange={(e) => setNewQuestion((prev) => ({ ...prev, points: e.target.value }))}
+                  />
+                </div>
               </div>
               {newQuestion.type === 'multiple_choice' ? (
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -786,11 +926,12 @@ function QuestionCard({
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
-            <div className="mb-2 flex items-center gap-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-gray-500">Pregunta {index + 1}</span>
               <Badge className={question.type === 'multiple_choice' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}>
                 {question.type === 'multiple_choice' ? 'Opción múltiple' : 'Respuesta abierta'}
               </Badge>
+              <Badge variant="outline">{question.points ?? 1} pt</Badge>
             </div>
 
             {isEditing ? (
@@ -803,27 +944,40 @@ function QuestionCard({
                     rows={3}
                   />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-gray-600">Tipo</Label>
-                  <Select
-                    value={draft.type}
-                    onValueChange={(v: 'multiple_choice' | 'open_answer') =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        type: v,
-                        optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
-                        illustration: '',
-                      }))
-                    }
-                  >
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
-                      <SelectItem value="open_answer">Respuesta abierta</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-600">Tipo</Label>
+                    <Select
+                      value={draft.type}
+                      onValueChange={(v: 'multiple_choice' | 'open_answer') =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          type: v,
+                          optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
+                          illustration: '',
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
+                        <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-600">Valor (puntos)</Label>
+                    <Input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={draft.points}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, points: e.target.value }))}
+                      className="h-9"
+                    />
+                  </div>
                 </div>
                 {draft.type === 'multiple_choice' ? (
                   <div className="grid gap-2 sm:grid-cols-2">

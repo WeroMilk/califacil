@@ -58,13 +58,14 @@ export async function fetchTeacherExamAverageSummaries(
 
   const { data: questionsData, error: questionsError } = await supabase
     .from('questions')
-    .select('exam_id')
+    .select('exam_id,points')
     .in('exam_id', examIds);
   if (questionsError) throw questionsError;
-  const questionCountByExam = new Map<string, number>();
+  const maxScoreByExam = new Map<string, number>();
   for (const row of questionsData || []) {
-    const examId = String((row as { exam_id: string }).exam_id);
-    questionCountByExam.set(examId, (questionCountByExam.get(examId) ?? 0) + 1);
+    const examId = String((row as { exam_id: string; points?: number | null }).exam_id);
+    const pts = (row as { points?: number | null }).points ?? 1;
+    maxScoreByExam.set(examId, (maxScoreByExam.get(examId) ?? 0) + pts);
   }
 
   const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
@@ -96,7 +97,7 @@ export async function fetchTeacherExamAverageSummaries(
   let globalGradedCount = 0;
 
   const rows: ExamAverageSummaryRow[] = exams.map((exam) => {
-    const maxScore = Math.max(1, questionCountByExam.get(exam.id) ?? 0);
+    const maxScore = Math.max(1, maxScoreByExam.get(exam.id) ?? 0);
     const byStudent = new Map<string, number>();
 
     for (const answer of answers) {

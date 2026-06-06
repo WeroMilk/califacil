@@ -40,6 +40,7 @@ export interface Question {
   options: string[] | null;
   correct_answer: string | null;
   illustration: string | null;
+  points: number;
   created_at: string;
 }
 
@@ -80,4 +81,5 @@ export interface GeneratedQuestion {
   options?: string[];
   correct_answer?: string;
   illustration?: string;
+  points?: number;
 }
