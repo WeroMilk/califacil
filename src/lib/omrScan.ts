@@ -1200,8 +1200,8 @@ function detectCalifacilQuadFromDarkInk(
   return quad;
 }
 
-/** Centroid de tinta oscura en una región (cuadro negro de esquina impreso). */
-function findDarkPatchCentroid(
+/** Centro del parche más oscuro en una esquina (fiducial impreso, no texto del examen). */
+function findCornerMarkerPoint(
   d: Uint8ClampedArray,
   width: number,
   height: number,
@@ -1210,27 +1210,61 @@ function findDarkPatchCentroid(
   regionW: number,
   regionH: number
 ): Point | null {
-  let sumX = 0;
-  let sumY = 0;
-  let count = 0;
   const x0 = Math.max(0, regionX);
   const y0 = Math.max(0, regionY);
   const x1 = Math.min(width, regionX + regionW);
   const y1 = Math.min(height, regionY + regionH);
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const i = (y * width + x) * 4;
-      const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
-      if (lum < 95) {
-        sumX += x;
-        sumY += y;
-        count++;
+  const rw = x1 - x0;
+  const rh = y1 - y0;
+  if (rw < 8 || rh < 8) return null;
+
+  const patchSize = Math.max(4, Math.round(Math.min(rw, rh) * 0.22));
+  const step = Math.max(2, Math.floor(patchSize / 2));
+  let bestScore = 0;
+  let bestCenter: Point | null = null;
+
+  for (let py = y0; py <= y1 - patchSize; py += step) {
+    for (let px = x0; px <= x1 - patchSize; px += step) {
+      let dark = 0;
+      const total = patchSize * patchSize;
+      for (let dy = 0; dy < patchSize; dy++) {
+        for (let dx = 0; dx < patchSize; dx++) {
+          const i = ((py + dy) * width + (px + dx)) * 4;
+          const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+          if (lum < 85) dark++;
+        }
+      }
+      const score = dark / total;
+      if (score > bestScore) {
+        bestScore = score;
+        bestCenter = { x: px + patchSize / 2, y: py + patchSize / 2 };
       }
     }
   }
-  const minPixels = Math.max(6, Math.round(regionW * regionH * 0.015));
-  if (count < minPixels) return null;
-  return { x: sumX / count, y: sumY / count };
+  if (bestScore < 0.28) return null;
+  return bestCenter;
+}
+
+/** Luminancia media 0..1 (muestreo rápido) para detectar fotogramas negros. */
+export function estimateCanvasMeanLuminance(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 1;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 2 || h < 2) return 0;
+  const step = Math.max(4, Math.floor(Math.sqrt((w * h) / 3600)));
+  const id = ctx.getImageData(0, 0, w, h);
+  const data = id.data;
+  let sum = 0;
+  let n = 0;
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      sum += (data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114) / 255;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
 }
 
 /**
@@ -1247,13 +1281,13 @@ function detectCalifacilQuadFromCornerMarkers(
 
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(10, Math.round(width * 0.14));
-  const regionH = Math.max(10, Math.round(height * 0.14));
+  const regionW = Math.max(8, Math.round(width * 0.08));
+  const regionH = Math.max(8, Math.round(height * 0.08));
 
-  const tl = findDarkPatchCentroid(d, width, height, 0, 0, regionW, regionH);
-  const tr = findDarkPatchCentroid(d, width, height, width - regionW, 0, regionW, regionH);
-  const br = findDarkPatchCentroid(d, width, height, width - regionW, height - regionH, regionW, regionH);
-  const bl = findDarkPatchCentroid(d, width, height, 0, height - regionH, regionW, regionH);
+  const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
+  const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
+  const br = findCornerMarkerPoint(d, width, height, width - regionW, height - regionH, regionW, regionH);
+  const bl = findCornerMarkerPoint(d, width, height, 0, height - regionH, regionW, regionH);
   if (!tl || !tr || !br || !bl) return null;
 
   const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];

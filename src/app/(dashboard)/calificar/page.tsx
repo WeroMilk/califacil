@@ -10,7 +10,7 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from 'react';
-import { flushSync } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Info, LayoutDashboard, Loader2, AlertCircle } from 'lucide-react';
@@ -30,17 +30,21 @@ import {
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
+  estimateCanvasMeanLuminance,
   fileToImage,
+  getObjectContainVideoLayout,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   prepareCalifacilScanInput,
-  prepareMobileCameraScanCanvas,
   probeCalifacilSheetQuality,
   scanCalifacilOmrSheetWithMeta,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
-import { CalifacilLiveScanOverlay } from '@/components/califacil-live-scan-overlay';
+import {
+  CalifacilLiveScanOverlay,
+  type LiveVideoLetterbox,
+} from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
   type ExamFullscreenMode,
@@ -128,6 +132,12 @@ const MOBILE_SCAN_MAX_WIDTH = 1080;
 const MOBILE_CAPTURE_MAX_SIDE = 2400;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
+/** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
+const LIVE_STRICT_OVERLAY_TICKS = 2;
+/** Intervalo del loop OMR en móvil (ms). */
+const MOBILE_LIVE_LOOP_MS = 1000;
+/** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
+const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
 const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 
@@ -306,6 +316,9 @@ export default function CalificarPage() {
   const [liveScanPicks, setLiveScanPicks] = useState<(number | null)[]>([]);
   const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
+  const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
+  const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
+  const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
@@ -531,6 +544,8 @@ export default function CalificarPage() {
     setLiveScanPicks([]);
     setLiveScanLockedRows([]);
     setLiveScanAmbiguousRows([]);
+    setLiveVideoLayout(null);
+    setLiveShowBubbleOverlay(false);
     setLiveStatus(
       isMobile
         ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas. Pulsa el botón naranja o espera captura automática.'
@@ -578,7 +593,28 @@ export default function CalificarPage() {
     video.playsInline = true;
     video.setAttribute('playsinline', 'true');
     video.setAttribute('webkit-playsinline', 'true');
-    await video.play().catch(() => undefined);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await video.play();
+        if (!video.paused) break;
+      } catch {
+        await sleep(120);
+      }
+    }
+  }, []);
+
+  const updateLiveVideoLayout = useCallback(() => {
+    const container = mobileVideoViewportRef.current;
+    const video = videoRef.current;
+    if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
+    const { width: cw, height: ch } = container.getBoundingClientRect();
+    if (cw < 20 || ch < 20) return;
+    const layout = getObjectContainVideoLayout(video.videoWidth, video.videoHeight, cw, ch);
+    setLiveVideoLayout({
+      ...layout,
+      frameW: video.videoWidth,
+      frameH: video.videoHeight,
+    });
   }, []);
 
   const mapRawToDraft = useCallback(
@@ -658,13 +694,9 @@ export default function CalificarPage() {
         oriented instanceof HTMLCanvasElement
           ? oriented
           : prepareCalifacilScanInput(oriented, { useGuideCrop: false });
-      const sheetStrict =
-        examCanvas && isMobileCamera
-          ? isCalifacilExamSheetStrict(examCanvas, omrCols)
-          : examCanvas
-            ? isCalifacilExamSheetLikely(examCanvas, omrCols)
-            : false;
-      if (!examCanvas || !sheetStrict) {
+      const sheetLikely = examCanvas ? isCalifacilExamSheetLikely(examCanvas, omrCols) : false;
+      const sheetStrict = examCanvas ? isCalifacilExamSheetStrict(examCanvas, omrCols) : false;
+      if (!examCanvas || !sheetLikely) {
         setLiveStatus(
           isMobile
             ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas y mejora la luz.'
@@ -947,6 +979,10 @@ export default function CalificarPage() {
         toast.message(
           `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
         );
+      } else if (isMobileCamera && !sheetStrict && !skipReviewUi) {
+        toast.message(
+          'Lectura aceptable sin alineación perfecta de esquinas. Revisa las respuestas antes de guardar.'
+        );
       }
 
       liveLockedAnswersRef.current = {};
@@ -1059,6 +1095,19 @@ export default function CalificarPage() {
     }
   }, [cameraOpen, phase, stopLiveCamera]);
 
+  useEffect(() => {
+    setCameraPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile || phase !== 'capturar') return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isMobile, phase]);
+
   useLayoutEffect(() => {
     if (!cameraOpen) return;
     void attachStreamToVideo();
@@ -1066,12 +1115,26 @@ export default function CalificarPage() {
     if (!video) return;
     const onLoadedMetadata = () => {
       void attachStreamToVideo();
+      updateLiveVideoLayout();
     };
     video.addEventListener('loadedmetadata', onLoadedMetadata);
     return () => {
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
-  }, [attachStreamToVideo, cameraOpen]);
+  }, [attachStreamToVideo, cameraOpen, updateLiveVideoLayout]);
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      setLiveVideoLayout(null);
+      return;
+    }
+    const container = mobileVideoViewportRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => updateLiveVideoLayout());
+    ro.observe(container);
+    updateLiveVideoLayout();
+    return () => ro.disconnect();
+  }, [cameraOpen, updateLiveVideoLayout]);
 
   useEffect(() => {
     if (!isMobile || phase !== 'capturar') return;
@@ -1305,7 +1368,7 @@ export default function CalificarPage() {
       };
 
       const runLiveScanLoop = async () => {
-        let nextDelay = isMobile ? 700 : 600;
+        let nextDelay = isMobile ? MOBILE_LIVE_LOOP_MS : 600;
         if (!streamRef.current || !examId || !exam || phaseRef.current !== 'capturar') {
           stopScanningHum();
           liveTickRef.current = null;
@@ -1327,6 +1390,11 @@ export default function CalificarPage() {
             nextDelay = 100;
             return;
           }
+          if (isMobile && video.paused) {
+            void attachStreamToVideo();
+            nextDelay = 150;
+            return;
+          }
           if (!isMobile && !scanCtx) return;
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
@@ -1340,9 +1408,18 @@ export default function CalificarPage() {
               nextDelay = 100;
               return;
             }
-            const prepared = prepareMobileCameraScanCanvas(fullFrame, omrCols, { live: true });
-            oriented = prepared.canvas;
-            sheetLikely = prepared.sheetLikely;
+            if (estimateCanvasMeanLuminance(fullFrame) < MIN_FRAME_LUMINANCE) {
+              setLiveScanGeometry(null);
+              setLiveScanPicks([]);
+              setLiveScanLockedRows([]);
+              setLiveScanAmbiguousRows([]);
+              setLiveShowBubbleOverlay(false);
+              strictValidationTicksRef.current = 0;
+              nextDelay = 200;
+              return;
+            }
+            oriented = fullFrame;
+            sheetLikely = isCalifacilExamSheetLikely(fullFrame, omrCols);
           } else {
             if (!scanCtx) return;
             let targetW = video.videoWidth;
@@ -1373,6 +1450,7 @@ export default function CalificarPage() {
               setLiveScanPicks([]);
               setLiveScanLockedRows([]);
               setLiveScanAmbiguousRows([]);
+              setLiveShowBubbleOverlay(false);
             }
             lowVisibilityTicksRef.current += 1;
             const locksNoExam = liveLockedAnswersRef.current;
@@ -1430,22 +1508,32 @@ export default function CalificarPage() {
           } else {
             strictValidationTicksRef.current = 0;
           }
+          const showBubbles =
+            isMobile && strictValidationTicksRef.current >= LIVE_STRICT_OVERLAY_TICKS;
+          if (isMobile) {
+            setLiveShowBubbleOverlay(showBubbles);
+          }
 
           lowVisibilityTicksRef.current = 0;
           const scanMeta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
             skipGuideCrop: true,
             qnumSweep: 'live',
             columnShiftSweep: 'live',
-            geometryMode: isMobile ? 'auto' : 'fullSheet',
-            preserveInputCanvas: false,
-            fixedTemplateAnchor: strictOk,
+            geometryMode: isMobile ? 'fullSheet' : 'fullSheet',
+            preserveInputCanvas: isMobile,
+            fixedTemplateAnchor: false,
           });
           const raw = [...scanMeta.picks];
           const mapped = mapRawToDraft(raw, chunk);
           if (isMobile) {
             lastQualityProbeRef.current = probeCalifacilSheetQuality(oriented, omrCols);
-            setLiveScanGeometry(scanMeta.geometry);
-            setLiveScanPicks(raw.slice(0, chunk.length));
+            if (showBubbles) {
+              setLiveScanGeometry(scanMeta.geometry);
+              setLiveScanPicks(raw.slice(0, chunk.length));
+            } else {
+              setLiveScanGeometry(null);
+              setLiveScanPicks([]);
+            }
           }
           const locks = liveLockedAnswersRef.current;
           const streaks = liveReadingStreakRef.current;
@@ -1487,8 +1575,13 @@ export default function CalificarPage() {
           if (isMobile) {
             const lockedRowFlags = chunk.map((q) => Boolean(locks[q.id]?.trim()));
             const ambiguousRowFlags = chunk.map((_, i) => Boolean(scanMeta.rows[i]?.ambiguous));
-            setLiveScanLockedRows(lockedRowFlags);
-            setLiveScanAmbiguousRows(ambiguousRowFlags);
+            if (showBubbles) {
+              setLiveScanLockedRows(lockedRowFlags);
+              setLiveScanAmbiguousRows(ambiguousRowFlags);
+            } else {
+              setLiveScanLockedRows([]);
+              setLiveScanAmbiguousRows([]);
+            }
           }
           if (draftSig !== liveDraftDisplaySigRef.current) {
             liveDraftDisplaySigRef.current = draftSig;
@@ -1683,6 +1776,7 @@ export default function CalificarPage() {
       startingCameraRef.current = false;
     }
   }, [
+    attachStreamToVideo,
     cameraOpen,
     exam,
     examId,
@@ -1701,12 +1795,20 @@ export default function CalificarPage() {
   startLiveCameraRef.current = startLiveCamera;
 
   const openMobileCapture = useCallback(() => {
+    if (examLoading) {
+      toast.error('Cargando examen, espera un momento.');
+      return;
+    }
+    if (!examId || !exam || !supportsCalifacil) {
+      toast.error('Selecciona primero un examen válido y entra a captura.');
+      return;
+    }
     flushSync(() => {
       setPhase('capturar');
     });
     phaseRef.current = 'capturar';
     void startLiveCamera({ skipPhaseGuard: true });
-  }, [startLiveCamera]);
+  }, [exam, examId, examLoading, startLiveCamera, supportsCalifacil]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -2332,7 +2434,7 @@ export default function CalificarPage() {
                   <Button
                     type="button"
                     className="w-full bg-orange-600 hover:bg-orange-700"
-                    disabled={scanBusy}
+                    disabled={scanBusy || examLoading || !exam || !supportsCalifacil}
                     onClick={openMobileCapture}
                   >
                     Tomar foto
@@ -2345,130 +2447,155 @@ export default function CalificarPage() {
         </CardContent>
       </Card>
 
-      {useLiveCameraUi && phase === 'capturar' && exam && (
-        <div
-          ref={mobileCameraShellRef}
-          className={cn(
-            'fixed inset-0 z-[100] flex h-[100dvh] max-h-[100dvh] flex-col bg-black text-white',
-            cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
-            cameraFullscreenMode === 'pseudo' && '!bg-black'
-          )}
-          style={{
-            paddingTop: 'env(safe-area-inset-top)',
-            paddingBottom: 'env(safe-area-inset-bottom)',
-          }}
-        >
-          <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/15 px-3 py-2">
-            <div className="min-w-0 pr-2">
-              <p className="truncate text-sm font-semibold">
-                Hoja {sheetIndex + 1} de {totalSheets}
-              </p>
-              <p className="text-[11px] text-white/70">
-                Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} · Encuadra la hoja carta
-                completa
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="shrink-0 text-white hover:bg-white/10 hover:text-white"
-              disabled={scanBusy}
-              onClick={() => {
-                stopLiveCamera();
-                setPhase('elegir');
-              }}
-            >
-              Volver
-            </Button>
-          </div>
-
-          <input
-            ref={galleryInputRef}
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={handleGalleryFile}
-          />
-
-          <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
-            {!cameraOpen ? (
-              <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
-                <div className="flex items-center gap-2 text-sm text-orange-100">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Abriendo cámara en vivo…
-                </div>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full max-w-xs"
-                  onClick={() => void startLiveCamera({ skipPhaseGuard: true })}
-                >
-                  Reintentar cámara
-                </Button>
-              </div>
-            ) : (
-              <>
-                <div className="relative h-full min-h-0 w-full">
-                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="absolute inset-0 h-full w-full bg-black object-contain object-center"
-                  />
-                  <CalifacilLiveScanOverlay
-                    geometry={liveScanGeometry}
-                    picks={liveScanPicks}
-                    lockedRows={liveScanLockedRows}
-                    ambiguousRows={liveScanAmbiguousRows}
-                    rowCount={currentChunk.length}
-                  />
-                  <div className="pointer-events-none absolute inset-0">
-                    <div className="absolute inset-[3%] rounded-sm border-2 border-white/35" />
-                    <span className="absolute left-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-l-[3px] border-t-[3px] border-orange-400" aria-hidden />
-                    <span className="absolute right-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-r-[3px] border-t-[3px] border-orange-400" aria-hidden />
-                    <span className="absolute bottom-[3%] left-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-l-[3px] border-orange-400" aria-hidden />
-                    <span className="absolute bottom-[3%] right-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-r-[3px] border-orange-400" aria-hidden />
-                  </div>
-                </div>
-                {scanBusy ? (
-                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/35">
-                    <Loader2
-                      className="h-10 w-10 animate-spin text-orange-400 motion-reduce:animate-none [animation-duration:750ms]"
-                      aria-hidden
-                    />
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-30 flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-white/90 bg-orange-500 shadow-lg shadow-black/40 disabled:opacity-60"
-                  disabled={scanBusy}
-                  aria-label="Capturar foto del examen"
-                  onClick={() => void captureMobilePhotoManually()}
-                >
-                  <span className="block h-[3.25rem] w-[3.25rem] rounded-full border-2 border-white/80 bg-orange-400" />
-                </button>
-              </>
+      {useLiveCameraUi &&
+        phase === 'capturar' &&
+        exam &&
+        cameraPortalReady &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={mobileCameraShellRef}
+            className={cn(
+              'fixed inset-0 z-[200] flex h-[100dvh] w-full max-h-[100dvh] flex-col bg-black text-white',
+              cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
+              cameraFullscreenMode === 'pseudo' && '!bg-black'
             )}
-            {cameraOpen ? (
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
-                style={{
-                  background:
-                    'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
+            style={{
+              paddingTop: 'env(safe-area-inset-top)',
+              paddingBottom: 'env(safe-area-inset-bottom)',
+            }}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/15 px-3 py-2">
+              <div className="min-w-0 pr-2">
+                <p className="truncate text-sm font-semibold">
+                  Hoja {sheetIndex + 1} de {totalSheets}
+                </p>
+                <p className="text-[11px] text-white/70">
+                  Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} · Encuadra la hoja carta
+                  completa
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-white hover:bg-white/10 hover:text-white"
+                disabled={scanBusy}
+                onClick={() => {
+                  stopLiveCamera();
+                  setPhase('elegir');
                 }}
               >
-                <p className="mb-1 text-center text-sm font-semibold tabular-nums text-orange-200">
-                  {liveResolvedCount} / {currentChunk.length} respuestas
-                </p>
-                <p className="text-center text-xs leading-snug text-orange-50">{liveStatus}</p>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      )}
+                Volver
+              </Button>
+            </div>
+
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={handleGalleryFile}
+            />
+
+            <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+              {!cameraOpen ? (
+                <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
+                  <div className="flex items-center gap-2 text-sm text-orange-100">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Abriendo cámara en vivo…
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full max-w-xs"
+                    onClick={() => void startLiveCamera({ skipPhaseGuard: true })}
+                  >
+                    Reintentar cámara
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="relative h-full min-h-0 w-full">
+                    <div
+                      className="absolute overflow-hidden bg-black"
+                      style={
+                        liveVideoLayout
+                          ? {
+                              left: liveVideoLayout.offsetX,
+                              top: liveVideoLayout.offsetY,
+                              width: liveVideoLayout.displayW,
+                              height: liveVideoLayout.displayH,
+                            }
+                          : { inset: 0 }
+                      }
+                    >
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className={cn(
+                          'h-full w-full bg-black object-center',
+                          liveVideoLayout ? 'object-cover' : 'object-contain'
+                        )}
+                      />
+                    </div>
+                    <CalifacilLiveScanOverlay
+                      geometry={liveScanGeometry}
+                      picks={liveScanPicks}
+                      lockedRows={liveScanLockedRows}
+                      ambiguousRows={liveScanAmbiguousRows}
+                      rowCount={currentChunk.length}
+                      letterbox={liveVideoLayout}
+                      visible={liveShowBubbleOverlay}
+                    />
+                    <div className="pointer-events-none absolute inset-0">
+                      <div className="absolute inset-[3%] rounded-sm border-2 border-white/35" />
+                      <span className="absolute left-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-l-[3px] border-t-[3px] border-orange-400" aria-hidden />
+                      <span className="absolute right-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-r-[3px] border-t-[3px] border-orange-400" aria-hidden />
+                      <span className="absolute bottom-[3%] left-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-l-[3px] border-orange-400" aria-hidden />
+                      <span className="absolute bottom-[3%] right-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-r-[3px] border-orange-400" aria-hidden />
+                    </div>
+                  </div>
+                  {scanBusy ? (
+                    <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/35">
+                      <Loader2
+                        className="h-10 w-10 animate-spin text-orange-400 motion-reduce:animate-none [animation-duration:750ms]"
+                        aria-hidden
+                      />
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-30 flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-white/90 bg-orange-500 shadow-lg shadow-black/40 disabled:opacity-60"
+                    disabled={scanBusy}
+                    aria-label="Capturar foto del examen"
+                    onClick={() => void captureMobilePhotoManually()}
+                  >
+                    <span className="block h-[3.25rem] w-[3.25rem] rounded-full border-2 border-white/80 bg-orange-400" />
+                  </button>
+                </>
+              )}
+              {cameraOpen ? (
+                <div
+                  className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
+                  style={{
+                    background:
+                      'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
+                  }}
+                >
+                  <p className="mb-1 text-center text-sm font-semibold tabular-nums text-orange-200">
+                    {liveResolvedCount} / {currentChunk.length} respuestas
+                  </p>
+                  <p className="text-center text-xs leading-snug text-orange-50">{liveStatus}</p>
+                </div>
+              ) : null}
+            </div>
+          </div>,
+          document.body
+        )}
 
       {((phase === 'revisar_hoja') || (phase === 'capturar' && !useLiveCameraUi)) && exam && (
         <Card>
