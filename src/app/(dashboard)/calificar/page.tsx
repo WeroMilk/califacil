@@ -21,12 +21,16 @@ import {
   califacilGeometryTableBounds,
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
+  captureCalifacilGuideFrame,
   fileToImage,
   isCalifacilExamSheetLikely,
+  isCalifacilExamSheetStrict,
   prepareCalifacilScanInput,
+  probeCalifacilSheetQuality,
   scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
   type CalifacilOmrScanGeometry,
+  type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
@@ -95,7 +99,11 @@ const MIN_AUTO_READ_RATIO = 0.9;
 /** Fotogramas consecutivos con lectura estable antes de fijar borrador (consenso en vivo). */
 const STABLE_PARTIAL_TICKS = 3;
 /** Fotogramas consecutivos con hoja completa para disparar captura automática. */
-const STABLE_FULL_TICKS = 2;
+const STABLE_FULL_TICKS = 4;
+/** Ticks consecutivos con validación estricta antes de leer burbujas en vivo. */
+const STRICT_VALIDATION_TICKS = 3;
+/** Lecturas idénticas consecutivas para fijar una respuesta en el loop en vivo. */
+const CONSENSUS_LOCK_TICKS = 3;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
@@ -275,8 +283,11 @@ export default function CalificarPage() {
   const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
   const [flashSupported, setFlashSupported] = useState(false);
   const [flashOn, setFlashOn] = useState(false);
+  /** Relación ancho/alto del stream de cámara (para letterbox object-contain). */
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
   const mobileCameraShellRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
@@ -291,6 +302,12 @@ export default function CalificarPage() {
   const autoFinalizeInProgressRef = useRef(false);
   /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
   const liveLockedAnswersRef = useRef<Record<string, string>>({});
+  /** Racha de lecturas idénticas por pregunta antes de bloquear respuesta. */
+  const liveReadingStreakRef = useRef<Record<string, { value: string; streak: number }>>({});
+  /** Ticks consecutivos con validación estricta de hoja CaliFacil. */
+  const strictValidationTicksRef = useRef(0);
+  /** Último sondeo de calidad OMR del loop en vivo (líneas/columnas detectadas). */
+  const lastQualityProbeRef = useRef<CalifacilSheetQualityProbe | null>(null);
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
   const liveCompleteSoundPlayedRef = useRef(false);
   const scanBusyRef = useRef(false);
@@ -480,6 +497,9 @@ export default function CalificarPage() {
     glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     liveLockedAnswersRef.current = {};
+    liveReadingStreakRef.current = {};
+    strictValidationTicksRef.current = 0;
+    lastQualityProbeRef.current = null;
     liveDraftDisplaySigRef.current = '';
     liveResolvedDisplayedRef.current = -1;
     liveCompleteSoundPlayedRef.current = false;
@@ -520,6 +540,7 @@ export default function CalificarPage() {
     setFlashSupported(false);
     setFlashOn(false);
     setCameraOpen(false);
+    setVideoAspect(null);
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
 
@@ -597,6 +618,7 @@ export default function CalificarPage() {
         return { success: false };
       }
       /** En móvil o archivo subido, respetamos la imagen tal cual: sin auto-rotar/deformar. */
+      const isMobileCamera = isMobile && !fallbackFile;
       const preserveCapturedFrame = isMobile || Boolean(fallbackFile);
       const oriented =
         preserveCapturedFrame
@@ -609,25 +631,28 @@ export default function CalificarPage() {
         oriented instanceof HTMLCanvasElement
           ? oriented
           : prepareCalifacilScanInput(oriented, { useGuideCrop: false });
-      if (!examCanvas || !isCalifacilExamSheetLikely(examCanvas, omrCols)) {
+      const sheetValidator = isMobileCamera ? isCalifacilExamSheetStrict : isCalifacilExamSheetLikely;
+      if (!examCanvas || !sheetValidator(examCanvas, omrCols)) {
         setLiveStatus(
           isMobile
             ? 'No se detecta la tabla CaliFacil. Haz la foto de la hoja carta completa, recta y bien iluminada.'
             : 'No se detecta la tabla CaliFacil. Prueba una foto más nítida de la hoja completa o del pie con la tabla N.º / A–D.'
         );
         toast.error(
-          isMobile
-            ? 'No se reconoce el examen CaliFacil. Incluye la hoja impresa completa y que se vea el pie con las casillas A–D.'
-            : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
+          isMobileCamera
+            ? 'No se reconoce el examen CaliFacil. Alinea las esquinas naranjas con los cuadros negros de la hoja impresa.'
+            : isMobile
+              ? 'No se reconoce el examen CaliFacil. Incluye la hoja impresa completa y que se vea el pie con las casillas A–D.'
+              : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
         );
         return { success: false };
       }
       let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
       let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
         skipGuideCrop: true,
-        geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
+        geometryMode: fallbackFile || isMobileCamera ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
-        fixedTemplateAnchor: Boolean(fallbackFile),
+        fixedTemplateAnchor: Boolean(fallbackFile) || isMobileCamera,
       });
       let raw = [...meta.picks];
       let mapped = mapRawToDraft(raw, chunk);
@@ -642,9 +667,9 @@ export default function CalificarPage() {
 
         const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoverySource, omrCols, {
           skipGuideCrop: true,
-          geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
+          geometryMode: fallbackFile || isMobileCamera ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
           preserveInputCanvas: false,
-          fixedTemplateAnchor: Boolean(fallbackFile),
+          fixedTemplateAnchor: Boolean(fallbackFile) || isMobileCamera,
         });
         const recoveryRaw = [...recoveryMeta.picks];
         const recoveryMapped = mapRawToDraft(recoveryRaw, chunk);
@@ -1000,6 +1025,10 @@ export default function CalificarPage() {
     const video = videoRef.current;
     if (!video) return;
     const onLoadedMetadata = () => {
+      const v = videoRef.current;
+      if (v && v.videoWidth > 0 && v.videoHeight > 0) {
+        setVideoAspect(v.videoWidth / v.videoHeight);
+      }
       void attachStreamToVideo();
     };
     video.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -1261,28 +1290,46 @@ export default function CalificarPage() {
             nextDelay = 100;
             return;
           }
-          if (!scanCtx) return;
-
-          let targetW = video.videoWidth;
-          let targetH = video.videoHeight;
-          if (isMobile && targetW > MOBILE_SCAN_MAX_WIDTH) {
-            const s = MOBILE_SCAN_MAX_WIDTH / Math.max(1, targetW);
-            targetW = MOBILE_SCAN_MAX_WIDTH;
-            targetH = Math.max(1, Math.round(targetH * s));
-          }
-          if (scanCanvas.width !== targetW || scanCanvas.height !== targetH) {
-            scanCanvas.width = targetW;
-            scanCanvas.height = targetH;
-          }
-          scanCtx.drawImage(video, 0, 0, targetW, targetH);
+          if (!isMobile && !scanCtx) return;
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
           if (chunk.length === 0) return;
-          const oriented = scanCanvas;
-          if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
+
+          let oriented: HTMLCanvasElement | null = null;
+          if (isMobile) {
+            oriented = captureCalifacilGuideFrame(video, { maxSide: MOBILE_SCAN_MAX_WIDTH });
+            if (!oriented) {
+              nextDelay = 100;
+              return;
+            }
+          } else {
+            if (!scanCtx) return;
+            let targetW = video.videoWidth;
+            let targetH = video.videoHeight;
+            if (targetW > MOBILE_SCAN_MAX_WIDTH) {
+              const s = MOBILE_SCAN_MAX_WIDTH / Math.max(1, targetW);
+              targetW = MOBILE_SCAN_MAX_WIDTH;
+              targetH = Math.max(1, Math.round(targetH * s));
+            }
+            if (scanCanvas.width !== targetW || scanCanvas.height !== targetH) {
+              scanCanvas.width = targetW;
+              scanCanvas.height = targetH;
+            }
+            scanCtx.drawImage(video, 0, 0, targetW, targetH);
+            oriented = scanCanvas;
+          }
+
+          const sheetLikely = isMobile
+            ? isCalifacilExamSheetStrict(oriented, omrCols)
+            : isCalifacilExamSheetLikely(oriented, omrCols);
+
+          if (!sheetLikely) {
             stopScanningHum();
             stablePartialTicksRef.current = 0;
             stableFullTicksRef.current = 0;
+            strictValidationTicksRef.current = 0;
+            lastQualityProbeRef.current = null;
+            liveReadingStreakRef.current = {};
             lowVisibilityTicksRef.current += 1;
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
@@ -1329,6 +1376,19 @@ export default function CalificarPage() {
             }
             return;
           }
+
+          if (isMobile) {
+            strictValidationTicksRef.current += 1;
+            if (strictValidationTicksRef.current < STRICT_VALIDATION_TICKS) {
+              const nextStatus = 'Detectando hoja CaliFacil… mantén fijo el encuadre.';
+              if (nextStatus !== hotLoopStatus) {
+                hotLoopStatus = nextStatus;
+                setLiveStatus(nextStatus);
+              }
+              return;
+            }
+          }
+
           lowVisibilityTicksRef.current = 0;
           const raw = scanCalifacilOmrSheet(oriented, omrCols, {
             skipGuideCrop: true,
@@ -1336,9 +1396,14 @@ export default function CalificarPage() {
             columnShiftSweep: 'live',
             geometryMode: 'fullSheet',
             preserveInputCanvas: true,
+            fixedTemplateAnchor: isMobile,
           });
           const mapped = mapRawToDraft(raw, chunk);
+          if (isMobile) {
+            lastQualityProbeRef.current = probeCalifacilSheetQuality(oriented, omrCols);
+          }
           const locks = liveLockedAnswersRef.current;
+          const streaks = liveReadingStreakRef.current;
           const mergedLive: Record<string, string> = {};
           let mergedResolved = 0;
           let draftSig = '';
@@ -1349,10 +1414,23 @@ export default function CalificarPage() {
               mergedResolved++;
             } else {
               const v = mapped.draft[q.id]?.trim() ?? '';
-              mergedLive[q.id] = v;
               if (v) {
-                locks[q.id] = v;
-                mergedResolved++;
+                const prev = streaks[q.id];
+                if (prev?.value === v) {
+                  prev.streak += 1;
+                } else {
+                  streaks[q.id] = { value: v, streak: 1 };
+                }
+                if (streaks[q.id]!.streak >= CONSENSUS_LOCK_TICKS) {
+                  locks[q.id] = v;
+                  mergedLive[q.id] = v;
+                  mergedResolved++;
+                } else {
+                  mergedLive[q.id] = v;
+                }
+              } else {
+                delete streaks[q.id];
+                mergedLive[q.id] = '';
               }
             }
             draftSig += `${mergedLive[q.id] ?? ''}\n`;
@@ -1464,6 +1542,11 @@ export default function CalificarPage() {
           if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
             if (isMobile) {
+              const probe = lastQualityProbeRef.current;
+              const qualityOk = probe?.hasRowLines && probe?.hasColumnEdges;
+              if (!qualityOk || mergedResolved < chunk.length) {
+                return;
+              }
               if (mobileCaptureBusyRef.current) {
                 return;
               }
@@ -1471,15 +1554,9 @@ export default function CalificarPage() {
               try {
                 const videoCap = videoRef.current;
                 if (!videoCap || videoCap.readyState < 2) return;
-                const fw = videoCap.videoWidth;
-                const fh = videoCap.videoHeight;
-                const fullCanvas = document.createElement('canvas');
-                fullCanvas.width = fw;
-                fullCanvas.height = fh;
-                const fctx = fullCanvas.getContext('2d', { willReadFrequently: true });
-                if (!fctx) return;
-                fctx.drawImage(videoCap, 0, 0, fw, fh);
-                const result = await finalizeCapturedSheetRef.current(fullCanvas);
+                const guideCanvas = captureCalifacilGuideFrame(videoCap);
+                if (!guideCanvas) return;
+                const result = await finalizeCapturedSheetRef.current(guideCanvas);
                 if (result.success) {
                   playScanCompleteChime();
                 }
@@ -1765,15 +1842,12 @@ export default function CalificarPage() {
     setScanBusy(true);
     await yieldForSpinnerPaint();
     try {
-      const fw = video.videoWidth;
-      const fh = video.videoHeight;
-      const fullCanvas = document.createElement('canvas');
-      fullCanvas.width = fw;
-      fullCanvas.height = fh;
-      const fctx = fullCanvas.getContext('2d', { willReadFrequently: true });
-      if (!fctx) return;
-      fctx.drawImage(video, 0, 0, fw, fh);
-      await finalizeCapturedSheet(fullCanvas);
+      const guideCanvas = captureCalifacilGuideFrame(video);
+      if (!guideCanvas) {
+        toast.error('No se pudo capturar el encuadre. Intenta de nuevo.');
+        return;
+      }
+      await finalizeCapturedSheet(guideCanvas);
     } finally {
       mobileCaptureBusyRef.current = false;
       setScanBusy(false);
@@ -1796,6 +1870,10 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     stablePartialTicksRef.current = 0;
     liveLockedAnswersRef.current = {};
+    liveReadingStreakRef.current = {};
+    strictValidationTicksRef.current = 0;
+    lastQualityProbeRef.current = null;
+    setVideoAspect(null);
     setReviewOmrGeometry(null);
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
@@ -2222,9 +2300,9 @@ export default function CalificarPage() {
             onChange={handleGalleryFile}
           />
 
-          <div className="relative min-h-0 flex-1 bg-black">
+          <div ref={mobileVideoViewportRef} className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
             {!cameraOpen ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
+              <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
                 <div className="flex items-center gap-2 text-sm text-orange-100">
                   <Loader2 className="h-5 w-5 animate-spin" />
                   Abriendo cámara en vivo…
@@ -2239,23 +2317,26 @@ export default function CalificarPage() {
                 </Button>
               </div>
             ) : (
-              <>
+              <div
+                className="relative max-h-full max-w-full"
+                style={videoAspect ? { aspectRatio: `${videoAspect}` } : undefined}
+              >
                 {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                 <video
                   ref={videoRef}
                   autoPlay
                   playsInline
                   muted
-                  className="absolute inset-0 h-full w-full bg-black object-cover"
+                  className="block h-full w-full max-h-full max-w-full bg-black object-contain object-center"
                 />
-                <div className="pointer-events-none absolute inset-0 bg-black/25" />
+                <div className="pointer-events-none absolute inset-0 bg-black/20" />
                 <div
                   className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
                   style={{
                     left: `${CALIFACIL_VIEWFINDER_GUIDE.centerXFrac * 100}%`,
                     top: `${CALIFACIL_VIEWFINDER_GUIDE.centerYFrac * 100}%`,
                     width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
-                    aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio} / 1`,
+                    aspectRatio: `${CALIFACIL_VIEWFINDER_GUIDE.aspectRatio}`,
                   }}
                 >
                   <div className="relative h-full w-full">
@@ -2278,11 +2359,14 @@ export default function CalificarPage() {
                     />
                   </div>
                 </div>
-              </>
+              </div>
             )}
           </div>
 
-          <div className="shrink-0 space-y-2 border-t border-white/15 bg-black/90 px-3 py-3">
+          <div
+            className="shrink-0 space-y-2 border-t border-white/15 bg-black/90 px-3 pt-3"
+            style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
+          >
             <div className="rounded-md border border-orange-400/35 bg-orange-950/50 px-2.5 py-2 text-xs leading-snug text-orange-50">
               {liveStatus}
             </div>

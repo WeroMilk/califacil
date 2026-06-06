@@ -171,6 +171,38 @@ export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect |
   return { x: left / W, y: top / H, w: rw / W, h: rh / H };
 }
 
+/** Layout CSS object-contain del video dentro de un contenedor. */
+export type ObjectContainVideoLayout = {
+  offsetX: number;
+  offsetY: number;
+  displayW: number;
+  displayH: number;
+  scale: number;
+};
+
+/** Calcula posición y tamaño del video visible con object-contain. */
+export function getObjectContainVideoLayout(
+  videoW: number,
+  videoH: number,
+  containerW: number,
+  containerH: number
+): ObjectContainVideoLayout {
+  const vw = Math.max(1, videoW);
+  const vh = Math.max(1, videoH);
+  const cw = Math.max(1, containerW);
+  const ch = Math.max(1, containerH);
+  const scale = Math.min(cw / vw, ch / vh);
+  const displayW = vw * scale;
+  const displayH = vh * scale;
+  return {
+    offsetX: (cw - displayW) / 2,
+    offsetY: (ch - displayH) / 2,
+    displayW,
+    displayH,
+    scale,
+  };
+}
+
 /**
  * Caja que envuelve todas las celdas OMR detectadas (más un pequeño margen), para alinear
  * el marco naranja de revisión con el overlay verde/rojo.
@@ -1290,6 +1322,42 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
   return out;
 }
 
+export type CaptureCalifacilGuideFrameOptions = {
+  /** Escala el recorte guía para que el lado largo no supere este valor (p. ej. 720 en vivo). */
+  maxSide?: number;
+};
+
+/**
+ * Captura el fotograma del video recortado al marco guía CaliFacil.
+ * Con object-contain el fotograma completo coincide con el área visible; el recorte guía
+ * alinea OMR con las esquinas naranjas del visor móvil.
+ */
+export function captureCalifacilGuideFrame(
+  video: HTMLVideoElement,
+  opts?: CaptureCalifacilGuideFrameOptions
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const fw = video.videoWidth;
+  const fh = video.videoHeight;
+  if (fw < 40 || fh < 40) return null;
+
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = fw;
+  fullCanvas.height = fh;
+  const ctx = fullCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, fw, fh);
+
+  const cropped = cropCanvasToCalifacilGuideOverlay(fullCanvas);
+  if (!cropped) return null;
+
+  const maxSide = opts?.maxSide;
+  if (maxSide && maxSide > 0) {
+    return drawSourceToCanvas(cropped, maxSide);
+  }
+  return drawSourceToCanvas(cropped, 1400);
+}
+
 /** Opciones para preparar imagen antes de orientar / escanear CaliFacil */
 export type PrepareCalifacilScanInputOptions = {
   /**
@@ -2036,6 +2104,78 @@ export function isCalifacilExamSheetLikely(
   /** Página muy cargada o borde mal inferido: la homografía puede estropear líneas; probar imagen previa al warp. */
   if (corrected !== canvas && hasCalifacilPrintedTableGrid(canvas, columns)) return true;
   return false;
+}
+
+/** Comprueba los cuatro cuadros negros de esquina impresos (`.sheet-align-corner`). */
+function hasCalifacilCornerMarkers(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return false;
+
+  const patchW = Math.max(5, Math.round(W * 0.035));
+  const patchH = Math.max(5, Math.round(H * 0.035));
+  const corners = [
+    { x: 0, y: 0 },
+    { x: W - patchW, y: 0 },
+    { x: 0, y: H - patchH },
+    { x: W - patchW, y: H - patchH },
+  ];
+
+  let darkCorners = 0;
+  for (const { x, y } of corners) {
+    const id = ctx.getImageData(x, y, patchW, patchH);
+    let darkCount = 0;
+    const total = patchW * patchH;
+    for (let i = 0; i < id.data.length; i += 4) {
+      const lum = id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
+      if (lum < 95) darkCount++;
+    }
+    if (darkCount / total >= 0.07) darkCorners++;
+  }
+  return darkCorners >= 3;
+}
+
+export type CalifacilSheetQualityProbe = {
+  hasGrid: boolean;
+  hasCornerMarkers: boolean;
+  hasRowLines: boolean;
+  hasColumnEdges: boolean;
+};
+
+/** Sondeo rápido de calidad OMR (líneas, columnas) para validación en cámara móvil. */
+export function probeCalifacilSheetQuality(
+  canvas: HTMLCanvasElement,
+  columns: number
+): CalifacilSheetQualityProbe {
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const hasGrid = hasCalifacilPrintedTableGrid(canvas, cols);
+  const hasCornerMarkers = hasCalifacilCornerMarkers(canvas);
+  const detail = scanCalifacilOmrCanvasDetailed(canvas, cols, {
+    minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
+    minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
+  });
+  return {
+    hasGrid,
+    hasCornerMarkers,
+    hasRowLines: detail.hasDetectedRowLines,
+    hasColumnEdges: detail.hasDetectedColumnEdges,
+  };
+}
+
+/**
+ * Validación estricta para cámara móvil: rejilla + esquinas + estructura de tabla detectable.
+ * Evita falsos positivos en paredes o texturas sin hoja CaliFacil.
+ */
+export function isCalifacilExamSheetStrict(
+  canvas: HTMLCanvasElement,
+  columns: number
+): boolean {
+  if (!isCalifacilExamSheetLikely(canvas, columns)) return false;
+  if (!hasCalifacilCornerMarkers(canvas)) return false;
+  const probe = probeCalifacilSheetQuality(canvas, columns);
+  return probe.hasRowLines && probe.hasColumnEdges;
 }
 
 function scanCalifacilOmrCanvasDetailed(
