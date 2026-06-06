@@ -1,6 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react';
 import { flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -23,15 +32,22 @@ import {
   captureVideoFullFrame,
   fileToImage,
   isCalifacilExamSheetLikely,
+  isCalifacilExamSheetStrict,
   prepareCalifacilScanInput,
   prepareMobileCameraScanCanvas,
   probeCalifacilSheetQuality,
-  scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
+import { CalifacilLiveScanOverlay } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
+import {
+  type ExamFullscreenMode,
+  EXAM_PSEUDO_FULLSCREEN_CLASS,
+  enterExamFullscreen,
+  exitExamFullscreenSafe,
+} from '@/lib/examFullscreen';
 import {
   calculatePercentage,
   questionPoints,
@@ -99,15 +115,17 @@ const MIN_AUTO_READ_RATIO = 0.9;
 /** Fotogramas consecutivos con lectura estable antes de fijar borrador (consenso en vivo). */
 const STABLE_PARTIAL_TICKS = 3;
 /** Fotogramas consecutivos con hoja completa para disparar captura automática. */
-const STABLE_FULL_TICKS = 2;
+const STABLE_FULL_TICKS = 3;
 /** Lecturas idénticas consecutivas para fijar una respuesta en el loop en vivo. */
-const CONSENSUS_LOCK_TICKS = 2;
+const CONSENSUS_LOCK_TICKS = 4;
 /** Mínimo de filas leídas (ratio) para auto-captura móvil. */
-const MOBILE_AUTO_CAPTURE_MIN_RATIO = 0.55;
+const MOBILE_AUTO_CAPTURE_MIN_RATIO = 0.9;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
-const MOBILE_SCAN_MAX_WIDTH = 720;
+const MOBILE_SCAN_MAX_WIDTH = 1080;
+/** Resolución máxima al capturar foto final en móvil. */
+const MOBILE_CAPTURE_MAX_SIDE = 2400;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -283,6 +301,11 @@ export default function CalificarPage() {
   const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
   const [flashSupported, setFlashSupported] = useState(false);
   const [flashOn, setFlashOn] = useState(false);
+  const [cameraFullscreenMode, setCameraFullscreenMode] = useState<ExamFullscreenMode>('none');
+  const [liveScanGeometry, setLiveScanGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
+  const [liveScanPicks, setLiveScanPicks] = useState<(number | null)[]>([]);
+  const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
+  const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
@@ -504,9 +527,13 @@ export default function CalificarPage() {
     stopScanningHum();
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
+    setLiveScanGeometry(null);
+    setLiveScanPicks([]);
+    setLiveScanLockedRows([]);
+    setLiveScanAmbiguousRows([]);
     setLiveStatus(
       isMobile
-        ? 'Encuadra toda la hoja dentro de la pantalla. La captura es automática; también puedes pulsar el botón naranja.'
+        ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas. Pulsa el botón naranja o espera captura automática.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -518,9 +545,8 @@ export default function CalificarPage() {
       window.clearTimeout(liveTickRef.current);
       liveTickRef.current = null;
     }
-    if (typeof document !== 'undefined' && document.fullscreenElement) {
-      void document.exitFullscreen?.().catch(() => undefined);
-    }
+    void exitExamFullscreenSafe();
+    setCameraFullscreenMode('none');
     void setTorchEnabled(false);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -632,27 +658,34 @@ export default function CalificarPage() {
         oriented instanceof HTMLCanvasElement
           ? oriented
           : prepareCalifacilScanInput(oriented, { useGuideCrop: false });
-      if (!examCanvas || !isCalifacilExamSheetLikely(examCanvas, omrCols)) {
+      const sheetStrict =
+        examCanvas && isMobileCamera
+          ? isCalifacilExamSheetStrict(examCanvas, omrCols)
+          : examCanvas
+            ? isCalifacilExamSheetLikely(examCanvas, omrCols)
+            : false;
+      if (!examCanvas || !sheetStrict) {
         setLiveStatus(
           isMobile
-            ? 'No se detecta la tabla CaliFacil. Acerca la hoja, mejora la luz y encuadra toda la página.'
+            ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas y mejora la luz.'
             : 'No se detecta la tabla CaliFacil. Prueba una foto más nítida de la hoja completa o del pie con la tabla N.º / A–D.'
         );
         toast.error(
           isMobileCamera
-            ? 'No se reconoce el examen. Encuadra la hoja completa con buena luz e intenta de nuevo.'
+            ? 'No se reconoce el examen. Alinea las esquinas negras impresas con el marco naranja e intenta de nuevo.'
             : isMobile
               ? 'No se reconoce el examen CaliFacil. Incluye la hoja impresa completa y que se vea el pie con las casillas A–D.'
               : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
         );
         return { success: false };
       }
+      const useFixedTemplate = isMobileCamera ? sheetStrict : Boolean(fallbackFile);
       let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
       let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
         skipGuideCrop: true,
         geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
         preserveInputCanvas: isMobileCamera ? false : preserveCapturedFrame,
-        fixedTemplateAnchor: isMobileCamera ? false : Boolean(fallbackFile),
+        fixedTemplateAnchor: useFixedTemplate,
       });
       let raw = [...meta.picks];
       let mapped = mapRawToDraft(raw, chunk);
@@ -669,7 +702,7 @@ export default function CalificarPage() {
           skipGuideCrop: true,
           geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
           preserveInputCanvas: false,
-          fixedTemplateAnchor: false,
+          fixedTemplateAnchor: useFixedTemplate,
         });
         const recoveryRaw = [...recoveryMeta.picks];
         const recoveryMapped = mapRawToDraft(recoveryRaw, chunk);
@@ -685,6 +718,16 @@ export default function CalificarPage() {
       const ambiguousIdx = meta.rows
         .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
         .filter((i) => i >= 0);
+
+      if (
+        isMobileCamera &&
+        ambiguousIdx.length > Math.ceil(chunk.length * AMBIGUOUS_ROW_WARN_RATIO)
+      ) {
+        toast.error(
+          'Demasiadas respuestas ambiguas. Mejora el encuadre, la luz y vuelve a capturar.'
+        );
+        return { success: false };
+      }
 
       const si = sheetIndexRef.current;
       const picksInChunk = raw.slice(0, chunk.length);
@@ -885,27 +928,24 @@ export default function CalificarPage() {
         }
       }
       if (mergedResolved < minResolved) {
-        const allowManualReview = !skipReviewUi;
         setDraftSelections({});
         setLiveDraftSelections(mergedDraft);
         setLiveResolvedCount(mergedResolved);
         setLiveStatus(
           isMobile
-            ? 'Lectura insuficiente: aléjate si la hoja no entra en foco, mejora la luz y evita sombras.'
+            ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
             : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
         );
-        if (!allowManualReview) {
+        if (isMobileCamera || !skipReviewUi) {
           toast.error(
-            isMobile
-              ? 'La captura no tiene calidad suficiente. Vuelve a fotografiar la hoja completa con buena luz.'
+            isMobileCamera
+              ? `Lectura insuficiente (${mergedResolved}/${chunk.length}). Vuelve a capturar con mejor encuadre.`
               : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
           );
           return { success: false };
         }
         toast.message(
-          isMobile
-            ? `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa y corrige manualmente antes de guardar.`
-            : `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
+          `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
         );
       }
 
@@ -1019,7 +1059,7 @@ export default function CalificarPage() {
     }
   }, [cameraOpen, phase, stopLiveCamera]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!cameraOpen) return;
     void attachStreamToVideo();
     const video = videoRef.current;
@@ -1036,25 +1076,19 @@ export default function CalificarPage() {
   useEffect(() => {
     if (!isMobile || phase !== 'capturar') return;
     let cancelled = false;
-    const tryEnter = () => {
+    const tryEnter = async () => {
       if (cancelled) return;
       const el = mobileCameraShellRef.current;
       if (!el) return;
-      const anyEl = el as HTMLElement & {
-        webkitRequestFullscreen?: () => Promise<void> | void;
-      };
-      const req = el.requestFullscreen?.bind(el) ?? anyEl.webkitRequestFullscreen?.bind(el);
-      if (req) void Promise.resolve(req()).catch(() => undefined);
+      const mode = await enterExamFullscreen(el);
+      if (!cancelled) setCameraFullscreenMode(mode);
     };
     const id = requestAnimationFrame(() => {
-      requestAnimationFrame(tryEnter);
+      requestAnimationFrame(() => void tryEnter());
     });
     return () => {
       cancelled = true;
       cancelAnimationFrame(id);
-      if (typeof document !== 'undefined' && document.fullscreenElement) {
-        void document.exitFullscreen?.().catch(() => undefined);
-      }
     };
   }, [isMobile, phase]);
 
@@ -1197,6 +1231,14 @@ export default function CalificarPage() {
         return;
       }
       const attempts: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        },
         { video: { facingMode: { ideal: 'environment' } }, audio: false },
         { video: { facingMode: 'user' }, audio: false },
         { video: true, audio: false },
@@ -1238,9 +1280,8 @@ export default function CalificarPage() {
         }
       }
       streamRef.current = stream;
-      setCameraOpen(true);
       resetLiveReadings();
-      await attachStreamToVideo();
+      setCameraOpen(true);
       const track = stream.getVideoTracks()[0];
       const capabilities =
         typeof track?.getCapabilities === 'function'
@@ -1327,6 +1368,12 @@ export default function CalificarPage() {
             strictValidationTicksRef.current = 0;
             lastQualityProbeRef.current = null;
             liveReadingStreakRef.current = {};
+            if (isMobile) {
+              setLiveScanGeometry(null);
+              setLiveScanPicks([]);
+              setLiveScanLockedRows([]);
+              setLiveScanAmbiguousRows([]);
+            }
             lowVisibilityTicksRef.current += 1;
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
@@ -1347,8 +1394,9 @@ export default function CalificarPage() {
               setLiveDraftSelections(mergedNoExam);
               setLiveResolvedCount(resolvedNoExam);
             }
-            const nextStatus =
-              'Encuadra toda la hoja dentro de la pantalla, con buena luz y la tabla de respuestas visible abajo.';
+            const nextStatus = isMobile
+              ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas del marco.'
+              : 'Encuadra toda la hoja dentro de la pantalla, con buena luz y la tabla de respuestas visible abajo.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -1374,20 +1422,30 @@ export default function CalificarPage() {
             return;
           }
 
-          strictValidationTicksRef.current += 1;
+          const strictOk = isMobile
+            ? isCalifacilExamSheetStrict(oriented, omrCols)
+            : isCalifacilExamSheetLikely(oriented, omrCols);
+          if (strictOk) {
+            strictValidationTicksRef.current += 1;
+          } else {
+            strictValidationTicksRef.current = 0;
+          }
 
           lowVisibilityTicksRef.current = 0;
-          const raw = scanCalifacilOmrSheet(oriented, omrCols, {
+          const scanMeta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
             skipGuideCrop: true,
             qnumSweep: 'live',
             columnShiftSweep: 'live',
             geometryMode: isMobile ? 'auto' : 'fullSheet',
             preserveInputCanvas: false,
-            fixedTemplateAnchor: false,
+            fixedTemplateAnchor: strictOk,
           });
+          const raw = [...scanMeta.picks];
           const mapped = mapRawToDraft(raw, chunk);
           if (isMobile) {
             lastQualityProbeRef.current = probeCalifacilSheetQuality(oriented, omrCols);
+            setLiveScanGeometry(scanMeta.geometry);
+            setLiveScanPicks(raw.slice(0, chunk.length));
           }
           const locks = liveLockedAnswersRef.current;
           const streaks = liveReadingStreakRef.current;
@@ -1426,6 +1484,12 @@ export default function CalificarPage() {
           for (const q of chunk) {
             if (mergedLive[q.id]?.trim()) tentativeResolved++;
           }
+          if (isMobile) {
+            const lockedRowFlags = chunk.map((q) => Boolean(locks[q.id]?.trim()));
+            const ambiguousRowFlags = chunk.map((_, i) => Boolean(scanMeta.rows[i]?.ambiguous));
+            setLiveScanLockedRows(lockedRowFlags);
+            setLiveScanAmbiguousRows(ambiguousRowFlags);
+          }
           if (draftSig !== liveDraftDisplaySigRef.current) {
             liveDraftDisplaySigRef.current = draftSig;
             setLiveDraftSelections(mergedLive);
@@ -1441,7 +1505,17 @@ export default function CalificarPage() {
 
           if (chunk.length > 0) {
             if (isMobile) {
-              stopScanningHum();
+              if (mergedResolved >= chunk.length && strictOk) {
+                stopScanningHum();
+                if (!liveCompleteSoundPlayedRef.current) {
+                  liveCompleteSoundPlayedRef.current = true;
+                  playScanCompleteChime();
+                }
+              } else if (mergedResolved > 0) {
+                startScanningHum();
+              } else {
+                stopScanningHum();
+              }
             } else if (mergedResolved >= chunk.length) {
               stopScanningHum();
               if (!liveCompleteSoundPlayedRef.current) {
@@ -1476,16 +1550,23 @@ export default function CalificarPage() {
             setLiveStatus('Poca luz detectada: activé flash automáticamente.');
           }
           const autoCaptureMin = Math.max(1, Math.ceil(chunk.length * MOBILE_AUTO_CAPTURE_MIN_RATIO));
-          if (isMobile && tentativeResolved >= autoCaptureMin && chunk.length > 0) {
+          if (isMobile && !strictOk && chunk.length > 0) {
             const nextStatus =
-              'Lectura detectada: capturando en automático o pulsa el botón naranja.';
+              'Alinea los 4 cuadros negros de esquina con las esquinas naranjas del marco.';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
+            }
+          } else if (isMobile && mergedResolved >= autoCaptureMin && strictOk && chunk.length > 0) {
+            const nextStatus =
+              'Lectura estable: capturando en automático o pulsa el botón naranja.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
           } else if (mergedResolved >= chunk.length && chunk.length > 0) {
             const nextStatus = isMobile
-              ? 'Lectura estable: capturando en automático o pulsa el botón naranja.'
+              ? 'Lectura completa: capturando en automático o pulsa el botón naranja.'
               : 'Detección completa. Toca «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
@@ -1521,7 +1602,7 @@ export default function CalificarPage() {
           }
           if (
             isMobile
-              ? tentativeResolved >= autoCaptureMin && chunk.length > 0
+              ? mergedResolved >= autoCaptureMin && strictOk && chunk.length > 0
               : mergedResolved >= chunk.length && chunk.length > 0
           ) {
             stableFullTicksRef.current += 1;
@@ -1544,8 +1625,10 @@ export default function CalificarPage() {
           if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
             if (isMobile) {
-              const probe = lastQualityProbeRef.current;
-              const qualityOk = probe?.hasGrid && tentativeResolved >= autoCaptureMin;
+              const qualityOk =
+                strictOk &&
+                mergedResolved >= autoCaptureMin &&
+                strictValidationTicksRef.current >= STABLE_FULL_TICKS;
               if (!qualityOk) {
                 return;
               }
@@ -1556,7 +1639,7 @@ export default function CalificarPage() {
               try {
                 const videoCap = videoRef.current;
                 if (!videoCap || videoCap.readyState < 2) return;
-                const fullCanvas = captureVideoFullFrame(videoCap);
+                const fullCanvas = captureVideoFullFrame(videoCap, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
                 if (!fullCanvas) return;
                 const result = await finalizeCapturedSheetRef.current(fullCanvas);
                 if (result.success) {
@@ -1600,7 +1683,6 @@ export default function CalificarPage() {
       startingCameraRef.current = false;
     }
   }, [
-    attachStreamToVideo,
     cameraOpen,
     exam,
     examId,
@@ -1617,6 +1699,14 @@ export default function CalificarPage() {
   ]);
 
   startLiveCameraRef.current = startLiveCamera;
+
+  const openMobileCapture = useCallback(() => {
+    flushSync(() => {
+      setPhase('capturar');
+    });
+    phaseRef.current = 'capturar';
+    void startLiveCamera({ skipPhaseGuard: true });
+  }, [startLiveCamera]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -1853,7 +1943,7 @@ export default function CalificarPage() {
     setScanBusy(true);
     await yieldForSpinnerPaint();
     try {
-      const fullCanvas = captureVideoFullFrame(video);
+      const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         toast.error('No se pudo capturar. Intenta de nuevo.');
         return;
@@ -2243,10 +2333,7 @@ export default function CalificarPage() {
                     type="button"
                     className="w-full bg-orange-600 hover:bg-orange-700"
                     disabled={scanBusy}
-                    onClick={() => {
-                      setPhase('capturar');
-                      void startLiveCamera();
-                    }}
+                    onClick={openMobileCapture}
                   >
                     Tomar foto
                   </Button>
@@ -2261,7 +2348,11 @@ export default function CalificarPage() {
       {useLiveCameraUi && phase === 'capturar' && exam && (
         <div
           ref={mobileCameraShellRef}
-          className="fixed inset-0 z-[100] flex flex-col bg-black text-white"
+          className={cn(
+            'fixed inset-0 z-[100] flex h-[100dvh] max-h-[100dvh] flex-col bg-black text-white',
+            cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
+            cameraFullscreenMode === 'pseudo' && '!bg-black'
+          )}
           style={{
             paddingTop: 'env(safe-area-inset-top)',
             paddingBottom: 'env(safe-area-inset-bottom)',
@@ -2300,7 +2391,7 @@ export default function CalificarPage() {
             onChange={handleGalleryFile}
           />
 
-          <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 bg-black">
+          <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
             {!cameraOpen ? (
               <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
                 <div className="flex items-center gap-2 text-sm text-orange-100">
@@ -2311,14 +2402,14 @@ export default function CalificarPage() {
                   type="button"
                   variant="secondary"
                   className="w-full max-w-xs"
-                  onClick={() => void startLiveCamera()}
+                  onClick={() => void startLiveCamera({ skipPhaseGuard: true })}
                 >
                   Reintentar cámara
                 </Button>
               </div>
             ) : (
               <>
-                <div className="relative h-full w-full">
+                <div className="relative h-full min-h-0 w-full">
                   {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                   <video
                     ref={videoRef}
@@ -2326,6 +2417,13 @@ export default function CalificarPage() {
                     playsInline
                     muted
                     className="absolute inset-0 h-full w-full bg-black object-contain object-center"
+                  />
+                  <CalifacilLiveScanOverlay
+                    geometry={liveScanGeometry}
+                    picks={liveScanPicks}
+                    lockedRows={liveScanLockedRows}
+                    ambiguousRows={liveScanAmbiguousRows}
+                    rowCount={currentChunk.length}
                   />
                   <div className="pointer-events-none absolute inset-0">
                     <div className="absolute inset-[3%] rounded-sm border-2 border-white/35" />
@@ -2356,12 +2454,15 @@ export default function CalificarPage() {
             )}
             {cameraOpen ? (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
                 style={{
                   background:
                     'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
                 }}
               >
+                <p className="mb-1 text-center text-sm font-semibold tabular-nums text-orange-200">
+                  {liveResolvedCount} / {currentChunk.length} respuestas
+                </p>
                 <p className="text-center text-xs leading-snug text-orange-50">{liveStatus}</p>
               </div>
             ) : null}

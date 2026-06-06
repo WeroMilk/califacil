@@ -1200,6 +1200,82 @@ function detectCalifacilQuadFromDarkInk(
   return quad;
 }
 
+/** Centroid de tinta oscura en una región (cuadro negro de esquina impreso). */
+function findDarkPatchCentroid(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number,
+  regionX: number,
+  regionY: number,
+  regionW: number,
+  regionH: number
+): Point | null {
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  const x0 = Math.max(0, regionX);
+  const y0 = Math.max(0, regionY);
+  const x1 = Math.min(width, regionX + regionW);
+  const y1 = Math.min(height, regionY + regionH);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * width + x) * 4;
+      const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+      if (lum < 95) {
+        sumX += x;
+        sumY += y;
+        count++;
+      }
+    }
+  }
+  const minPixels = Math.max(6, Math.round(regionW * regionH * 0.015));
+  if (count < minPixels) return null;
+  return { x: sumX / count, y: sumY / count };
+}
+
+/**
+ * Localiza los cuatro cuadros negros de esquina (`.sheet-align-corner`) y devuelve el cuadrilátero
+ * [TL, TR, BR, BL] para homografía — más fiable que heurísticas de papel/tinta en móvil.
+ */
+function detectCalifacilQuadFromCornerMarkers(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 80 || height < 80) return null;
+
+  const id = ctx.getImageData(0, 0, width, height);
+  const d = id.data;
+  const regionW = Math.max(10, Math.round(width * 0.14));
+  const regionH = Math.max(10, Math.round(height * 0.14));
+
+  const tl = findDarkPatchCentroid(d, width, height, 0, 0, regionW, regionH);
+  const tr = findDarkPatchCentroid(d, width, height, width - regionW, 0, regionW, regionH);
+  const br = findDarkPatchCentroid(d, width, height, width - regionW, height - regionH, regionW, regionH);
+  const bl = findDarkPatchCentroid(d, width, height, 0, height - regionH, regionW, regionH);
+  if (!tl || !tr || !br || !bl) return null;
+
+  const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
+  const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
+  const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+  const area =
+    Math.abs(
+      tl.x * tr.y +
+        tr.x * br.y +
+        br.x * bl.y +
+        bl.x * tl.y -
+        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+    ) * 0.5;
+  const avgW = (topW + bottomW) * 0.5;
+  const avgH = (leftH + rightH) * 0.5;
+  if (area < width * height * 0.12) return null;
+  if (avgW < width * 0.35 || avgH < height * 0.35) return null;
+  return quad;
+}
+
 function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
@@ -1293,6 +1369,11 @@ function warpPerspectiveToRect(
 }
 
 function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const cornerQuad = detectCalifacilQuadFromCornerMarkers(canvas);
+  if (cornerQuad) {
+    const warped = warpPerspectiveToRect(canvas, cornerQuad);
+    if (warped) return warped;
+  }
   const quad = detectCalifacilQuad(canvas);
   if (!quad) return canvas;
   return warpPerspectiveToRect(canvas, quad) ?? canvas;
