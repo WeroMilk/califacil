@@ -29,7 +29,8 @@ async function parseStudentImportFromPdfViaApi(file: File): Promise<StudentImpor
     message?: string;
   };
   if (!res.ok) {
-    throw new Error(payload.error || payload.message || 'No se pudo leer el PDF');
+    const detail = [payload.error, payload.message].filter(Boolean).join(': ');
+    throw new Error(detail || 'No se pudo leer el PDF');
   }
   return payload;
 }
