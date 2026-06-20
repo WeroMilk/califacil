@@ -211,9 +211,10 @@ export async function grantExamRetake(
         hint: 'Ejecuta la migración 20260606110000_exam_attempt_events_retake.sql en el SQL Editor.',
       };
     }
+    const rpcError = mapRpcGrantError((data as { error?: string } | null)?.error);
     return {
       ok: false,
-      error: error?.message || mapRpcGrantError((data as { error?: string } | null)?.error).error,
+      error: error?.message || (rpcError.ok ? 'No se pudo otorgar la segunda oportunidad.' : rpcError.error),
       hint: 'Configura SUPABASE_SERVICE_ROLE_KEY en el servidor para habilitar el respaldo de segunda oportunidad.',
     };
   }
