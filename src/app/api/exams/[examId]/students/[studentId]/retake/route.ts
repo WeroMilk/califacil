@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
+import { grantExamRetake } from '@/lib/examRetake';
 
 export async function GET(
   request: NextRequest,
@@ -64,21 +65,12 @@ export async function POST(
       return NextResponse.json({ error: 'Examen no encontrado' }, { status: 404 });
     }
 
-    const { data, error } = await supabase.rpc('teacher_grant_exam_retake', {
-      p_exam_id: examId,
-      p_student_id: studentId,
-    });
-
-    if (error) {
-      const hint = /function|does not exist/i.test(error.message)
-        ? 'Ejecuta la migración 20260606110000_exam_attempt_events_retake.sql en Supabase.'
-        : undefined;
-      return NextResponse.json({ error: error.message, hint }, { status: 502 });
-    }
-
-    const payload = data as { ok?: boolean; error?: string };
-    if (!payload?.ok) {
-      return NextResponse.json({ error: payload?.error ?? 'failed' }, { status: 400 });
+    const result = await grantExamRetake(supabase, examId, studentId);
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: result.error, hint: result.hint },
+        { status: result.error.includes('No se encontró') ? 404 : 400 }
+      );
     }
 
     return NextResponse.json({ success: true });

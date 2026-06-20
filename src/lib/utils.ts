@@ -37,8 +37,27 @@ export function calculatePercentage(score: number, maxScore: number): number {
   return Math.round((score / maxScore) * 100);
 }
 
+export const EXAM_POINTS_CAP = 10;
+
 export function examMaxScore(questions: { points?: number | null }[]): number {
   return questions.reduce((s, q) => s + (q.points ?? 1), 0);
+}
+
+/** Reparte 10 puntos enteros entre N preguntas. */
+export function distributeExamPoints(questionCount: number): number[] {
+  if (questionCount <= 0) return [];
+  const base = Math.floor(EXAM_POINTS_CAP / questionCount);
+  const remainder = EXAM_POINTS_CAP % questionCount;
+  return Array.from({ length: questionCount }, (_, i) => base + (i < remainder ? 1 : 0));
+}
+
+export function shuffleArray<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 export function questionPoints(question: { points?: number | null }): number {

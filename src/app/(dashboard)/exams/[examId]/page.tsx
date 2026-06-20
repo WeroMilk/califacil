@@ -33,6 +33,7 @@ import {
   CopyPlus,
   Check,
   X,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -42,6 +43,7 @@ import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { supabase } from '@/lib/supabase';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { examMaxScore } from '@/lib/utils';
+import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
 
 type QuestionDraft = {
   text: string;
@@ -70,7 +72,7 @@ function buildQuestionPayload(draft: QuestionDraft) {
   if (!Number.isFinite(pointsNum) || pointsNum <= 0) {
     return { ok: false as const, error: 'El valor de la pregunta debe ser mayor a 0' };
   }
-  const points = Math.round(pointsNum * 100) / 100;
+  const points = Math.max(1, Math.round(pointsNum));
   if (draft.type === 'open_answer') {
     return {
       ok: true as const,
@@ -652,6 +654,12 @@ export default function ExamDetailPage() {
             Preguntas ({exam.questions.length})
           </TabsTrigger>
           {(exam.status === 'published' || exam.status === 'closed') && (
+            <TabsTrigger value="voided">
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Exámenes anulados
+            </TabsTrigger>
+          )}
+          {(exam.status === 'published' || exam.status === 'closed') && (
             <TabsTrigger value="qr">
               <QrCode className="mr-2 h-4 w-4" />
               Código QR
@@ -723,8 +731,8 @@ export default function ExamDetailPage() {
                   <Label>Valor (puntos)</Label>
                   <Input
                     type="number"
-                    min="0.01"
-                    step="0.01"
+                    min="1"
+                    step="1"
                     value={newQuestion.points}
                     onChange={(e) => setNewQuestion((prev) => ({ ...prev, points: e.target.value }))}
                   />
@@ -803,6 +811,12 @@ export default function ExamDetailPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {(exam.status === 'published' || exam.status === 'closed') && (
+          <TabsContent value="voided">
+            <VoidedAttemptsPanel examId={examId} />
+          </TabsContent>
+        )}
 
         {(exam.status === 'published' || exam.status === 'closed') && (
           <TabsContent value="qr">
@@ -971,8 +985,8 @@ function QuestionCard({
                     <Label className="text-xs text-gray-600">Valor (puntos)</Label>
                     <Input
                       type="number"
-                      min="0.01"
-                      step="0.01"
+                      min="1"
+                      step="1"
                       value={draft.points}
                       onChange={(e) => setDraft((prev) => ({ ...prev, points: e.target.value }))}
                       className="h-9"

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useExam, useExamResults } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
-import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -16,14 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { 
   ArrowLeft,
   FileSpreadsheet,
@@ -33,10 +24,10 @@ import {
   TrendingUp,
   CheckCircle,
   XCircle,
-  Clock,
   AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
 import { 
   BarChart, 
   Bar, 
@@ -60,11 +51,6 @@ import {
   isMultipleChoiceAnswerCorrect,
   questionPoints,
 } from '@/lib/utils';
-import {
-  examAttemptEventLabels,
-  formatAttemptDuration,
-  voidReasonLabel,
-} from '@/lib/examForfeitMessages';
 
 interface StudentResult {
   studentId: string;
@@ -129,22 +115,6 @@ function sanitizeExportFilenameBase(title: string): string {
 }
 
 type AssignedGroup = { id: string; name: string };
-
-type VoidedAttemptRow = {
-  student_id: string;
-  student_name: string;
-  group_id: string | null;
-  void_reason: string | null;
-  started_at: string;
-  closed_at: string;
-  duration_seconds: number;
-};
-
-type AttemptTimelineEvent = {
-  event_type: string;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-};
 
 function buildQuestionAnalysisForAnswers(
   questions: Question[],
@@ -238,17 +208,6 @@ export default function ExamResultsPage() {
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<Record<string, boolean>>({});
   const [assignedGroups, setAssignedGroups] = useState<AssignedGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
-  const [voidedAttempts, setVoidedAttempts] = useState<VoidedAttemptRow[]>([]);
-  const [loadingVoided, setLoadingVoided] = useState(false);
-  const [retakeModalOpen, setRetakeModalOpen] = useState(false);
-  const [retakeTarget, setRetakeTarget] = useState<VoidedAttemptRow | null>(null);
-  const [retakeTimeline, setRetakeTimeline] = useState<{
-    duration_seconds: number;
-    void_reason: string | null;
-    last_10_seconds: AttemptTimelineEvent[];
-  } | null>(null);
-  const [loadingTimeline, setLoadingTimeline] = useState(false);
-  const [grantingRetake, setGrantingRetake] = useState(false);
 
   useEffect(() => {
     if (!examId) return;
@@ -275,29 +234,6 @@ export default function ExamResultsPage() {
       cancelled = true;
     };
   }, [examId, exam?.group_id]);
-
-  useEffect(() => {
-    if (!examId) return;
-    let cancelled = false;
-    (async () => {
-      setLoadingVoided(true);
-      try {
-        const res = await fetch(`/api/exams/${examId}/voided-attempts`, {
-          headers: await dashboardAuthJsonHeaders(),
-        });
-        const payload = (await res.json().catch(() => ({}))) as { attempts?: VoidedAttemptRow[] };
-        if (cancelled) return;
-        if (res.ok) {
-          setVoidedAttempts(payload.attempts ?? []);
-        }
-      } finally {
-        if (!cancelled) setLoadingVoided(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [examId]);
 
   useEffect(() => {
     if (!exam) return;
@@ -394,58 +330,6 @@ export default function ExamResultsPage() {
     () => buildGradeDistribution(filteredStudentResults),
     [filteredStudentResults]
   );
-
-  const openRetakeModal = async (attempt: VoidedAttemptRow) => {
-    setRetakeTarget(attempt);
-    setRetakeTimeline(null);
-    setRetakeModalOpen(true);
-    setLoadingTimeline(true);
-    try {
-      const res = await fetch(`/api/exams/${examId}/students/${attempt.student_id}/retake`, {
-        headers: await dashboardAuthJsonHeaders(),
-      });
-      const payload = (await res.json().catch(() => ({}))) as {
-        duration_seconds?: number;
-        void_reason?: string | null;
-        last_10_seconds?: AttemptTimelineEvent[];
-      };
-      if (res.ok) {
-        setRetakeTimeline({
-          duration_seconds: payload.duration_seconds ?? attempt.duration_seconds,
-          void_reason: payload.void_reason ?? attempt.void_reason,
-          last_10_seconds: payload.last_10_seconds ?? [],
-        });
-      }
-    } finally {
-      setLoadingTimeline(false);
-    }
-  };
-
-  const handleGrantRetake = async () => {
-    if (!retakeTarget) return;
-    setGrantingRetake(true);
-    try {
-      const res = await fetch(`/api/exams/${examId}/students/${retakeTarget.student_id}/retake`, {
-        method: 'POST',
-        headers: await dashboardAuthJsonHeaders(),
-      });
-      const payload = (await res.json().catch(() => ({}))) as { error?: string; hint?: string };
-      if (!res.ok) {
-        toast.error(payload.error || 'No se pudo otorgar la segunda oportunidad', {
-          description: payload.hint,
-        });
-        return;
-      }
-      toast.success('Segunda oportunidad otorgada');
-      setRetakeModalOpen(false);
-      setRetakeTarget(null);
-      setVoidedAttempts((prev) => prev.filter((a) => a.student_id !== retakeTarget.student_id));
-    } catch {
-      toast.error('Error al otorgar la segunda oportunidad');
-    } finally {
-      setGrantingRetake(false);
-    }
-  };
 
   const exportToExcel = () => {
     if (!exam) return;
@@ -847,7 +731,7 @@ export default function ExamResultsPage() {
           </TabsTrigger>
           <TabsTrigger value="voided" className="gap-1 px-1.5 text-[11px] leading-tight sm:px-3 sm:text-sm">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 sm:mr-2 sm:h-4 sm:w-4" />
-            <span className="truncate">Anulados</span>
+            <span className="truncate">Exámenes anulados</span>
           </TabsTrigger>
         </TabsList>
 
@@ -1176,113 +1060,9 @@ export default function ExamResultsPage() {
         </TabsContent>
 
         <TabsContent value="voided">
-          <Card>
-            <CardHeader>
-              <CardTitle>Intentos anulados</CardTitle>
-              <CardDescription>
-                Alumnos cuyo intento en línea fue anulado. Puedes revisar qué ocurrió y otorgar una segunda oportunidad.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingVoided ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-orange-600" />
-                </div>
-              ) : voidedAttempts.length === 0 ? (
-                <p className="py-6 text-center text-sm text-gray-500">No hay intentos anulados registrados.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="py-2 text-left font-semibold">Estudiante</th>
-                        <th className="py-2 text-left font-semibold">Duración</th>
-                        <th className="py-2 text-left font-semibold">Motivo</th>
-                        <th className="py-2 text-right font-semibold">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {voidedAttempts.map((attempt) => (
-                        <tr key={attempt.student_id} className="border-b">
-                          <td className="py-3 font-medium">{attempt.student_name}</td>
-                          <td className="py-3 text-gray-600">
-                            <span className="inline-flex items-center gap-1">
-                              <Clock className="h-4 w-4" />
-                              {formatAttemptDuration(attempt.duration_seconds)}
-                            </span>
-                          </td>
-                          <td className="py-3 text-gray-600">{voidReasonLabel(attempt.void_reason)}</td>
-                          <td className="py-3 text-right">
-                            <Button size="sm" onClick={() => void openRetakeModal(attempt)}>
-                              Revisar y otorgar oportunidad
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <VoidedAttemptsPanel examId={examId} />
         </TabsContent>
       </Tabs>
-
-      <Dialog open={retakeModalOpen} onOpenChange={setRetakeModalOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Revisión antes de segunda oportunidad</DialogTitle>
-            <DialogDescription>
-              {retakeTarget?.student_name
-                ? `Revisa el intento anulado de ${retakeTarget.student_name} antes de permitir un nuevo intento.`
-                : 'Revisa el intento anulado antes de permitir un nuevo intento.'}
-            </DialogDescription>
-          </DialogHeader>
-          {loadingTimeline ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-orange-600" />
-            </div>
-          ) : retakeTimeline ? (
-            <div className="space-y-4 text-sm">
-              <div className="rounded-lg border bg-gray-50 p-3">
-                <p className="font-medium text-gray-900">Tiempo en el examen</p>
-                <p className="mt-1 text-gray-700">{formatAttemptDuration(retakeTimeline.duration_seconds)}</p>
-              </div>
-              <div className="rounded-lg border bg-amber-50 p-3">
-                <p className="font-medium text-amber-900">Por qué se cerró el examen</p>
-                <p className="mt-1 text-amber-800">{voidReasonLabel(retakeTimeline.void_reason)}</p>
-              </div>
-              <div>
-                <p className="mb-2 font-medium text-gray-900">Últimos 10 segundos antes del cierre</p>
-                {retakeTimeline.last_10_seconds.length === 0 ? (
-                  <p className="text-gray-500">No hay eventos registrados en ese intervalo.</p>
-                ) : (
-                  <ul className="max-h-40 space-y-2 overflow-y-auto rounded-lg border p-3">
-                    {retakeTimeline.last_10_seconds.map((ev, idx) => (
-                      <li key={idx} className="text-gray-700">
-                        <span className="font-mono text-xs text-gray-500">
-                          {new Date(ev.created_at).toLocaleTimeString('es-ES')}
-                        </span>
-                        {' — '}
-                        {examAttemptEventLabels[ev.event_type] ?? ev.event_type}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRetakeModalOpen(false)} disabled={grantingRetake}>
-              Cancelar
-            </Button>
-            <Button onClick={() => void handleGrantRetake()} disabled={grantingRetake || loadingTimeline}>
-              {grantingRetake ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Otorgar segunda oportunidad
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

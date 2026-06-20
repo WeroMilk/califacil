@@ -130,8 +130,7 @@ export default function LandingPage() {
             className="font-medium text-orange-600 hover:text-orange-700 hover:underline"
           >
             Silvas Dev
-          </Link>{' '}
-          para la Secretaría de Educación y Cultura en Sonora
+          </Link>.
         </p>
         <p className="mt-0.5 flex items-center justify-center gap-1 text-[8px] text-gray-500 sm:mt-1 sm:text-xs">
           <span>Todos los derechos reservados 2026.</span>

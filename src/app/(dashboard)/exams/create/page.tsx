@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { EXAM_POINTS_CAP, distributeExamPoints, examMaxScore } from '@/lib/utils';
 
 const steps = [
   { id: 1, title: 'Información General', icon: FileText },
@@ -95,7 +96,13 @@ export default function CreateExamPage() {
       }
 
       const data = await response.json();
-      setGeneratedQuestions(data.questions);
+      const pointValues = distributeExamPoints(data.questions.length);
+      setGeneratedQuestions(
+        data.questions.map((q: GeneratedQuestion, index: number) => ({
+          ...q,
+          points: pointValues[index],
+        }))
+      );
       setCurrentStep(3);
       toast.success(`${data.questions.length} preguntas generadas`);
     } catch (error: any) {
@@ -118,6 +125,21 @@ export default function CreateExamPage() {
       toast.error('Debes generar al menos una pregunta');
       return;
     }
+
+    for (const q of generatedQuestions) {
+      const points = q.points ?? 0;
+      if (!Number.isFinite(points) || points <= 0) {
+        toast.error('Cada pregunta debe tener un valor mayor a 0');
+        return;
+      }
+    }
+
+    const totalPoints = examMaxScore(generatedQuestions);
+    if (totalPoints > EXAM_POINTS_CAP) {
+      toast.error(`La suma de puntos (${totalPoints}) no puede superar ${EXAM_POINTS_CAP}`);
+      return;
+    }
+
     if (saveExamLockRef.current) return;
     saveExamLockRef.current = true;
 
@@ -160,7 +182,7 @@ export default function CreateExamPage() {
         options: q.options || null,
         correct_answer: q.correct_answer || null,
         illustration: q.illustration || null,
-        points: 1,
+        points: Math.round(q.points ?? 1),
       }));
 
       const response = await fetch(`/api/exams/${exam.id}/questions`, {
@@ -212,6 +234,16 @@ export default function CreateExamPage() {
 
   const removeQuestion = (index: number) => {
     setGeneratedQuestions(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const totalPoints = examMaxScore(generatedQuestions);
+  const pointsOverCap = totalPoints > EXAM_POINTS_CAP;
+
+  const redistributePointsEvenly = () => {
+    const values = distributeExamPoints(generatedQuestions.length);
+    setGeneratedQuestions((prev) =>
+      prev.map((q, index) => ({ ...q, points: values[index] }))
+    );
   };
 
   return (
@@ -436,17 +468,28 @@ export default function CreateExamPage() {
           {currentStep === 3 && (
             <div className="flex min-h-0 flex-col gap-4">
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-                <h3 className="text-lg font-semibold">
-                  Preguntas Generadas ({generatedQuestions.length})
-                </h3>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => setCurrentStep(2)}
-                >
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Regenerar
-                </Button>
+                <div>
+                  <h3 className="text-lg font-semibold">
+                    Preguntas Generadas ({generatedQuestions.length})
+                  </h3>
+                  <p className={`text-sm ${pointsOverCap ? 'text-red-600' : 'text-gray-600'}`}>
+                    Total: {totalPoints} / {EXAM_POINTS_CAP} puntos
+                    {pointsOverCap ? ' — reduce el valor de alguna pregunta' : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={redistributePointsEvenly}>
+                    Repartir {EXAM_POINTS_CAP} pts
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => setCurrentStep(2)}
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Regenerar
+                  </Button>
+                </div>
               </div>
 
               <div className="min-h-[12rem] max-h-[min(70vh,32rem)] space-y-4 overflow-y-auto overscroll-y-contain scroll-pt-2 py-2 pl-0.5 pr-2 [scrollbar-gutter:stable]">
@@ -498,6 +541,31 @@ export default function CreateExamPage() {
                               Ilustración: {question.illustration}
                             </p>
                           )}
+
+                          <div className="mt-3 flex items-center gap-2">
+                            <Label htmlFor={`question-points-${index}`} className="text-xs text-gray-600">
+                              Valor (puntos)
+                            </Label>
+                            <Input
+                              id={`question-points-${index}`}
+                              type="number"
+                              min="1"
+                              step="1"
+                              className="h-8 w-24"
+                              value={question.points ?? ''}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (!raw.trim()) {
+                                  updateQuestion(index, { points: undefined });
+                                  return;
+                                }
+                                const parsed = Math.round(Number(raw));
+                                if (Number.isFinite(parsed) && parsed > 0) {
+                                  updateQuestion(index, { points: parsed });
+                                }
+                              }}
+                            />
+                          </div>
                         </div>
                         <Button
                           variant="ghost"
@@ -521,7 +589,7 @@ export default function CreateExamPage() {
                 <Button 
                   type="button"
                   onClick={() => void handleSaveExam()}
-                  disabled={loading || generatedQuestions.length === 0}
+                  disabled={loading || generatedQuestions.length === 0 || pointsOverCap}
                   className="bg-orange-600 hover:bg-orange-700"
                 >
                   {loading ? (

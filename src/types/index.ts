@@ -16,6 +16,7 @@ export interface Student {
   id: string;
   group_id: string;
   name: string;
+  control_number?: string | null;
   created_at: string;
 }
 

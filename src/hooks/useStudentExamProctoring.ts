@@ -42,7 +42,7 @@ export function useStudentExamProctoring(options: {
   active: boolean;
   /** Modo de pantalla completa activo; 'none' = sin exigir permanencia en FS. */
   fullscreenMode: ExamFullscreenMode;
-  onForfeit: (reason: string) => void;
+  onForfeit: (reason: string, voidPersisted: boolean) => void;
   onVisibilityHidden?: () => void;
   onVisibilityVisible?: () => void;
   onLogEvent?: (eventType: string, metadata?: Record<string, unknown>) => void;
@@ -81,13 +81,28 @@ export function useStudentExamProctoring(options: {
       clearFullscreenTimer();
 
       const { examId, studentId, clientSession } = optsRef.current;
-      if (studentId && clientSession) {
-        await rpcVoidStudentExamAttempt(examId, studentId, clientSession, reason);
+      const session =
+        clientSession ?? (studentId ? readExamClientSession(examId, studentId) : null);
+      let voidPersisted = false;
+      if (studentId && session) {
+        let ok = await rpcVoidStudentExamAttempt(examId, studentId, session, reason);
+        if (!ok) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          ok = await rpcVoidStudentExamAttempt(examId, studentId, session, reason);
+        }
+        voidPersisted = ok;
+        if (!ok) {
+          console.error('void_student_exam_attempt: no se pudo anular el intento en Supabase', {
+            examId,
+            studentId,
+            reason,
+          });
+        }
       }
 
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
-      optsRef.current.onForfeit(reason);
+      optsRef.current.onForfeit(reason, voidPersisted);
     },
     [clearHiddenTimer, clearFullscreenTimer]
   );

@@ -8,27 +8,38 @@ const anonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
   '00000000-0000-0000-0000-000000000000';
 
-/**
- * Cliente Supabase que actúa como el usuario del Bearer token (RLS del maestro).
- */
-export function createSupabaseRouteClient(request: NextRequest) {
-  const auth = request.headers.get('Authorization')?.trim();
+/** Cliente Supabase autenticado con JWT del maestro (RLS + RPC con auth.uid()). */
+export function createSupabaseRouteClientForJwt(jwt: string) {
   return createClient(url, anonKey, {
-    global: {
-      headers: auth ? { Authorization: auth } : {},
-    },
     auth: {
       persistSession: false,
       autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+      },
     },
   });
+}
+
+export function createSupabaseRouteClient(request: NextRequest) {
+  const auth = request.headers.get('Authorization')?.trim();
+  const jwt = auth?.startsWith('Bearer ') ? auth.slice('Bearer '.length) : '';
+  if (!jwt) {
+    return createClient(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+  }
+  return createSupabaseRouteClientForJwt(jwt);
 }
 
 /** Sesión válida; la propiedad del recurso (p. ej. exam.teacher_id) define permisos. */
 export async function requireSessionUser(request: NextRequest): Promise<
   | {
       user: { id: string; email: string | undefined };
-      supabase: ReturnType<typeof createSupabaseRouteClient>;
+      supabase: ReturnType<typeof createSupabaseRouteClientForJwt>;
     }
   | { response: NextResponse }
 > {
@@ -37,11 +48,12 @@ export async function requireSessionUser(request: NextRequest): Promise<
     return { response: NextResponse.json({ error: 'No autorizado' }, { status: 401 }) };
   }
 
-  const supabase = createSupabaseRouteClient(request);
+  const jwt = auth.slice('Bearer '.length);
+  const supabase = createSupabaseRouteClientForJwt(jwt);
   const {
     data: { user },
     error,
-  } = await supabase.auth.getUser();
+  } = await supabase.auth.getUser(jwt);
 
   if (error || !user) {
     return { response: NextResponse.json({ error: 'Sesión inválida' }, { status: 401 }) };
@@ -55,9 +67,16 @@ export async function dashboardAuthJsonHeaders(): Promise<HeadersInit> {
   const {
     data: { session },
   } = await supabaseBrowser.auth.getSession();
+
+  let accessToken = session?.access_token;
+  if (!accessToken) {
+    const refreshed = await supabaseBrowser.auth.refreshSession();
+    accessToken = refreshed.data.session?.access_token;
+  }
+
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (session?.access_token) {
-    headers.Authorization = `Bearer ${session.access_token}`;
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
   }
   return headers;
 }

@@ -28,6 +28,7 @@ import {
   getGradeColor,
   isMultipleChoiceAnswerCorrect,
   questionPoints,
+  shuffleArray,
 } from '@/lib/utils';
 import { examForfeitMessages } from '@/lib/examForfeitMessages';
 import {
@@ -161,7 +162,7 @@ export default function StudentExamPage() {
     clientSession: clientSessionToken,
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
     fullscreenMode,
-    onForfeit: (reason) => {
+    onForfeit: (reason, voidPersisted) => {
       void exitExamFullscreenSafe();
       setFullscreenMode('none');
       setContentHidden(false);
@@ -169,7 +170,14 @@ export default function StudentExamPage() {
       clearExamClientSession(examId, selectedStudentId);
       setClientSessionToken(null);
       setForfeitReason(reason);
-      toast.error('Examen anulado', { duration: 6000 });
+      if (voidPersisted) {
+        toast.error('Examen anulado', { duration: 6000 });
+      } else {
+        toast.error('Examen anulado en este dispositivo', {
+          description: 'No se pudo registrar en el servidor. Avisa a tu maestro.',
+          duration: 8000,
+        });
+      }
     },
     onVisibilityHidden: () => setContentHidden(true),
     onVisibilityVisible: () => setContentHidden(false),
@@ -474,6 +482,7 @@ export default function StudentExamPage() {
       previewStreamRef.current = stream;
       bindStream(stream);
 
+      setQuestions((prev) => shuffleArray(prev));
       setHasStarted(true);
       void rpcLogExamAttemptEvent(examId, selectedStudentId, token, 'exam_started');
     } catch {

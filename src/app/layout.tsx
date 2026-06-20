@@ -40,6 +40,7 @@ export default function RootLayout({
             </div>
             <Toaster
               position="top-right"
+              className="z-[200]"
               offset={{ top: '0.5rem', right: '0.75rem' }}
               mobileOffset={{
                 top: 'max(0.5rem, env(safe-area-inset-top, 0px))',

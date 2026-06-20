@@ -30,7 +30,7 @@ import {
   Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { parseStudentNamesFromImportFile } from '@/lib/studentImport';
+import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 export default function GroupsPage() {
@@ -214,6 +214,8 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     null
   );
   const [isDeletingStudent, setIsDeletingStudent] = useState(false);
+  const [importPreview, setImportPreview] = useState<StudentImportResult | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
 
   const handleAddStudent = async () => {
     if (!newStudentName.trim()) {
@@ -242,33 +244,76 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     if (!file) return;
 
     try {
-      const names = await parseStudentNamesFromImportFile(file);
-      if (names.length === 0) {
+      const parsed = await parseStudentImportFile(file);
+      if (parsed.students.length === 0) {
         toast.error(
-          'No se encontraron nombres. Descarga la plantilla, completa APELLIDO (S) y NOMBRE (S), y súbela de nuevo.'
+          'No se encontraron alumnos. Usa la plantilla CSV/Excel o un PDF de lista de asistencia ITSON.'
         );
         return;
       }
-      const { added, skipped } = await addStudentsBatch(names);
-      if (added.length === 0 && skipped > 0) {
-        toast.error('No se importó ningún alumno: todos los nombres ya estaban en el grupo o repetidos en el archivo.');
-      } else if (added.length > 0) {
-        toast.success(
-          skipped > 0
-            ? `${added.length} estudiantes importados (${skipped} omitidos por duplicado)`
-            : `${added.length} estudiantes importados`
-        );
-      }
+      setImportPreview(parsed);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '';
       toast.error('Error al procesar el archivo', {
-        description: toSpanishAuthMessage(msg) || 'Revisa que sea la plantilla de CaliFácil y vuelve a intentarlo.',
+        description: toSpanishAuthMessage(msg) || 'Revisa el archivo e inténtalo de nuevo.',
       });
     }
   };
 
+  const handleConfirmImport = async () => {
+    if (!importPreview) return;
+    setIsImporting(true);
+    try {
+      const { added, skipped, error: importError, warning } = await addStudentsBatch(
+        importPreview.students.map((student) => ({
+          name: student.name,
+          controlNumber: student.controlNumber || null,
+        }))
+      );
+
+      if (importError) {
+        toast.error('Error al importar alumnos', {
+          description: toSpanishAuthMessage(importError),
+        });
+        return;
+      }
+
+      if (added.length === 0 && skipped > 0) {
+        toast.error('No se importó ningún alumno: todos ya estaban en el grupo o repetidos en el archivo.');
+        return;
+      }
+
+      if (added.length === 0) {
+        toast.error('No se importó ningún alumno. Revisa el archivo e inténtalo de nuevo.');
+        return;
+      }
+
+      const groupNote =
+        importPreview.groupName && importPreview.groupName !== groupName.trim().toUpperCase()
+          ? ` Grupo en PDF: ${importPreview.groupName}.`
+          : '';
+      toast.success(
+        skipped > 0
+          ? `${added.length} estudiantes importados (${skipped} omitidos por duplicado).${groupNote}`
+          : `${added.length} estudiantes importados.${groupNote}`
+      );
+      if (warning) {
+        toast.warning('Importación parcial', { description: warning });
+      }
+      setImportPreview(null);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : '';
+      toast.error('Error al importar alumnos', {
+        description: toSpanishAuthMessage(msg),
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const filteredStudents = students.filter(s => 
-    s.name.toLowerCase().includes(searchTerm.toLowerCase())
+    s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (s.control_number ?? '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const handleConfirmDeleteStudent = async () => {
@@ -324,9 +369,8 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
         {/* Plantilla + importación */}
         <div className="flex flex-col gap-2 rounded-lg border border-orange-100 bg-orange-50/50 p-3">
           <p className="text-xs text-gray-700 sm:text-sm">
-            <span className="font-medium text-orange-900">Lista de alumnos:</span> descarga la plantilla,
-            escribe cada alumno en columnas <span className="font-mono text-xs">APELLIDO (S)</span> y{' '}
-            <span className="font-mono text-xs">NOMBRE (S)</span>, y súbela aquí.
+            <span className="font-medium text-orange-900">Lista de alumnos:</span> plantilla CSV/Excel o PDF
+            de lista de asistencia ITSON (extrae grupo, número de control y nombre).
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="border-orange-200 bg-white" asChild>
@@ -338,19 +382,19 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
             <Label htmlFor="studentImportUpload" className="cursor-pointer">
               <div className="flex items-center gap-2 rounded-md border border-orange-200 bg-white px-3 py-1.5 text-sm text-orange-700 hover:bg-orange-50">
                 <Upload className="h-4 w-4" />
-                Subir lista completada
+                Subir lista completada (CSV/Excel/PDF)
               </div>
             </Label>
             <input
               id="studentImportUpload"
               type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={handleFileUpload}
             />
           </div>
           <p className="text-[11px] text-gray-500">
-            Aceptamos la plantilla en Excel (.xlsx) o CSV tras descargarla y rellenarla.
+            Aceptamos la plantilla en Excel (.xlsx), CSV o un PDF con la lista de alumnos.
           </p>
         </div>
 
@@ -387,7 +431,12 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
                       {student.name.charAt(0).toUpperCase()}
                     </span>
                   </div>
-                  <span className="truncate font-medium">{student.name}</span>
+                  <div className="min-w-0">
+                    <span className="truncate font-medium">{student.name}</span>
+                    {student.control_number ? (
+                      <p className="truncate text-xs text-gray-500">Control: {student.control_number}</p>
+                    ) : null}
+                  </div>
                 </div>
                 <Button
                   variant="ghost"
@@ -448,6 +497,85 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!importPreview} onOpenChange={(open) => !open && !isImporting && setImportPreview(null)}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Vista previa de importación</DialogTitle>
+            <DialogDescription>
+              {importPreview?.source === 'itson_pdf'
+                ? 'Lista de asistencia ITSON detectada.'
+                : 'Revisa los alumnos antes de importarlos al grupo.'}
+            </DialogDescription>
+          </DialogHeader>
+          {importPreview ? (
+            <div className="space-y-3 overflow-hidden">
+              {importPreview.groupName ? (
+                <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm">
+                  <span className="font-medium text-orange-900">Grupo en PDF:</span>{' '}
+                  <span className="text-orange-800">{importPreview.groupName}</span>
+                  {importPreview.groupName !== groupName.trim().toUpperCase() ? (
+                    <span className="text-orange-700">
+                      {' '}
+                      (el grupo actual se llama «{groupName}»)
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+              <p className="text-sm text-gray-600">
+                {importPreview.students.length} alumno(s) listos para importar
+              </p>
+              <div className="max-h-[50vh] overflow-auto rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr className="border-b text-left">
+                      <th className="px-3 py-2 font-semibold">No.</th>
+                      <th className="px-3 py-2 font-semibold">Control</th>
+                      <th className="px-3 py-2 font-semibold">Nombre del alumno</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.students.map((student) => (
+                      <tr key={`${student.rowNumber}-${student.controlNumber}-${student.name}`} className="border-b">
+                        <td className="px-3 py-2 text-gray-500">{student.rowNumber}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-gray-700">
+                          {student.controlNumber || '—'}
+                        </td>
+                        <td className="px-3 py-2 font-medium">{student.name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setImportPreview(null)}
+              disabled={isImporting}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              className="bg-orange-600 hover:bg-orange-700"
+              disabled={isImporting || !importPreview?.students.length}
+              onClick={() => void handleConfirmImport()}
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Importando...
+                </>
+              ) : (
+                'Importar alumnos'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

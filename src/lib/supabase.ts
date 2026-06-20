@@ -59,18 +59,21 @@ export type Database = {
           id: string;
           group_id: string;
           name: string;
+          control_number: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           group_id: string;
           name: string;
+          control_number?: string | null;
           created_at?: string;
         };
         Update: {
           id?: string;
           group_id?: string;
           name?: string;
+          control_number?: string | null;
           created_at?: string;
         };
       };

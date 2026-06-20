@@ -138,17 +138,19 @@ export function useStudents(groupId: string | undefined) {
   };
 
   const addStudentsBatch = async (
-    names: string[]
-  ): Promise<{ added: Student[]; skipped: number }> => {
-    if (!groupId) return { added: [], skipped: 0 };
+    entries: Array<{ name: string; controlNumber?: string | null }>
+  ): Promise<{ added: Student[]; skipped: number; error: string | null; warning?: string }> => {
+    if (!groupId) {
+      return { added: [], skipped: 0, error: 'No hay un grupo seleccionado.' };
+    }
 
     const existingKeys = new Set(students.map((s) => normalizeAnswerText(s.name)));
     const batchKeys = new Set<string>();
-    const inserts: { group_id: string; name: string }[] = [];
+    const inserts: { group_id: string; name: string; control_number?: string | null }[] = [];
     let skipped = 0;
 
-    for (const raw of names) {
-      const trimmed = raw.trim();
+    for (const entry of entries) {
+      const trimmed = entry.name.trim();
       if (!trimmed) continue;
       const key = normalizeAnswerText(trimmed);
       if (existingKeys.has(key) || batchKeys.has(key)) {
@@ -156,24 +158,48 @@ export function useStudents(groupId: string | undefined) {
         continue;
       }
       batchKeys.add(key);
-      inserts.push({ group_id: groupId, name: trimmed });
+      const control = entry.controlNumber?.trim() || null;
+      inserts.push({
+        group_id: groupId,
+        name: trimmed,
+        ...(control ? { control_number: control } : {}),
+      });
     }
 
     if (inserts.length === 0) {
-      return { added: [], skipped };
+      return { added: [], skipped, error: null };
     }
 
     try {
       setError(null);
-      const { data, error } = await supabase.from('students').insert(inserts).select();
+      let { data, error } = await supabase.from('students').insert(inserts).select();
+
+      if (error?.message?.includes('control_number')) {
+        const fallbackInserts = inserts.map(({ group_id, name }) => ({ group_id, name }));
+        const retry = await supabase.from('students').insert(fallbackInserts).select();
+        data = retry.data;
+        error = retry.error;
+        if (!error) {
+          const added = data || [];
+          setStudents((prev) => [...prev, ...added].sort((a, b) => a.name.localeCompare(b.name)));
+          return {
+            added,
+            skipped,
+            error: null,
+            warning:
+              'Los alumnos se importaron sin número de control. Aplica la migración 20260619130000_students_control_number.sql en Supabase.',
+          };
+        }
+      }
 
       if (error) throw error;
       const added = data || [];
       setStudents((prev) => [...prev, ...added].sort((a, b) => a.name.localeCompare(b.name)));
-      return { added, skipped };
+      return { added, skipped, error: null };
     } catch (err: any) {
-      setError(err.message);
-      return { added: [], skipped };
+      const message = err?.message || 'No se pudieron importar los alumnos.';
+      setError(message);
+      return { added: [], skipped, error: message };
     }
   };
 
