@@ -15,10 +15,13 @@ export async function GET(
 
     const result = await listVoidedExamAttempts(supabase, examId, user.id);
     if (!result.ok) {
-      return NextResponse.json(
-        { error: result.error, hint: result.hint },
-        { status: result.error === 'Examen no encontrado' ? 404 : 502 }
-      );
+      const status =
+        result.error === 'Examen no encontrado'
+          ? 404
+          : result.error?.includes('Falta configurar')
+            ? 503
+            : 502;
+      return NextResponse.json({ error: result.error, hint: result.hint }, { status });
     }
 
     return NextResponse.json({ attempts: result.attempts });

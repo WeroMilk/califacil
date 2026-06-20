@@ -14,6 +14,25 @@ export type GrantExamRetakeResult =
   | { ok: true }
   | { ok: false; error: string; hint?: string };
 
+export type ListVoidedAttemptsResult =
+  | { ok: true; attempts: VoidedAttemptRow[] }
+  | { ok: false; error: string; hint?: string };
+
+/** Evita usar la anon key por error como service_role (provoca "permission denied"). */
+function isServiceRoleKey(key: string): boolean {
+  try {
+    const segment = key.split('.')[1];
+    if (!segment) return false;
+    const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(Buffer.from(normalized, 'base64').toString('utf8')) as {
+      role?: string;
+    };
+    return payload.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
+
 export function createServiceRoleClient(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
@@ -23,21 +42,57 @@ export function createServiceRoleClient(): SupabaseClient | null {
   });
 }
 
-/** Evita usar la anon key por error como service_role (provoca "permission denied"). */
-function isServiceRoleKey(key: string): boolean {
-  try {
-    const segment = key.split('.')[1];
-    if (!segment) return false;
-    const payload = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) as {
-      role?: string;
-    };
-    return payload.role === 'service_role';
-  } catch {
-    return false;
+function mapRpcGrantError(code: string | undefined): GrantExamRetakeResult {
+  switch (code) {
+    case 'not_voided':
+      return { ok: false, error: 'Este intento ya no está anulado.' };
+    case 'not_found':
+      return { ok: false, error: 'No se encontró el intento del alumno.' };
+    case 'not_allowed':
+      return {
+        ok: false,
+        error: 'No tienes permiso para otorgar otra oportunidad en este examen.',
+      };
+    default:
+      return { ok: false, error: code || 'No se pudo otorgar la segunda oportunidad.' };
   }
 }
 
-async function listVoidedViaRpc(
+async function listVoidedViaServiceRpc(
+  admin: SupabaseClient,
+  examId: string,
+  teacherId: string
+): Promise<ListVoidedAttemptsResult> {
+  const { data, error } = await admin.rpc('list_voided_attempts_for_teacher_exam', {
+    p_exam_id: examId,
+    p_teacher_id: teacherId,
+  });
+
+  if (error) {
+    if (/function|does not exist/i.test(error.message)) {
+      return {
+        ok: false,
+        error: 'Falta la función de exámenes anulados en Supabase.',
+        hint: 'Ejecuta la migración 20260620110000_list_voided_attempts_service_rpc.sql en el SQL Editor.',
+      };
+    }
+    return { ok: false, error: error.message };
+  }
+
+  const payload = data as { ok?: boolean; attempts?: VoidedAttemptRow[]; error?: string } | null;
+  if (payload?.ok) {
+    return { ok: true, attempts: payload.attempts ?? [] };
+  }
+  if (payload?.error === 'not_found') {
+    return { ok: false, error: 'Examen no encontrado' };
+  }
+  return {
+    ok: false,
+    error: payload?.error || 'No se pudieron cargar los exámenes anulados.',
+  };
+}
+
+async function listVoidedViaTeacherRpc(
   userScopedSupabase: SupabaseClient,
   examId: string
 ): Promise<ListVoidedAttemptsResult> {
@@ -65,7 +120,7 @@ async function listVoidedViaRpc(
     return {
       ok: false,
       error: 'No se pudo verificar tu sesión para listar exámenes anulados.',
-      hint: 'Cierra sesión, vuelve a entrar e inténtalo de nuevo.',
+      hint: 'Configura SUPABASE_SERVICE_ROLE_KEY en Vercel (clave service_role de Supabase).',
     };
   }
 
@@ -73,22 +128,6 @@ async function listVoidedViaRpc(
     ok: false,
     error: payload?.error || 'No se pudieron cargar los exámenes anulados.',
   };
-}
-
-function mapRpcGrantError(code: string | undefined): GrantExamRetakeResult {
-  switch (code) {
-    case 'not_voided':
-      return { ok: false, error: 'Este intento ya no está anulado.' };
-    case 'not_found':
-      return { ok: false, error: 'No se encontró el intento del alumno.' };
-    case 'not_allowed':
-      return {
-        ok: false,
-        error: 'No tienes permiso para otorgar otra oportunidad en este examen.',
-      };
-    default:
-      return { ok: false, error: code || 'No se pudo otorgar la segunda oportunidad.' };
-  }
 }
 
 async function grantExamRetakeWithAdmin(
@@ -122,61 +161,6 @@ async function grantExamRetakeWithAdmin(
   return { ok: true };
 }
 
-export type ListVoidedAttemptsResult =
-  | { ok: true; attempts: VoidedAttemptRow[] }
-  | { ok: false; error: string; hint?: string };
-
-async function listVoidedAttemptsWithAdmin(
-  admin: SupabaseClient,
-  examId: string,
-  teacherId: string
-): Promise<ListVoidedAttemptsResult> {
-  const { data: exam, error: examErr } = await admin
-    .from('exams')
-    .select('teacher_id')
-    .eq('id', examId)
-    .maybeSingle();
-
-  if (examErr) return { ok: false, error: examErr.message };
-  if (!exam || exam.teacher_id !== teacherId) {
-    return { ok: false, error: 'Examen no encontrado' };
-  }
-
-  const { data: rows, error: listErr } = await admin
-    .from('exam_attempts')
-    .select('student_id, void_reason, created_at, updated_at, students!inner(name, group_id)')
-    .eq('exam_id', examId)
-    .eq('state', 'voided')
-    .order('updated_at', { ascending: false });
-
-  if (listErr) return { ok: false, error: listErr.message };
-
-  const attempts: VoidedAttemptRow[] = (rows ?? []).map((row) => {
-    const rawStudent = row.students as
-      | { name: string; group_id: string | null }
-      | Array<{ name: string; group_id: string | null }>
-      | null;
-    const student = Array.isArray(rawStudent) ? rawStudent[0] : rawStudent;
-    const started = String(row.created_at ?? '');
-    const closed = String(row.updated_at ?? '');
-    const durationSeconds = Math.max(
-      0,
-      Math.floor((new Date(closed).getTime() - new Date(started).getTime()) / 1000)
-    );
-    return {
-      student_id: String(row.student_id),
-      student_name: student?.name ?? 'Alumno',
-      group_id: student?.group_id ?? null,
-      void_reason: (row.void_reason as string | null) ?? null,
-      started_at: started,
-      closed_at: closed,
-      duration_seconds: durationSeconds,
-    };
-  });
-
-  return { ok: true, attempts };
-}
-
 export async function listVoidedExamAttempts(
   userScopedSupabase: SupabaseClient,
   examId: string,
@@ -192,29 +176,27 @@ export async function listVoidedExamAttempts(
   if (ownedErr) return { ok: false, error: ownedErr.message };
   if (!ownedExam) return { ok: false, error: 'Examen no encontrado' };
 
-  const rpcResult = await listVoidedViaRpc(userScopedSupabase, examId);
-  if (rpcResult.ok) return rpcResult;
-
   const admin = createServiceRoleClient();
   if (admin) {
-    const adminResult = await listVoidedAttemptsWithAdmin(admin, examId, teacherId);
-    if (adminResult.ok) return adminResult;
+    const serviceResult = await listVoidedViaServiceRpc(admin, examId, teacherId);
+    if (serviceResult.ok || !/function|does not exist/i.test(serviceResult.error ?? '')) {
+      return serviceResult;
+    }
+  }
+
+  const rpcResult = await listVoidedViaTeacherRpc(userScopedSupabase, examId);
+  if (rpcResult.ok) return rpcResult;
+
+  if (!admin) {
     return {
       ok: false,
-      error: adminResult.error,
+      error: 'Falta configurar el acceso del servidor a Supabase.',
       hint:
-        adminResult.error?.includes('permission denied') || adminResult.error?.includes('permission')
-          ? 'SUPABASE_SERVICE_ROLE_KEY debe ser la clave service_role (no la anon).'
-          : rpcResult.hint,
+        'En Vercel → Environment Variables agrega SUPABASE_SERVICE_ROLE_KEY con la clave service_role (Supabase → Settings → API). No uses la anon key.',
     };
   }
 
-  return {
-    ...rpcResult,
-    hint:
-      rpcResult.hint ||
-      'Ejecuta la migración 20260620100000 en Supabase. Si usas Vercel, configura SUPABASE_SERVICE_ROLE_KEY con la clave service_role.',
-  };
+  return rpcResult;
 }
 
 export async function grantExamRetake(
@@ -248,7 +230,7 @@ export async function grantExamRetake(
     return {
       ok: false,
       error: error?.message || (rpcError.ok ? 'No se pudo otorgar la segunda oportunidad.' : rpcError.error),
-      hint: 'Configura SUPABASE_SERVICE_ROLE_KEY en el servidor para habilitar el respaldo de segunda oportunidad.',
+      hint: 'Configura SUPABASE_SERVICE_ROLE_KEY en Vercel con la clave service_role de Supabase.',
     };
   }
 
