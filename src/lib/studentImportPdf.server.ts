@@ -1,17 +1,26 @@
+import path from 'node:path';
 import {
   parseGenericPdfTextFromLines,
   parseItsonAttendanceListText,
   type StudentImportResult,
 } from '@/lib/studentImportCore';
 
+function pdfjsAssetBase(): string {
+  return path.join(process.cwd(), 'node_modules', 'pdfjs-dist');
+}
+
 async function extractPdfTextFromBuffer(buffer: ArrayBuffer): Promise<string> {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const assetBase = pdfjsAssetBase();
   const bytes = new Uint8Array(buffer);
   const loadingTask = getDocument({
     data: bytes,
     useWorkerFetch: false,
     isEvalSupported: false,
     useSystemFonts: true,
+    standardFontDataUrl: path.join(assetBase, 'standard_fonts') + path.sep,
+    cMapUrl: path.join(assetBase, 'cmaps') + path.sep,
+    cMapPacked: true,
   });
   const pdf = await loadingTask.promise;
   const chunks: string[] = [];

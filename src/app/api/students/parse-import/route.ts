@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[parse-import]', error);
     return NextResponse.json(
       { error: 'Error al procesar el PDF', message },
       { status: 500 }

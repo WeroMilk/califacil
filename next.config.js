@@ -2,12 +2,9 @@
 const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ['pdfjs-dist'],
-  },
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      config.externals = [...(config.externals || []), 'pdfjs-dist'];
-    }
-    return config;
+    outputFileTracingIncludes: {
+      '/api/students/parse-import': ['./node_modules/pdfjs-dist/**/*'],
+    },
   },
   images: {
     formats: ['image/avif', 'image/webp'],

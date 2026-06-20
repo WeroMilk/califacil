@@ -17,10 +17,62 @@ export type GrantExamRetakeResult =
 export function createServiceRoleClient(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!url || !key) return null;
+  if (!url || !key || !isServiceRoleKey(key)) return null;
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+}
+
+/** Evita usar la anon key por error como service_role (provoca "permission denied"). */
+function isServiceRoleKey(key: string): boolean {
+  try {
+    const segment = key.split('.')[1];
+    if (!segment) return false;
+    const payload = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) as {
+      role?: string;
+    };
+    return payload.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
+
+async function listVoidedViaRpc(
+  userScopedSupabase: SupabaseClient,
+  examId: string
+): Promise<ListVoidedAttemptsResult> {
+  const { data, error } = await userScopedSupabase.rpc('teacher_list_voided_attempts', {
+    p_exam_id: examId,
+  });
+
+  if (error) {
+    if (/function|does not exist/i.test(error.message)) {
+      return {
+        ok: false,
+        error: 'Falta configurar la lista de exámenes anulados en Supabase.',
+        hint: 'Ejecuta la migración 20260606110000_exam_attempt_events_retake.sql en el SQL Editor.',
+      };
+    }
+    return { ok: false, error: error.message };
+  }
+
+  const payload = data as { ok?: boolean; attempts?: VoidedAttemptRow[]; error?: string } | null;
+  if (payload?.ok) {
+    return { ok: true, attempts: payload.attempts ?? [] };
+  }
+
+  if (payload?.error === 'not_allowed' || payload?.error === 'not_authenticated') {
+    return {
+      ok: false,
+      error: 'No se pudo verificar tu sesión para listar exámenes anulados.',
+      hint: 'Cierra sesión, vuelve a entrar e inténtalo de nuevo.',
+    };
+  }
+
+  return {
+    ok: false,
+    error: payload?.error || 'No se pudieron cargar los exámenes anulados.',
+  };
 }
 
 function mapRpcGrantError(code: string | undefined): GrantExamRetakeResult {
@@ -140,47 +192,28 @@ export async function listVoidedExamAttempts(
   if (ownedErr) return { ok: false, error: ownedErr.message };
   if (!ownedExam) return { ok: false, error: 'Examen no encontrado' };
 
+  const rpcResult = await listVoidedViaRpc(userScopedSupabase, examId);
+  if (rpcResult.ok) return rpcResult;
+
   const admin = createServiceRoleClient();
   if (admin) {
-    return listVoidedAttemptsWithAdmin(admin, examId, teacherId);
-  }
-
-  const { data, error } = await userScopedSupabase.rpc('teacher_list_voided_attempts', {
-    p_exam_id: examId,
-  });
-
-  if (error) {
-    if (/function|does not exist/i.test(error.message)) {
-      return {
-        ok: false,
-        error: 'Falta configurar la lista de exámenes anulados en Supabase.',
-        hint: 'Ejecuta la migración 20260606110000_exam_attempt_events_retake.sql en el SQL Editor.',
-      };
-    }
+    const adminResult = await listVoidedAttemptsWithAdmin(admin, examId, teacherId);
+    if (adminResult.ok) return adminResult;
     return {
       ok: false,
-      error: error.message,
-      hint: 'Agrega SUPABASE_SERVICE_ROLE_KEY en .env.local (Settings → API → service_role) y reinicia el servidor.',
-    };
-  }
-
-  const payload = data as { ok?: boolean; attempts?: VoidedAttemptRow[]; error?: string } | null;
-  if (payload?.ok) {
-    return { ok: true, attempts: payload.attempts ?? [] };
-  }
-
-  if (payload?.error === 'not_allowed' || payload?.error === 'not_authenticated') {
-    return {
-      ok: false,
-      error: 'No se pudo verificar tu sesión para listar exámenes anulados.',
-      hint: 'Agrega SUPABASE_SERVICE_ROLE_KEY en .env.local y reinicia el servidor de desarrollo.',
+      error: adminResult.error,
+      hint:
+        adminResult.error?.includes('permission denied') || adminResult.error?.includes('permission')
+          ? 'SUPABASE_SERVICE_ROLE_KEY debe ser la clave service_role (no la anon).'
+          : rpcResult.hint,
     };
   }
 
   return {
-    ok: false,
-    error: payload?.error || 'No se pudieron cargar los exámenes anulados.',
-    hint: 'Agrega SUPABASE_SERVICE_ROLE_KEY en .env.local y reinicia el servidor.',
+    ...rpcResult,
+    hint:
+      rpcResult.hint ||
+      'Ejecuta la migración 20260620100000 en Supabase. Si usas Vercel, configura SUPABASE_SERVICE_ROLE_KEY con la clave service_role.',
   };
 }
 

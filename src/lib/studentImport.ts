@@ -24,9 +24,12 @@ async function parseStudentImportFromPdfViaApi(file: File): Promise<StudentImpor
     body: form,
   });
 
-  const payload = (await res.json().catch(() => ({}))) as StudentImportResult & { error?: string };
+  const payload = (await res.json().catch(() => ({}))) as StudentImportResult & {
+    error?: string;
+    message?: string;
+  };
   if (!res.ok) {
-    throw new Error(payload.error || 'No se pudo leer el PDF');
+    throw new Error(payload.error || payload.message || 'No se pudo leer el PDF');
   }
   return payload;
 }
