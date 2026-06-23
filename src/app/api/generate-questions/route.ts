@@ -7,6 +7,7 @@ import {
   isSubscriptionActive,
   isCalifacilSuperUserEmail,
 } from '@/lib/billing';
+import { dedupeExamQuestions } from '@/lib/utils';
 
 const DIFFICULTY_LEVELS = ['easy', 'medium', 'hard', 'extreme'] as const;
 type Difficulty = (typeof DIFFICULTY_LEVELS)[number];
@@ -151,11 +152,13 @@ export async function POST(request: NextRequest) {
 ${difficultyInstructions(difficulty)}
 
 Para cada pregunta, incluye:
-- text: El texto de la pregunta
+- text: El texto de la pregunta (sin numeración tipo "1." o "Pregunta 1")
 - type: Tipo de pregunta (${questionTypes.join(' o ')})
 - Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta (el orden de las opciones puede ser cualquiera)
 - Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)
 - illustration: Una breve descripción de una ilustración que ayude a entender la pregunta (opcional)
+
+IMPORTANTE: Cada pregunta debe ser única. No repitas ni parafrasees el mismo enunciado.
 
 Responde ÚNICAMENTE con un JSON válido en este formato exacto:
 {
@@ -179,7 +182,7 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
         includeOpenAnswer,
         difficulty
       );
-      return NextResponse.json({ questions: fallbackQuestions });
+      return NextResponse.json({ questions: dedupeExamQuestions(fallbackQuestions) });
     }
 
     const openai = new OpenAI({ apiKey });
@@ -230,7 +233,9 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
       }
 
       return NextResponse.json({
-        questions: withShuffledMcOptions(parsedResponse.questions as Record<string, unknown>[]),
+        questions: dedupeExamQuestions(
+          withShuffledMcOptions(parsedResponse.questions as Record<string, unknown>[]) as { text: string }[]
+        ),
       });
     } catch (openaiError: any) {
       console.error('OpenAI error:', openaiError);
@@ -243,7 +248,7 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
         includeOpenAnswer,
         difficulty
       );
-      return NextResponse.json({ questions: fallbackQuestions });
+      return NextResponse.json({ questions: dedupeExamQuestions(fallbackQuestions) });
     }
   } catch (error: any) {
     console.error('Error generating questions:', error);
@@ -277,7 +282,7 @@ function generateFallbackQuestions(
 
     if (isMultipleChoice) {
       questions.push({
-        text: `${tag} Pregunta ${i + 1} sobre ${topic}: ¿Cuál es el concepto más importante de este tema?`,
+        text: `${tag} ¿Cuál es el concepto más importante de ${topic}?`,
         type: 'multiple_choice',
         options: [
           `Concepto principal de ${topic}`,
@@ -290,7 +295,7 @@ function generateFallbackQuestions(
       });
     } else {
       questions.push({
-        text: `${tag} Pregunta ${i + 1} sobre ${topic}: Explica brevemente los conceptos clave de este tema.`,
+        text: `${tag} Explica brevemente los conceptos clave de ${topic}.`,
         type: 'open_answer',
         correct_answer: `Los conceptos clave de ${topic} incluyen...`,
         illustration: `Ejemplo visual de ${topic}`,

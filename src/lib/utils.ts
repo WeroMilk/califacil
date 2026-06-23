@@ -37,13 +37,42 @@ export function calculatePercentage(score: number, maxScore: number): number {
   return Math.round((score / maxScore) * 100);
 }
 
-export const EXAM_POINTS_CAP = 10;
+export function normalizeQuestionText(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/** Conserva la primera aparición de cada enunciado (sin distinguir mayúsculas/espacios). */
+export function dedupeExamQuestions<T extends { text: string }>(questions: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const q of questions) {
+    const key = normalizeQuestionText(q.text);
+    if (!key) {
+      out.push(q);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(q);
+  }
+  return out;
+}
+
+export function isQuestionIllustrationImage(value: string): boolean {
+  const v = value.trim();
+  return v.startsWith('data:image/') || /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(v);
+}
+
+export const EXAM_POINTS_CAP = 100;
 
 export function examMaxScore(questions: { points?: number | null }[]): number {
   return questions.reduce((s, q) => s + (q.points ?? 1), 0);
 }
 
-/** Reparte 10 puntos enteros entre N preguntas. */
+/** Reparte 100 puntos enteros entre N preguntas. */
 export function distributeExamPoints(questionCount: number): number[] {
   if (questionCount <= 0) return [];
   const base = Math.floor(EXAM_POINTS_CAP / questionCount);

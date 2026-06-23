@@ -4,6 +4,7 @@ import {
   parseItsonAttendanceListText,
   type StudentImportResult,
 } from '@/lib/studentImportCore';
+import { pdfBufferBytes } from '@/lib/pdfBuffer.server';
 
 /** pdfjs-dist exige URLs con slash final y barras normales (incluso en Windows). */
 function pdfjsAssetUrl(...segments: string[]): string {
@@ -13,7 +14,7 @@ function pdfjsAssetUrl(...segments: string[]): string {
 
 async function extractPdfTextFromBuffer(buffer: ArrayBuffer): Promise<string> {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const bytes = new Uint8Array(buffer);
+  const bytes = pdfBufferBytes(buffer);
   const loadingTask = getDocument({
     data: bytes,
     useWorkerFetch: false,

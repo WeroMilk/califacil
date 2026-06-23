@@ -44,6 +44,7 @@ import { supabase } from '@/lib/supabase';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { examMaxScore } from '@/lib/utils';
 import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
+import { QuestionIllustration } from '@/components/question-illustration';
 
 type QuestionDraft = {
   text: string;
@@ -1059,6 +1060,9 @@ function QuestionCard({
             ) : (
               <>
                 <p className="font-medium">{question.text}</p>
+                {question.illustration && (
+                  <QuestionIllustration illustration={question.illustration} className="mt-3" />
+                )}
                 {question.type === 'multiple_choice' && question.options && (
                   <div className="ml-4 mt-2 space-y-1">
                     {question.options.map((option, optIndex) => (

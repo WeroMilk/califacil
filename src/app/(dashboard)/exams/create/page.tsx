@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroups } from '@/hooks/useGroups';
 import { useExams } from '@/hooks/useExams';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -13,56 +13,83 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Checkbox } from '@/components/ui/checkbox';
-import { 
-  Loader2, 
-  Wand2, 
-  ArrowLeft, 
-  ArrowRight, 
+import {
+  Loader2,
+  Wand2,
+  ArrowLeft,
+  ArrowRight,
   Check,
   Sparkles,
   FileText,
   Settings,
-  List
+  List,
+  Upload,
+  PenLine,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
+import { QuestionIllustration } from '@/components/question-illustration';
+import { ExamPdfPreviewCrop } from '@/components/exam-pdf-preview-crop';
+import { QuestionImagePicker } from '@/components/question-image-picker';
+import type { ExamCroppedImage } from '@/lib/pdfClientPreview';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { EXAM_POINTS_CAP, distributeExamPoints, examMaxScore } from '@/lib/utils';
+import { EXAM_POINTS_CAP, distributeExamPoints, examMaxScore, dedupeExamQuestions, normalizeQuestionText } from '@/lib/utils';
+
+type QuestionSourceMode = 'ia' | 'pdf' | 'manual';
 
 const steps = [
   { id: 1, title: 'Información General', icon: FileText },
-  { id: 2, title: 'Configuración IA', icon: Settings },
+  { id: 2, title: 'Preguntas', icon: Settings },
   { id: 3, title: 'Revisar Preguntas', icon: List },
 ];
+
+function createEmptyQuestion(): GeneratedQuestion {
+  return {
+    text: '',
+    type: 'multiple_choice',
+    options: ['', '', '', ''],
+    correct_answer: '',
+    points: 1,
+  };
+}
+
+async function dashboardAuthHeadersOnly(): Promise<Record<string, string>> {
+  const authHeaders = await dashboardAuthJsonHeaders();
+  const headers: Record<string, string> = {};
+  const auth = (authHeaders as Record<string, string>).Authorization;
+  if (auth) headers.Authorization = auth;
+  return headers;
+}
 
 export default function CreateExamPage() {
   const router = useRouter();
   const { user } = useAuth();
   const { groups } = useGroups(user?.id);
   const { createExam, deleteExam } = useExams(user?.id);
-  
+
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
-  /** Evita varios createExam antes de que React re-renderice con loading=true (doble toque / triple clic). */
   const saveExamLockRef = useRef(false);
   const generateLockRef = useRef(false);
-  
-  // Step 1: General Info
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
-  
-  // Step 2: AI Configuration
+
+  const [questionSourceMode, setQuestionSourceMode] = useState<QuestionSourceMode>('ia');
   const [topics, setTopics] = useState('');
   const [questionCount, setQuestionCount] = useState(10);
   const [difficultyLevel, setDifficultyLevel] = useState<
     'easy' | 'medium' | 'hard' | 'extreme'
   >('medium');
   const [includeMultipleChoice, setIncludeMultipleChoice] = useState(true);
-  
-  // Step 3: Generated Questions
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [croppedImages, setCroppedImages] = useState<ExamCroppedImage[]>([]);
+
   const [generatedQuestions, setGeneratedQuestions] = useState<GeneratedQuestion[]>([]);
 
   const handleGenerateQuestions = async () => {
@@ -96,23 +123,92 @@ export default function CreateExamPage() {
       }
 
       const data = await response.json();
-      const pointValues = distributeExamPoints(data.questions.length);
+      const uniqueQuestions = dedupeExamQuestions(data.questions as GeneratedQuestion[]);
+      if (uniqueQuestions.length < data.questions.length) {
+        toast.message(
+          `Se omitieron ${data.questions.length - uniqueQuestions.length} preguntas repetidas`
+        );
+      }
+      const pointValues = distributeExamPoints(uniqueQuestions.length);
       setGeneratedQuestions(
-        data.questions.map((q: GeneratedQuestion, index: number) => ({
+        uniqueQuestions.map((q: GeneratedQuestion, index: number) => ({
           ...q,
           points: pointValues[index],
         }))
       );
+      setQuestionSourceMode('ia');
       setCurrentStep(3);
-      toast.success(`${data.questions.length} preguntas generadas`);
-    } catch (error: any) {
+      toast.success(`${uniqueQuestions.length} preguntas generadas`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
       toast.error('Error al generar preguntas', {
-        description: toSpanishAuthMessage(error?.message),
+        description: toSpanishAuthMessage(message),
       });
     } finally {
       generateLockRef.current = false;
       setGenerating(false);
     }
+  };
+
+  const handleParsePdf = async () => {
+    if (!pdfFile) {
+      toast.error('Selecciona un archivo PDF');
+      return;
+    }
+    if (generateLockRef.current) return;
+    generateLockRef.current = true;
+
+    setGenerating(true);
+    try {
+      const form = new FormData();
+      form.append('file', pdfFile);
+      const response = await fetch('/api/exams/parse-pdf', {
+        method: 'POST',
+        headers: await dashboardAuthHeadersOnly(),
+        body: form,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Sesión expirada. Inicia sesión de nuevo.');
+        }
+        const errBody = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+        throw new Error(errBody.message || errBody.error || 'Error al leer el PDF');
+      }
+
+      const data = await response.json();
+      const uniqueQuestions = dedupeExamQuestions((data.questions ?? []) as GeneratedQuestion[]);
+      if (uniqueQuestions.length < (data.questions?.length ?? 0)) {
+        toast.message(
+          `Se omitieron ${(data.questions?.length ?? 0) - uniqueQuestions.length} preguntas repetidas`
+        );
+      }
+      const pointValues = distributeExamPoints(uniqueQuestions.length);
+      setGeneratedQuestions(
+        uniqueQuestions.map((q, index) => ({
+          ...q,
+          illustration: undefined,
+          points: pointValues[index],
+        }))
+      );
+      setQuestionSourceMode('pdf');
+      setCurrentStep(3);
+      toast.success(`${uniqueQuestions.length} preguntas extraídas del PDF`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error desconocido';
+      toast.error('Error al procesar el PDF', {
+        description: toSpanishAuthMessage(message),
+      });
+    } finally {
+      generateLockRef.current = false;
+      setGenerating(false);
+    }
+  };
+
+  const handleStartManual = () => {
+    setGeneratedQuestions([]);
+    setQuestionSourceMode('manual');
+    setCurrentStep(3);
   };
 
   const handleSaveExam = async () => {
@@ -122,11 +218,35 @@ export default function CreateExamPage() {
     }
 
     if (generatedQuestions.length === 0) {
-      toast.error('Debes generar al menos una pregunta');
+      toast.error('Agrega al menos una pregunta al examen');
+      return;
+    }
+
+    const uniqueForSave = dedupeExamQuestions(
+      generatedQuestions.filter((q) => q.text.trim())
+    );
+    if (uniqueForSave.length < generatedQuestions.filter((q) => q.text.trim()).length) {
+      toast.error('Hay preguntas con el mismo enunciado. Elimina o edita los duplicados.');
       return;
     }
 
     for (const q of generatedQuestions) {
+      if (!q.text.trim()) {
+        toast.error('Todas las preguntas deben tener enunciado');
+        return;
+      }
+      if (q.type === 'multiple_choice') {
+        const options = (q.options ?? []).map((o) => o.trim()).filter(Boolean);
+        if (options.length < 2) {
+          toast.error('Cada pregunta de opción múltiple necesita al menos 2 opciones');
+          return;
+        }
+        const correct = q.correct_answer?.trim();
+        if (!correct || !options.includes(correct)) {
+          toast.error('Indica la respuesta correcta en cada pregunta de opción múltiple');
+          return;
+        }
+      }
       const points = q.points ?? 0;
       if (!Number.isFinite(points) || points <= 0) {
         toast.error('Cada pregunta debe tener un valor mayor a 0');
@@ -145,7 +265,6 @@ export default function CreateExamPage() {
 
     setLoading(true);
     try {
-      // Create exam
       const exam = await createExam({
         title: title.trim(),
         description: description.trim() || null,
@@ -175,15 +294,20 @@ export default function CreateExamPage() {
         throw new Error(detail || groupAssignBody.error || 'No se pudieron asignar los grupos al examen');
       }
 
-      // Add questions
-      const questionsToAdd = generatedQuestions.map(q => ({
-        text: q.text,
-        type: q.type,
-        options: q.options || null,
-        correct_answer: q.correct_answer || null,
-        illustration: q.illustration || null,
-        points: Math.round(q.points ?? 1),
-      }));
+      const questionsToAdd = generatedQuestions.map((q) => {
+        const options =
+          q.type === 'multiple_choice'
+            ? (q.options ?? []).map((o) => o.trim()).filter(Boolean)
+            : null;
+        return {
+          text: q.text.trim(),
+          type: q.type,
+          options,
+          correct_answer: q.correct_answer?.trim() || null,
+          illustration: q.illustration || null,
+          points: Math.round(q.points ?? 1),
+        };
+      });
 
       const response = await fetch(`/api/exams/${exam.id}/questions`, {
         method: 'POST',
@@ -213,8 +337,10 @@ export default function CreateExamPage() {
 
       toast.success('Examen creado exitosamente');
       router.push(`/exams/${exam.id}`);
-    } catch (error: any) {
-      const msg = toSpanishAuthMessage(error?.message ?? 'Error desconocido');
+    } catch (error: unknown) {
+      const msg = toSpanishAuthMessage(
+        error instanceof Error ? error.message : 'Error desconocido'
+      );
       const longHint = /migraciones|Supabase|schema|relation/i.test(msg);
       toast.error('Error al guardar el examen', {
         description: msg,
@@ -227,17 +353,40 @@ export default function CreateExamPage() {
   };
 
   const updateQuestion = (index: number, updates: Partial<GeneratedQuestion>) => {
-    setGeneratedQuestions(prev => 
-      prev.map((q, i) => i === index ? { ...q, ...updates } : q)
-    );
+    setGeneratedQuestions((prev) => {
+      const next = prev.map((q, i) => (i === index ? { ...q, ...updates } : q));
+      if (updates.text !== undefined) {
+        const text = updates.text.trim();
+        if (text) {
+          const normalized = normalizeQuestionText(text);
+          const duplicate = next.some(
+            (q, i) => i !== index && normalizeQuestionText(q.text) === normalized
+          );
+          if (duplicate) {
+            toast.error('Ya existe una pregunta con ese enunciado');
+            return prev;
+          }
+        }
+      }
+      return next;
+    });
   };
 
   const removeQuestion = (index: number) => {
-    setGeneratedQuestions(prev => prev.filter((_, i) => i !== index));
+    setGeneratedQuestions((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addQuestion = () => {
+    setGeneratedQuestions((prev) => {
+      const next = [...prev, createEmptyQuestion()];
+      const values = distributeExamPoints(next.length);
+      return next.map((q, index) => ({ ...q, points: values[index] }));
+    });
   };
 
   const totalPoints = examMaxScore(generatedQuestions);
   const pointsOverCap = totalPoints > EXAM_POINTS_CAP;
+  const isEditableReview = questionSourceMode === 'manual' || questionSourceMode === 'pdf';
 
   const redistributePointsEvenly = () => {
     const values = distributeExamPoints(generatedQuestions.length);
@@ -246,30 +395,51 @@ export default function CreateExamPage() {
     );
   };
 
+  const modeOptions: { id: QuestionSourceMode; label: string; icon: typeof Sparkles; description: string }[] = [
+    {
+      id: 'ia',
+      label: 'Con IA',
+      icon: Sparkles,
+      description: 'Genera preguntas a partir de los temas que indiques.',
+    },
+    {
+      id: 'pdf',
+      label: 'Desde PDF',
+      icon: Upload,
+      description: 'Sube un examen en PDF y extrae las preguntas automáticamente.',
+    },
+    {
+      id: 'manual',
+      label: 'Manual',
+      icon: PenLine,
+      description: 'Escribe cada pregunta tú mismo, una por una.',
+    },
+  ];
+
   return (
     <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
-      {/* Header */}
       <div className="flex items-start gap-3 sm:items-center sm:gap-4">
         <Button variant="ghost" size="icon" onClick={() => router.back()}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
         <div>
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Crear Examen</h1>
-          <p className="mt-1 text-sm text-gray-600 sm:text-base">Crea un nuevo examen con ayuda de IA</p>
+          <p className="mt-1 text-sm text-gray-600 sm:text-base">
+            Crea un examen con IA, importa un PDF o agrégalo pregunta por pregunta
+          </p>
         </div>
       </div>
 
-      {/* Progress Steps */}
       <div className="flex items-center justify-center">
         <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
           {steps.map((step, index) => (
             <div key={step.id} className="flex items-center">
-              <div 
+              <div
                 className={`flex items-center gap-2 rounded-lg px-3 py-2 sm:px-4 ${
-                  currentStep === step.id 
-                    ? 'bg-orange-600 text-white' 
-                    : currentStep > step.id 
-                      ? 'bg-green-100 text-green-700' 
+                  currentStep === step.id
+                    ? 'bg-orange-600 text-white'
+                    : currentStep > step.id
+                      ? 'bg-green-100 text-green-700'
                       : 'bg-gray-100 text-gray-500'
                 }`}
               >
@@ -278,16 +448,17 @@ export default function CreateExamPage() {
                 {currentStep > step.id && <Check className="w-4 h-4 ml-1" />}
               </div>
               {index < steps.length - 1 && (
-                <div className={`w-8 h-0.5 mx-2 ${
-                  currentStep > step.id ? 'bg-green-500' : 'bg-gray-200'
-                }`} />
+                <div
+                  className={`w-8 h-0.5 mx-2 ${
+                    currentStep > step.id ? 'bg-green-500' : 'bg-gray-200'
+                  }`}
+                />
               )}
             </div>
           ))}
         </div>
       </div>
 
-      {/* Step Content */}
       <Card>
         <CardContent className="p-6">
           {currentStep === 1 && (
@@ -301,7 +472,7 @@ export default function CreateExamPage() {
                   onChange={(e) => setTitle(e.target.value)}
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="description">Descripción</Label>
                 <Textarea
@@ -312,7 +483,7 @@ export default function CreateExamPage() {
                   rows={3}
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label>Grupos (opcional, puedes elegir varios)</Label>
                 <div className="space-y-2 rounded-md border p-3">
@@ -345,7 +516,7 @@ export default function CreateExamPage() {
               </div>
 
               <div className="flex justify-end">
-                <Button 
+                <Button
                   onClick={() => setCurrentStep(2)}
                   className="bg-orange-600 hover:bg-orange-700"
                 >
@@ -358,109 +529,210 @@ export default function CreateExamPage() {
 
           {currentStep === 2 && (
             <div className="space-y-6">
-              <div className="bg-orange-50 p-4 rounded-lg">
-                <div className="flex items-center gap-2 mb-2">
-                  <Sparkles className="w-5 h-5 text-orange-600" />
-                  <h3 className="font-semibold text-orange-900">Generación con IA</h3>
-                </div>
-                <p className="text-sm text-orange-700">
-                  Describe los temas que quieres incluir en el examen y nuestra IA generará las preguntas automáticamente.
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">¿Cómo quieres crear las preguntas?</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Elige un método. Podrás revisar y editar todo antes de guardar el examen.
                 </p>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="topics">Temas a evaluar *</Label>
-                <Textarea
-                  id="topics"
-                  placeholder="Ej: Ecuaciones lineales, sistemas de ecuaciones, factorización..."
-                  value={topics}
-                  onChange={(e) => setTopics(e.target.value)}
-                  rows={4}
-                />
-                <p className="text-sm text-gray-500">
-                  Describe los temas separados por comas para obtener mejores resultados.
-                </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {modeOptions.map((mode) => {
+                  const Icon = mode.icon;
+                  const selected = questionSourceMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setQuestionSourceMode(mode.id)}
+                      className={`rounded-lg border-2 p-4 text-left transition-colors ${
+                        selected
+                          ? 'border-orange-500 bg-orange-50'
+                          : 'border-gray-200 hover:border-orange-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <Icon className={`h-5 w-5 ${selected ? 'text-orange-600' : 'text-gray-500'}`} />
+                        <span className="font-medium text-gray-900">{mode.label}</span>
+                      </div>
+                      <p className="text-sm text-gray-600">{mode.description}</p>
+                    </button>
+                  );
+                })}
               </div>
 
-              <div className="space-y-4">
-                <Label>Número de preguntas: {questionCount}</Label>
-                <Slider
-                  value={[questionCount]}
-                  onValueChange={(value) => setQuestionCount(value[0])}
-                  min={1}
-                  max={30}
-                  step={1}
-                />
-                <div className="flex justify-between text-sm text-gray-500">
-                  <span>1</span>
-                  <span>15</span>
-                  <span>30</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="difficulty">Nivel de dificultad</Label>
-                <Select
-                  value={difficultyLevel}
-                  onValueChange={(v) =>
-                    setDifficultyLevel(v as 'easy' | 'medium' | 'hard' | 'extreme')
-                  }
-                >
-                  <SelectTrigger id="difficulty" className="w-full max-w-md">
-                    <SelectValue placeholder="Selecciona el nivel" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="easy">Fácil — conceptos básicos y lenguaje claro</SelectItem>
-                    <SelectItem value="medium">Medio — razonamiento típico de examen</SelectItem>
-                    <SelectItem value="hard">Difícil — mayor profundidad y análisis</SelectItem>
-                    <SelectItem value="extreme">
-                      Extremo — máximo rigor, muy exigente
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-sm text-gray-500">
-                  La IA adaptará el lenguaje y la complejidad de los reactivos a este nivel.
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <Label>Tipos de preguntas</Label>
-                <div className="flex gap-4">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="multipleChoice"
-                      checked={includeMultipleChoice}
-                      onCheckedChange={(checked) => setIncludeMultipleChoice(checked as boolean)}
+              {questionSourceMode === 'ia' && (
+                <div className="space-y-6 rounded-lg border border-orange-100 bg-orange-50/50 p-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="topics">Temas a evaluar *</Label>
+                    <Textarea
+                      id="topics"
+                      placeholder="Ej: Ecuaciones lineales, sistemas de ecuaciones, factorización..."
+                      value={topics}
+                      onChange={(e) => setTopics(e.target.value)}
+                      rows={4}
                     />
-                    <Label htmlFor="multipleChoice" className="font-normal">
-                      Opción múltiple
-                    </Label>
+                    <p className="text-sm text-gray-500">
+                      Describe los temas separados por comas para obtener mejores resultados.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <Label>Número de preguntas: {questionCount}</Label>
+                    <Slider
+                      value={[questionCount]}
+                      onValueChange={(value) => setQuestionCount(value[0])}
+                      min={1}
+                      max={30}
+                      step={1}
+                    />
+                    <div className="flex justify-between text-sm text-gray-500">
+                      <span>1</span>
+                      <span>15</span>
+                      <span>30</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="difficulty">Nivel de dificultad</Label>
+                    <Select
+                      value={difficultyLevel}
+                      onValueChange={(v) =>
+                        setDifficultyLevel(v as 'easy' | 'medium' | 'hard' | 'extreme')
+                      }
+                    >
+                      <SelectTrigger id="difficulty" className="w-full max-w-md">
+                        <SelectValue placeholder="Selecciona el nivel" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="easy">Fácil — conceptos básicos y lenguaje claro</SelectItem>
+                        <SelectItem value="medium">Medio — razonamiento típico de examen</SelectItem>
+                        <SelectItem value="hard">Difícil — mayor profundidad y análisis</SelectItem>
+                        <SelectItem value="extreme">Extremo — máximo rigor, muy exigente</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label>Tipos de preguntas</Label>
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="multipleChoice"
+                        checked={includeMultipleChoice}
+                        onCheckedChange={(checked) => setIncludeMultipleChoice(checked as boolean)}
+                      />
+                      <Label htmlFor="multipleChoice" className="font-normal">
+                        Opción múltiple
+                      </Label>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
+
+              {questionSourceMode === 'pdf' && (
+                <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+                  <div className="space-y-2">
+                    <Label>Archivo PDF del examen *</Label>
+                    <input
+                      ref={pdfInputRef}
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] ?? null;
+                        setPdfFile(file);
+                      }}
+                    />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => pdfInputRef.current?.click()}
+                      >
+                        <Upload className="mr-2 h-4 w-4" />
+                        Elegir PDF
+                      </Button>
+                      {pdfFile && (
+                        <span className="text-sm text-gray-600">{pdfFile.name}</span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500">
+                      Sube el PDF, recorta las figuras que quieras usar y luego extrae las preguntas.
+                      En el siguiente paso podrás elegir qué imagen va en cada pregunta.
+                    </p>
+                  </div>
+
+                  {pdfFile && (
+                    <ExamPdfPreviewCrop
+                      file={pdfFile}
+                      croppedImages={croppedImages}
+                      onCroppedImagesChange={setCroppedImages}
+                    />
+                  )}
+                </div>
+              )}
+
+              {questionSourceMode === 'manual' && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+                  <p className="text-sm text-gray-600">
+                    En el siguiente paso podrás agregar cada pregunta con su enunciado, opciones y
+                    respuesta correcta.
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-between">
                 <Button variant="outline" onClick={() => setCurrentStep(1)}>
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Anterior
                 </Button>
-                <Button 
-                  onClick={handleGenerateQuestions}
-                  disabled={generating || !includeMultipleChoice}
-                  className="bg-orange-600 hover:bg-orange-700"
-                >
-                  {generating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generando...
-                    </>
-                  ) : (
-                    <>
-                      <Wand2 className="w-4 h-4 mr-2" />
-                      Generar Preguntas
-                    </>
-                  )}
-                </Button>
+
+                {questionSourceMode === 'ia' && (
+                  <Button
+                    onClick={handleGenerateQuestions}
+                    disabled={generating || !includeMultipleChoice}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    {generating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Generando...
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="w-4 h-4 mr-2" />
+                        Generar Preguntas
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {questionSourceMode === 'pdf' && (
+                  <Button
+                    onClick={handleParsePdf}
+                    disabled={generating || !pdfFile}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    {generating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Extrayendo...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4 mr-2" />
+                        Extraer Preguntas
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {questionSourceMode === 'manual' && (
+                  <Button onClick={handleStartManual} className="bg-orange-600 hover:bg-orange-700">
+                    <PenLine className="w-4 h-4 mr-2" />
+                    Agregar Preguntas
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -470,7 +742,9 @@ export default function CreateExamPage() {
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-lg font-semibold">
-                    Preguntas Generadas ({generatedQuestions.length})
+                    {questionSourceMode === 'manual'
+                      ? `Preguntas (${generatedQuestions.length})`
+                      : `Preguntas (${generatedQuestions.length})`}
                   </h3>
                   <p className={`text-sm ${pointsOverCap ? 'text-red-600' : 'text-gray-600'}`}>
                     Total: {totalPoints} / {EXAM_POINTS_CAP} puntos
@@ -478,71 +752,236 @@ export default function CreateExamPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={redistributePointsEvenly}>
-                    Repartir {EXAM_POINTS_CAP} pts
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={() => setCurrentStep(2)}
-                  >
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Regenerar
-                  </Button>
+                  {questionSourceMode === 'manual' && (
+                    <Button variant="outline" size="sm" onClick={addQuestion}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Agregar pregunta
+                    </Button>
+                  )}
+                  {generatedQuestions.length > 0 && (
+                    <Button variant="outline" size="sm" onClick={redistributePointsEvenly}>
+                      Repartir {EXAM_POINTS_CAP} pts
+                    </Button>
+                  )}
+                  {questionSourceMode === 'ia' && (
+                    <Button variant="outline" size="sm" onClick={() => setCurrentStep(2)}>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Regenerar
+                    </Button>
+                  )}
+                  {(questionSourceMode === 'pdf' || questionSourceMode === 'manual') && (
+                    <Button variant="outline" size="sm" onClick={() => setCurrentStep(2)}>
+                      <ArrowLeft className="w-4 h-4 mr-2" />
+                      Cambiar método
+                    </Button>
+                  )}
                 </div>
               </div>
+
+              {generatedQuestions.length === 0 && questionSourceMode === 'manual' && (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
+                  <PenLine className="mx-auto mb-3 h-8 w-8 text-gray-400" />
+                  <p className="text-gray-600">Aún no hay preguntas. Agrega la primera.</p>
+                  <Button className="mt-4 bg-orange-600 hover:bg-orange-700" onClick={addQuestion}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Agregar primera pregunta
+                  </Button>
+                </div>
+              )}
+
+              {questionSourceMode === 'pdf' && croppedImages.length > 0 && (
+                <p className="text-sm text-gray-600">
+                  Tienes {croppedImages.length} imagen(es) recortada(s). En cada pregunta puedes activar
+                  &quot;Incluir imagen ilustrativa&quot; y elegir cuál mostrar.
+                </p>
+              )}
 
               <div className="min-h-[12rem] max-h-[min(70vh,32rem)] space-y-4 overflow-y-auto overscroll-y-contain scroll-pt-2 py-2 pl-0.5 pr-2 [scrollbar-gutter:stable]">
                 {generatedQuestions.map((question, index) => (
                   <Card key={index} className="scroll-mt-2 border-l-4 border-l-orange-500">
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
+                        <div className="flex-1 space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-medium text-gray-500">
                               Pregunta {index + 1}
                             </span>
-                            <span className={`px-2 py-0.5 text-xs rounded-full ${
-                              question.type === 'multiple_choice' 
-                                ? 'bg-orange-100 text-orange-700' 
-                                : 'bg-green-100 text-green-700'
-                            }`}>
-                              {question.type === 'multiple_choice' ? 'Opción múltiple' : 'Respuesta abierta'}
-                            </span>
+                            {!isEditableReview && (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs ${
+                                  question.type === 'multiple_choice'
+                                    ? 'bg-orange-100 text-orange-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}
+                              >
+                                {question.type === 'multiple_choice'
+                                  ? 'Opción múltiple'
+                                  : 'Respuesta abierta'}
+                              </span>
+                            )}
                           </div>
-                          <p className="font-medium mb-2">{question.text}</p>
-                          
-                          {question.type === 'multiple_choice' && question.options && (
-                            <div className="space-y-1 ml-4">
-                              {question.options.map((option, optIndex) => (
-                                <div 
-                                  key={optIndex} 
-                                  className={`text-sm ${
-                                    option === question.correct_answer 
-                                      ? 'text-green-600 font-medium' 
-                                      : 'text-gray-600'
-                                  }`}
+
+                          {isEditableReview ? (
+                            <>
+                              <div className="space-y-2">
+                                <Label htmlFor={`q-text-${index}`}>Enunciado *</Label>
+                                <Textarea
+                                  id={`q-text-${index}`}
+                                  value={question.text}
+                                  onChange={(e) => updateQuestion(index, { text: e.target.value })}
+                                  rows={2}
+                                  placeholder="Escribe la pregunta..."
+                                />
+                              </div>
+
+                              {questionSourceMode === 'pdf' && croppedImages.length > 0 ? (
+                                <QuestionImagePicker
+                                  questionIndex={index}
+                                  croppedImages={croppedImages}
+                                  illustration={question.illustration}
+                                  onChange={(illustration) => updateQuestion(index, { illustration })}
+                                />
+                              ) : (
+                                question.illustration && (
+                                  <QuestionIllustration illustration={question.illustration} />
+                                )
+                              )}
+
+                              <div className="space-y-2">
+                                <Label>Tipo de pregunta</Label>
+                                <Select
+                                  value={question.type}
+                                  onValueChange={(v) => {
+                                    if (v === 'open_answer') {
+                                      updateQuestion(index, {
+                                        type: 'open_answer',
+                                        options: undefined,
+                                        correct_answer: question.correct_answer ?? '',
+                                      });
+                                    } else {
+                                      updateQuestion(index, {
+                                        type: 'multiple_choice',
+                                        options: question.options?.length
+                                          ? question.options
+                                          : ['', '', '', ''],
+                                      });
+                                    }
+                                  }}
                                 >
-                                  {String.fromCharCode(65 + optIndex)}. {option}
-                                  {option === question.correct_answer && ' ✓'}
+                                  <SelectTrigger className="max-w-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
+                                    <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              {question.type === 'multiple_choice' && (
+                                <div className="space-y-2">
+                                  <Label>Opciones</Label>
+                                  {(question.options ?? ['', '', '', '']).map((option, optIndex) => (
+                                    <div key={optIndex} className="flex items-center gap-2">
+                                      <span className="w-6 text-sm text-gray-500">
+                                        {String.fromCharCode(65 + optIndex)}.
+                                      </span>
+                                      <Input
+                                        value={option}
+                                        placeholder={`Opción ${String.fromCharCode(65 + optIndex)}`}
+                                        onChange={(e) => {
+                                          const next = [...(question.options ?? ['', '', '', ''])];
+                                          next[optIndex] = e.target.value;
+                                          const trimmed = next.map((o) => o.trim()).filter(Boolean);
+                                          const correct = question.correct_answer?.trim();
+                                          updateQuestion(index, {
+                                            options: next,
+                                            correct_answer:
+                                              correct && trimmed.includes(correct)
+                                                ? correct
+                                                : trimmed[0] ?? '',
+                                          });
+                                        }}
+                                      />
+                                    </div>
+                                  ))}
+                                  <div className="space-y-2 pt-1">
+                                    <Label>Respuesta correcta</Label>
+                                    <Select
+                                      value={question.correct_answer ?? ''}
+                                      onValueChange={(v) =>
+                                        updateQuestion(index, { correct_answer: v })
+                                      }
+                                    >
+                                      <SelectTrigger className="max-w-md">
+                                        <SelectValue placeholder="Selecciona la correcta" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {(question.options ?? [])
+                                          .map((o) => o.trim())
+                                          .filter(Boolean)
+                                          .map((opt) => (
+                                            <SelectItem key={opt} value={opt}>
+                                              {opt}
+                                            </SelectItem>
+                                          ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
                                 </div>
-                              ))}
-                            </div>
-                          )}
-                          
-                          {question.type === 'open_answer' && question.correct_answer && (
-                            <p className="text-sm text-green-600 mt-2">
-                              Respuesta esperada: {question.correct_answer}
-                            </p>
-                          )}
-                          
-                          {question.illustration && (
-                            <p className="text-sm text-gray-500 mt-2 italic">
-                              Ilustración: {question.illustration}
-                            </p>
+                              )}
+
+                              {question.type === 'open_answer' && (
+                                <div className="space-y-2">
+                                  <Label>Respuesta esperada (opcional)</Label>
+                                  <Input
+                                    value={question.correct_answer ?? ''}
+                                    onChange={(e) =>
+                                      updateQuestion(index, { correct_answer: e.target.value })
+                                    }
+                                    placeholder="Respuesta modelo para calificación..."
+                                  />
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <p className="mb-2 font-medium">{question.text}</p>
+
+                              {question.type === 'multiple_choice' && question.options && (
+                                <div className="ml-4 space-y-1">
+                                  {question.options.map((option, optIndex) => (
+                                    <div
+                                      key={optIndex}
+                                      className={`text-sm ${
+                                        option === question.correct_answer
+                                          ? 'font-medium text-green-600'
+                                          : 'text-gray-600'
+                                      }`}
+                                    >
+                                      {String.fromCharCode(65 + optIndex)}. {option}
+                                      {option === question.correct_answer && ' ✓'}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {question.type === 'open_answer' && question.correct_answer && (
+                                <p className="mt-2 text-sm text-green-600">
+                                  Respuesta esperada: {question.correct_answer}
+                                </p>
+                              )}
+
+                              {question.illustration && (
+                                <QuestionIllustration
+                                  illustration={question.illustration}
+                                  className="mb-2 ml-0"
+                                />
+                              )}
+                            </>
                           )}
 
-                          <div className="mt-3 flex items-center gap-2">
+                          <div className="flex items-center gap-2">
                             <Label htmlFor={`question-points-${index}`} className="text-xs text-gray-600">
                               Valor (puntos)
                             </Label>
@@ -570,7 +1009,7 @@ export default function CreateExamPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                          className="text-red-500 hover:bg-red-50 hover:text-red-700"
                           onClick={() => removeQuestion(index)}
                         >
                           Eliminar
@@ -586,7 +1025,7 @@ export default function CreateExamPage() {
                   <ArrowLeft className="w-4 h-4 mr-2" />
                   Anterior
                 </Button>
-                <Button 
+                <Button
                   type="button"
                   onClick={() => void handleSaveExam()}
                   disabled={loading || generatedQuestions.length === 0 || pointsOverCap}

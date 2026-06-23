@@ -19,6 +19,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video } from 'lucide-react';
 import { BrandWordmark } from '@/components/brand-wordmark';
+import { QuestionIllustration } from '@/components/question-illustration';
 import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
 import {
@@ -921,10 +922,8 @@ export default function StudentExamPage() {
                 </div>
 
                 {question.illustration && (
-                  <div className="mb-4 ml-11 rounded-lg bg-white/35 p-4 backdrop-blur-[2px]">
-                    <p className="text-sm italic text-gray-500">
-                      <span className="font-medium">Ilustración:</span> {question.illustration}
-                    </p>
+                  <div className="mb-4 ml-11">
+                    <QuestionIllustration illustration={question.illustration} />
                   </div>
                 )}
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
+import { dedupeExamQuestions } from '@/lib/utils';
 
 export async function POST(
   request: NextRequest,
@@ -28,12 +29,24 @@ export async function POST(
       return NextResponse.json({ error: 'Examen no encontrado' }, { status: 404 });
     }
 
-    const rows = (questions as Record<string, unknown>[]).map((q) => {
-      const type = q.type === 'open_answer' ? 'open_answer' : 'multiple_choice';
-      const opts = q.options;
+    const uniqueQuestions = dedupeExamQuestions(
+      (questions as Record<string, unknown>[]).map((q) => ({
+        ...q,
+        text: String(q.text ?? '').trim(),
+      })) as { text: string }[]
+    );
+
+    if (uniqueQuestions.length === 0) {
+      return NextResponse.json({ error: 'Questions array is required' }, { status: 400 });
+    }
+
+    const rows = uniqueQuestions.map((q) => {
+      const row = q as Record<string, unknown>;
+      const type = row.type === 'open_answer' ? 'open_answer' : 'multiple_choice';
+      const opts = row.options;
       return {
         exam_id: examId,
-        text: String(q.text ?? '').trim() || '(sin texto)',
+        text: String(row.text ?? '').trim() || '(sin texto)',
         type,
         options:
           type === 'multiple_choice' && Array.isArray(opts)
@@ -42,18 +55,18 @@ export async function POST(
               ? [String(opts)]
               : null,
         correct_answer:
-          q.correct_answer != null && String(q.correct_answer).trim() !== ''
-            ? String(q.correct_answer)
+          row.correct_answer != null && String(row.correct_answer).trim() !== ''
+            ? String(row.correct_answer)
             : null,
         illustration:
-          q.illustration != null && String(q.illustration).trim() !== ''
-            ? String(q.illustration)
+          row.illustration != null && String(row.illustration).trim() !== ''
+            ? String(row.illustration)
             : null,
         points:
-          typeof q.points === 'number' && q.points > 0
-            ? q.points
-            : q.points != null && Number(q.points) > 0
-              ? Number(q.points)
+          typeof row.points === 'number' && row.points > 0
+            ? row.points
+            : row.points != null && Number(row.points) > 0
+              ? Number(row.points)
               : 1,
       };
     });

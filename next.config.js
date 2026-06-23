@@ -4,6 +4,7 @@ const nextConfig = {
     serverComponentsExternalPackages: ['pdfjs-dist'],
     outputFileTracingIncludes: {
       '/api/students/parse-import': ['./node_modules/pdfjs-dist/**/*'],
+      '/api/exams/parse-pdf': ['./node_modules/pdfjs-dist/**/*'],
     },
   },
   images: {
