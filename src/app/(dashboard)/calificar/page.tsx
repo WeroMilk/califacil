@@ -140,8 +140,6 @@ const LIVE_STRICT_OVERLAY_TICKS = 2;
 const CORNER_ALIGN_STABLE_TICKS = 4;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 280;
-/** Inset de visores (debe coincidir con MobileScanViewfinderOverlay). */
-const MOBILE_VIEWFINDER_INSET_FRAC = 0.05;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -1434,10 +1432,7 @@ export default function CalificarPage() {
               return;
             }
 
-            const cornersOk = areMobileViewfinderCornersAligned(
-              fullFrame,
-              MOBILE_VIEWFINDER_INSET_FRAC
-            );
+            const cornersOk = areMobileViewfinderCornersAligned(fullFrame);
             setCornersAlignedView(cornersOk);
             setLiveShowBubbleOverlay(false);
             setLiveScanGeometry(null);
@@ -2613,6 +2608,7 @@ export default function CalificarPage() {
                       aligned={cornersAlignedView}
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
+                      letterbox={liveVideoLayout}
                     />
                   </div>
                   {scanBusy ? (

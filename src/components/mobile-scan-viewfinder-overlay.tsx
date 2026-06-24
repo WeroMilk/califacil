@@ -1,23 +1,59 @@
 'use client';
 
+import { califacilViewfinderGuideInViewportPx, type CalifacilVideoLetterbox } from '@/lib/omrScan';
+import { CALIFACIL_VIEWFINDER_GUIDE } from '@/lib/printExam';
 import { cn } from '@/lib/utils';
-
-/** Inset del marco guía (debe coincidir con areMobileViewfinderCornersAligned). */
-export const MOBILE_SCAN_VIEWFINDER_INSET = '5%';
 
 type Props = {
   aligned: boolean;
   examTitle?: string;
   sheetLabel?: string;
+  /** Caja del video en pantalla (object-cover); alinea el marco con la hoja impresa. */
+  letterbox?: CalifacilVideoLetterbox | null;
 };
 
-export function MobileScanViewfinderOverlay({ aligned, examTitle, sheetLabel }: Props) {
-  const cornerClass = cn(
-    'absolute z-10 h-[3.25rem] w-[3.25rem] rounded-md border-[3px] shadow-sm transition-colors duration-200',
-    aligned
-      ? 'border-emerald-400 bg-emerald-400/15'
-      : 'border-white/85 bg-white/10'
+function CornerBracket({
+  aligned,
+  className,
+}: {
+  aligned: boolean;
+  className: string;
+}) {
+  return (
+    <span
+      className={cn(
+        'absolute z-10 h-10 w-10 border-[3px] transition-colors duration-200',
+        aligned ? 'border-emerald-400' : 'border-white/90',
+        className
+      )}
+      aria-hidden
+    />
   );
+}
+
+export function MobileScanViewfinderOverlay({
+  aligned,
+  examTitle,
+  sheetLabel,
+  letterbox,
+}: Props) {
+  const guidePx = letterbox ? califacilViewfinderGuideInViewportPx(letterbox) : null;
+
+  const frameStyle = guidePx
+    ? {
+        left: guidePx.left,
+        top: guidePx.top,
+        width: guidePx.width,
+        height: guidePx.height,
+      }
+    : {
+        left: '50%',
+        top: '50%',
+        width: `${CALIFACIL_VIEWFINDER_GUIDE.widthFrac * 100}%`,
+        maxHeight: '88%',
+        aspectRatio: String(CALIFACIL_VIEWFINDER_GUIDE.aspectRatio),
+        transform: 'translate(-50%, -50%)',
+      };
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
@@ -32,31 +68,23 @@ export function MobileScanViewfinderOverlay({ aligned, examTitle, sheetLabel }: 
           <p className="mt-1 text-[11px] font-semibold leading-snug text-white">
             {aligned
               ? 'Esquinas detectadas — capturando…'
-              : 'Alinear las 4 esquinas con los visores'}
+              : 'Encaja la hoja dentro del marco y alinea los 4 cuadros negros'}
           </p>
         </div>
       )}
 
-      <span
-        className={cornerClass}
-        style={{ left: MOBILE_SCAN_VIEWFINDER_INSET, top: MOBILE_SCAN_VIEWFINDER_INSET }}
-        aria-hidden
-      />
-      <span
-        className={cornerClass}
-        style={{ right: MOBILE_SCAN_VIEWFINDER_INSET, top: MOBILE_SCAN_VIEWFINDER_INSET }}
-        aria-hidden
-      />
-      <span
-        className={cornerClass}
-        style={{ left: MOBILE_SCAN_VIEWFINDER_INSET, bottom: MOBILE_SCAN_VIEWFINDER_INSET }}
-        aria-hidden
-      />
-      <span
-        className={cornerClass}
-        style={{ right: MOBILE_SCAN_VIEWFINDER_INSET, bottom: MOBILE_SCAN_VIEWFINDER_INSET }}
-        aria-hidden
-      />
+      <div
+        className={cn(
+          'absolute rounded-md border-2 border-dashed transition-colors duration-200',
+          aligned ? 'border-emerald-400/85' : 'border-white/55'
+        )}
+        style={{ position: 'absolute', ...frameStyle }}
+      >
+        <CornerBracket aligned={aligned} className="left-0 top-0 border-b-0 border-r-0 rounded-tl-md" />
+        <CornerBracket aligned={aligned} className="right-0 top-0 border-b-0 border-l-0 rounded-tr-md" />
+        <CornerBracket aligned={aligned} className="bottom-0 left-0 border-r-0 border-t-0 rounded-bl-md" />
+        <CornerBracket aligned={aligned} className="bottom-0 right-0 border-l-0 border-t-0 rounded-br-md" />
+      </div>
     </div>
   );
 }

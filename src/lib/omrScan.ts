@@ -181,6 +181,98 @@ export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect |
   return { x: left / W, y: top / H, w: rw / W, h: rh / H };
 }
 
+export type CalifacilVideoLetterbox = {
+  offsetX: number;
+  offsetY: number;
+  displayW: number;
+  displayH: number;
+  frameW: number;
+  frameH: number;
+};
+
+/** Mapeo object-cover: fotograma de cámara → caja visible en pantalla. */
+export function getObjectCoverVideoMapping(
+  frameW: number,
+  frameH: number,
+  displayW: number,
+  displayH: number
+): { scale: number; cropX: number; cropY: number } {
+  const scale = Math.max(displayW / frameW, displayH / frameH);
+  const scaledW = frameW * scale;
+  const scaledH = frameH * scale;
+  return {
+    scale,
+    cropX: (scaledW - displayW) / 2,
+    cropY: (scaledH - displayH) / 2,
+  };
+}
+
+/** Marco guía hoja carta (píxeles) dentro del área de video en pantalla. */
+export function califacilViewfinderGuideInViewportPx(
+  letterbox: CalifacilVideoLetterbox
+): { left: number; top: number; width: number; height: number } | null {
+  const norm = califacilViewfinderNormRect(letterbox.frameW, letterbox.frameH);
+  if (!norm) return null;
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    letterbox.frameW,
+    letterbox.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  return {
+    left: letterbox.offsetX + norm.x * letterbox.frameW * scale - cropX,
+    top: letterbox.offsetY + norm.y * letterbox.frameH * scale - cropY,
+    width: norm.w * letterbox.frameW * scale,
+    height: norm.h * letterbox.frameH * scale,
+  };
+}
+
+function countDarkCornerPatches(
+  ctx: CanvasRenderingContext2D,
+  corners: { x: number; y: number }[],
+  patchW: number,
+  patchH: number
+): number {
+  let darkCorners = 0;
+  for (const { x, y } of corners) {
+    const px = Math.max(0, Math.round(x));
+    const py = Math.max(0, Math.round(y));
+    const id = ctx.getImageData(px, py, patchW, patchH);
+    let darkCount = 0;
+    const total = patchW * patchH;
+    for (let i = 0; i < id.data.length; i += 4) {
+      const lum = id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
+      if (lum < 95) darkCount++;
+    }
+    if (darkCount / total >= 0.07) darkCorners++;
+  }
+  return darkCorners;
+}
+
+function viewfinderGuideCornerPatches(
+  W: number,
+  H: number
+): { corners: { x: number; y: number }[]; patchW: number; patchH: number } | null {
+  const norm = califacilViewfinderNormRect(W, H);
+  if (!norm) return null;
+  const patchW = Math.max(6, Math.round(norm.w * W * 0.09));
+  const patchH = Math.max(6, Math.round(norm.h * H * 0.09));
+  const x0 = norm.x * W;
+  const y0 = norm.y * H;
+  const x1 = (norm.x + norm.w) * W;
+  const y1 = (norm.y + norm.h) * H;
+  return {
+    patchW,
+    patchH,
+    corners: [
+      { x: x0, y: y0 },
+      { x: x1 - patchW, y: y0 },
+      { x: x0, y: y1 - patchH },
+      { x: x1 - patchW, y: y1 - patchH },
+    ],
+  };
+}
+
 /** Layout CSS object-contain del video dentro de un contenedor. */
 export type ObjectContainVideoLayout = {
   offsetX: number;
@@ -1291,8 +1383,48 @@ function detectCalifacilQuadFromCornerMarkers(
 
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(8, Math.round(width * 0.08));
-  const regionH = Math.max(8, Math.round(height * 0.08));
+  const regionW = Math.max(8, Math.round(width * 0.1));
+  const regionH = Math.max(8, Math.round(height * 0.1));
+
+  const norm = califacilViewfinderNormRect(width, height);
+  if (norm) {
+    const gx = norm.x * width;
+    const gy = norm.y * height;
+    const gw = norm.w * width;
+    const gh = norm.h * height;
+    const tl = findCornerMarkerPoint(d, width, height, gx, gy, regionW, regionH);
+    const tr = findCornerMarkerPoint(d, width, height, gx + gw - regionW, gy, regionW, regionH);
+    const br = findCornerMarkerPoint(
+      d,
+      width,
+      height,
+      gx + gw - regionW,
+      gy + gh - regionH,
+      regionW,
+      regionH
+    );
+    const bl = findCornerMarkerPoint(d, width, height, gx, gy + gh - regionH, regionW, regionH);
+    if (tl && tr && br && bl) {
+      const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
+      const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+      const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
+      const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+      const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+      const area =
+        Math.abs(
+          tl.x * tr.y +
+            tr.x * br.y +
+            br.x * bl.y +
+            bl.x * tl.y -
+            (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+        ) * 0.5;
+      const avgW = (topW + bottomW) * 0.5;
+      const avgH = (leftH + rightH) * 0.5;
+      if (area >= width * height * 0.08 && avgW >= width * 0.28 && avgH >= height * 0.28) {
+        return quad;
+      }
+    }
+  }
 
   const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
   const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
@@ -2304,6 +2436,11 @@ export function hasCalifacilCornerMarkers(
   const H = canvas.height;
   if (W < 80 || H < 80) return false;
 
+  const guidePatches = viewfinderGuideCornerPatches(W, H);
+  if (guidePatches && countDarkCornerPatches(ctx, guidePatches.corners, guidePatches.patchW, guidePatches.patchH) >= 3) {
+    return true;
+  }
+
   const insetFrac = Math.max(0, Math.min(0.2, opts?.insetFrac ?? 0));
   const patchW = Math.max(5, Math.round(W * 0.06));
   const patchH = Math.max(5, Math.round(H * 0.06));
@@ -2316,26 +2453,12 @@ export function hasCalifacilCornerMarkers(
     { x: W - patchW - ix, y: H - patchH - iy },
   ];
 
-  let darkCorners = 0;
-  for (const { x, y } of corners) {
-    const id = ctx.getImageData(x, y, patchW, patchH);
-    let darkCount = 0;
-    const total = patchW * patchH;
-    for (let i = 0; i < id.data.length; i += 4) {
-      const lum = id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
-      if (lum < 95) darkCount++;
-    }
-    if (darkCount / total >= 0.07) darkCorners++;
-  }
-  return darkCorners >= 3;
+  return countDarkCornerPatches(ctx, corners, patchW, patchH) >= 3;
 }
 
-/** Visores móviles: esquinas negras impresas alineadas con el marco en pantalla. */
-export function areMobileViewfinderCornersAligned(
-  canvas: HTMLCanvasElement,
-  insetFrac = 0.05
-): boolean {
-  return hasCalifacilCornerMarkers(canvas, { insetFrac });
+/** Visores móviles: esquinas negras impresas alineadas con el marco guía hoja carta. */
+export function areMobileViewfinderCornersAligned(canvas: HTMLCanvasElement): boolean {
+  return hasCalifacilCornerMarkers(canvas);
 }
 
 export function detectCalifacilSheetCornerQuad(

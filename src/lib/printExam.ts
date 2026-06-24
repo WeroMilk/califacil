@@ -633,6 +633,10 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       font-size: 7pt;
     }
     .omr-sheet-meta label { font-weight: bold; }
+    .print-page--omr-only .sheet-align-corner {
+      width: 10pt;
+      height: 10pt;
+    }
     .print-page--omr-only .sheet-header {
       margin-bottom: 8pt;
     }
