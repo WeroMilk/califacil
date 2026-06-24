@@ -7,6 +7,8 @@ export const examForfeitMessages: Record<string, string> = {
     'Salió del modo pantalla completa durante el examen. El intento quedó anulado.',
   capture_attempt:
     'Se detectó un intento de captura o impresión durante el examen. El intento quedó anulado.',
+  screen_share_stopped:
+    'Dejó de compartir la pantalla durante el examen. El intento quedó anulado.',
   abandoned: 'El intento fue abandonado o interrumpido.',
 };
 
@@ -27,10 +29,12 @@ export function voidReasonLabel(reason: string | null | undefined): string {
 
 export const examAttemptEventLabels: Record<string, string> = {
   exam_started: 'Examen iniciado',
+  screen_share_started: 'Compartió pantalla',
   tab_hidden: 'Pestaña oculta / cambio de app',
   tab_visible: 'Pestaña visible de nuevo',
   left_fullscreen: 'Salió de pantalla completa',
   capture_attempt: 'Intento de captura o impresión',
+  screen_share_stopped: 'Dejó de compartir pantalla',
   camera_stopped: 'Cámara desactivada',
   left_page: 'Abandonó la página',
   question_viewed: 'Vio pregunta',

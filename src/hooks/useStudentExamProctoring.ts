@@ -49,6 +49,7 @@ export function useStudentExamProctoring(options: {
   onLogEvent?: (eventType: string, metadata?: Record<string, unknown>) => void;
 }) {
   const streamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forfeitOnceRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -94,6 +95,8 @@ export function useStudentExamProctoring(options: {
 
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
       optsRef.current.onForfeit(reason, voidPersisted);
     },
     [clearHiddenTimer]
@@ -113,10 +116,26 @@ export function useStudentExamProctoring(options: {
     [forfeit, logEvent]
   );
 
+  const bindScreenStream = useCallback(
+    (stream: MediaStream) => {
+      screenStreamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        track.addEventListener('ended', () => {
+          logEvent('screen_share_stopped');
+          void forfeit('screen_share_stopped');
+        });
+      }
+    },
+    [forfeit, logEvent]
+  );
+
   const stopStream = useCallback(() => {
     clearHiddenTimer();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
   }, [clearHiddenTimer]);
 
   useEffect(() => {
@@ -254,5 +273,5 @@ export function useStudentExamProctoring(options: {
     [forfeit]
   );
 
-  return { bindStream, stopStream, logEvent, reportViolation };
+  return { bindStream, bindScreenStream, stopStream, logEvent, reportViolation };
 }

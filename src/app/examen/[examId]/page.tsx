@@ -17,12 +17,14 @@ import { Label } from '@/components/ui/label';
 import { StudentCombobox } from '@/components/student-combobox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
-import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video } from 'lucide-react';
+import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video, Monitor } from 'lucide-react';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { QuestionIllustration } from '@/components/question-illustration';
 import { ExamCaptureBlockedOverlay } from '@/components/exam-capture-blocked-overlay';
 import type { ExamProtectionOverlayVariant } from '@/components/exam-capture-blocked-overlay';
+import { ExamAntiLeakWatermark } from '@/components/exam-anti-leak-watermark';
 import { CAPTURE_FORFEIT_DELAY_MS, clearExamClipboardAccess, warmupExamClipboardAccess } from '@/lib/examAntiCapture';
+import { requestExamScreenShare, isExamScreenShareSupported } from '@/lib/examScreenShare';
 import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
 import {
@@ -149,6 +151,7 @@ export default function StudentExamPage() {
   const [clientSessionToken, setClientSessionToken] = useState<string | null>(null);
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
   const [fullscreenMode, setFullscreenMode] = useState<ExamFullscreenMode>('none');
+  const [screenShareActive, setScreenShareActive] = useState(false);
   const [protectionOverlay, setProtectionOverlay] = useState<ExamProtectionOverlayVariant | null>(
     null
   );
@@ -181,7 +184,7 @@ export default function StudentExamPage() {
     [examId, selectedStudentId, clientSessionToken]
   );
 
-  const { bindStream, stopStream, reportViolation } = useStudentExamProctoring({
+  const { bindStream, bindScreenStream, stopStream, reportViolation } = useStudentExamProctoring({
     examId,
     studentId: selectedStudentId || null,
     clientSession: clientSessionToken,
@@ -191,6 +194,7 @@ export default function StudentExamPage() {
       clearCaptureForfeitTimer();
       clearExamClipboardAccess();
       setProtectionOverlay(null);
+      setScreenShareActive(false);
       setExamImmersiveRoot(false);
       void exitExamFullscreenSafe();
       setFullscreenMode('none');
@@ -544,9 +548,57 @@ export default function StudentExamPage() {
         }
       }
 
+      const mobileDevice = isMobileExamDevice();
+      let screenStream: MediaStream | null = null;
+
+      if (!mobileDevice || isExamScreenShareSupported()) {
+        toast.message('Compartir pantalla', {
+          description: mobileDevice
+            ? 'Si el navegador lo permite, comparte tu pantalla para vigilancia del examen.'
+            : 'Elige «Pantalla completa» o «Ventana». No compartas solo esta pestaña.',
+          duration: 7000,
+        });
+
+        const maxAttempts = mobileDevice ? 1 : 3;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const screen = await requestExamScreenShare({ rejectBrowserTabOnly: !mobileDevice });
+          if (screen.ok) {
+            screenStream = screen.stream;
+            break;
+          }
+          if (screen.error === 'tab_only' && attempt < maxAttempts - 1) {
+            toast.error('Comparte toda la pantalla', {
+              description: 'No selecciones solo la pestaña del navegador. Vuelve a intentarlo.',
+            });
+            continue;
+          }
+          if (!mobileDevice) {
+            stream.getTracks().forEach((t) => t.stop());
+            if (screen.error === 'denied') {
+              toast.error('Debes compartir tu pantalla para hacer el examen');
+            } else if (screen.error === 'tab_only') {
+              toast.error('Debes compartir toda la pantalla, no solo esta pestaña');
+            } else {
+              toast.error('No se pudo activar el monitoreo de pantalla');
+            }
+            setStartingExam(false);
+            return;
+          }
+          break;
+        }
+      }
+
+      if (!mobileDevice && !screenStream) {
+        stream.getTracks().forEach((t) => t.stop());
+        toast.error('Debes compartir tu pantalla para hacer el examen');
+        setStartingExam(false);
+        return;
+      }
+
       const start = await rpcStartStudentExamAttempt(examId, selectedStudentId, token);
       if (!start.ok) {
         stream.getTracks().forEach((t) => t.stop());
+        screenStream?.getTracks().forEach((t) => t.stop());
         if (start.error === 'voided') {
           setPreStartBlock({ type: 'voided', message: start.void_reason ?? undefined });
           toast.error('Este intento ya fue anulado');
@@ -569,6 +621,16 @@ export default function StudentExamPage() {
       setClientSessionToken(token);
       previewStreamRef.current = stream;
       bindStream(stream);
+      if (screenStream) {
+        bindScreenStream(screenStream);
+        setScreenShareActive(true);
+        void rpcLogExamAttemptEvent(examId, selectedStudentId, token, 'screen_share_started');
+      } else if (mobileDevice) {
+        toast.warning('Monitoreo de pantalla no disponible en este dispositivo', {
+          description: 'No cambies de app ni tomes capturas; el examen se vigila por cámara y visibilidad.',
+          duration: 8000,
+        });
+      }
 
       setQuestions((prev) => shuffleArray(prev));
       if (isMobileExamDevice()) {
@@ -840,6 +902,10 @@ export default function StudentExamPage() {
                   <ul className="list-inside list-disc space-y-1 text-amber-900/90">
                     <li>La cámara frontal debe estar activa todo el tiempo.</li>
                     <li>
+                      En computadora debes compartir tu pantalla completa (o ventana) durante todo el
+                      examen; si dejas de compartir, el intento se anula.
+                    </li>
+                    <li>
                       Entrarás en pantalla completa (en el celular se activa automáticamente): no la cierres
                       ni salgas hasta terminar o el examen se anula.
                     </li>
@@ -896,10 +962,12 @@ export default function StudentExamPage() {
                   {checkingAttempt || startingExam ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {startingExam ? 'Activando cámara…' : 'Comprobando…'}
+                      {startingExam ? 'Activando cámara y pantalla…' : 'Comprobando…'}
                     </>
                   ) : (
-                    'Comenzar examen (cámara obligatoria)'
+                    isMobileExamDevice()
+                      ? 'Comenzar examen (cámara obligatoria)'
+                      : 'Comenzar examen (cámara y pantalla obligatorias)'
                   )}
                 </Button>
               </CardContent>
@@ -926,23 +994,33 @@ export default function StudentExamPage() {
       {protectionOverlay && <ExamCaptureBlockedOverlay variant={protectionOverlay} />}
       {hasStarted && !submitted && !forfeitReason && (
         <div
-          className="pointer-events-none fixed z-[10001] flex flex-col items-end gap-1"
+          className="pointer-events-none fixed z-[10001] flex flex-col items-end gap-2"
           style={{
             right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
             bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
           }}
         >
-          <span className="rounded-md bg-orange-600/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
-            Cámara
-          </span>
-          <video
-            ref={attachPreviewVideo}
-            className="h-[5.5rem] w-[6.75rem] rounded-xl border-[3px] border-orange-500 bg-black object-cover shadow-xl ring-1 ring-orange-300/40 sm:h-28 sm:w-32"
-            playsInline
-            muted
-            autoPlay
-            aria-label="Vista previa de la cámara del examen"
-          />
+          {screenShareActive && (
+            <div className="flex flex-col items-end gap-1">
+              <span className="flex items-center gap-1 rounded-md bg-emerald-700/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+                <Monitor className="h-3 w-3" />
+                Pantalla
+              </span>
+            </div>
+          )}
+          <div className="flex flex-col items-end gap-1">
+            <span className="rounded-md bg-orange-600/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+              Cámara
+            </span>
+            <video
+              ref={attachPreviewVideo}
+              className="h-[5.5rem] w-[6.75rem] rounded-xl border-[3px] border-orange-500 bg-black object-cover shadow-xl ring-1 ring-orange-300/40 sm:h-28 sm:w-32"
+              playsInline
+              muted
+              autoPlay
+              aria-label="Vista previa de la cámara del examen"
+            />
+          </div>
         </div>
       )}
 
@@ -976,24 +1054,11 @@ export default function StudentExamPage() {
         </div>
 
         <div className="relative space-y-6">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 z-[1] overflow-hidden opacity-[0.14]"
-          >
-            {Array.from({ length: 8 }).map((_, i) => (
-              <span
-                key={i}
-                className="absolute whitespace-nowrap text-sm font-semibold text-gray-900"
-                style={{
-                  top: `${(i * 14) % 100}%`,
-                  left: `${(i * 23) % 80}%`,
-                  transform: 'rotate(-24deg)',
-                }}
-              >
-                {selectedStudentName} · {exam.title}
-              </span>
-            ))}
-          </div>
+          <ExamAntiLeakWatermark
+            studentName={selectedStudentName}
+            examTitle={exam.title}
+            sessionTag={clientSessionToken?.slice(0, 8).toUpperCase()}
+          />
           {questions.map((question, index) => (
             <Card key={question.id}>
               <CardContent className="p-6">
