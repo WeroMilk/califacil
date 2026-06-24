@@ -406,10 +406,15 @@ function compactPeakPositions(values: number[], minGap: number): number[] {
 }
 
 /**
- * Detecta el recuadro real de la tabla CaliFacil en hoja completa escaneada
- * y lo convierte a plantilla fija para alinear overlay y lectura OMR.
+ * Detecta el recuadro de la tabla OMR en una franja vertical de la hoja.
  */
-function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTemplate | null {
+function detectTableBandInVerticalRange(
+  canvas: HTMLCanvasElement,
+  yStartRatio: number,
+  yEndRatio: number,
+  minTableHeightRatio: number,
+  maxTableHeightRatio: number
+): OmrFixedTemplate | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   const { width, height } = canvas;
@@ -417,9 +422,10 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
   const img = ctx.getImageData(0, 0, width, height).data;
   const rowCounts = new Array<number>(height).fill(0);
 
-  const yStart = Math.floor(height * 0.5);
+  const yStart = Math.floor(height * yStartRatio);
+  const yEnd = Math.min(height - 1, Math.floor(height * yEndRatio));
   const darkThr = 122;
-  for (let y = yStart; y < height; y++) {
+  for (let y = yStart; y <= yEnd; y++) {
     let c = 0;
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
@@ -429,9 +435,9 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
     rowCounts[y] = c;
   }
 
-  const rowMin = Math.floor(width * 0.16);
+  const rowMin = Math.floor(width * 0.12);
   const rowPeaksRaw: number[] = [];
-  for (let y = yStart; y < height; y++) {
+  for (let y = yStart; y <= yEnd; y++) {
     if (rowCounts[y] >= rowMin) rowPeaksRaw.push(y);
   }
   const rowPeaks = compactPeakPositions(rowPeaksRaw, 3);
@@ -440,7 +446,7 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
   const topY = Math.max(yStart, rowPeaks[0]! - 2);
   const bottomY = Math.min(height - 1, rowPeaks[rowPeaks.length - 1]! + 2);
   const tableH = bottomY - topY;
-  if (tableH < height * 0.12 || tableH > height * 0.4) return null;
+  if (tableH < height * minTableHeightRatio || tableH > height * maxTableHeightRatio) return null;
 
   const colCounts = new Array<number>(width).fill(0);
   for (let x = 0; x < width; x++) {
@@ -452,7 +458,7 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
     }
     colCounts[x] = c;
   }
-  const colMin = Math.floor(tableH * 0.2);
+  const colMin = Math.floor(tableH * 0.18);
   const colPeaksRaw: number[] = [];
   for (let x = 0; x < width; x++) {
     if (colCounts[x] >= colMin) colPeaksRaw.push(x);
@@ -463,11 +469,11 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
   const leftX = Math.max(0, colPeaks[0]! - 2);
   const rightX = Math.min(width - 1, colPeaks[colPeaks.length - 1]! + 2);
   const tableW = rightX - leftX;
-  if (tableW < width * 0.45 || tableW > width * 0.9) return null;
+  if (tableW < width * 0.45 || tableW > width * 0.96) return null;
 
   const innerRowPeaks = rowPeaks.filter((y) => y >= topY + 8);
-  const headerBottom = innerRowPeaks.length > 0 ? innerRowPeaks[0]! : topY + tableH * 0.17;
-  const titleStrip = Math.max(0.1, Math.min(0.26, (headerBottom - topY) / Math.max(1, tableH)));
+  const headerBottom = innerRowPeaks.length > 0 ? innerRowPeaks[0]! : topY + tableH * 0.08;
+  const titleStrip = Math.max(0.04, Math.min(0.22, (headerBottom - topY) / Math.max(1, tableH)));
 
   const innerCols = colPeaks.filter((x) => x > leftX + 8);
   const qnumDivider = innerCols.length > 0 ? innerCols[0]! : leftX + tableW * 0.1;
@@ -481,6 +487,18 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
     titleStripRatioOfTable: titleStrip,
     qnumWidthRatio: qnumRatio,
   };
+}
+
+/**
+ * Detecta el recuadro real de la tabla CaliFacil en hoja completa escaneada
+ * y lo convierte a plantilla fija para alinear overlay y lectura OMR.
+ */
+function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTemplate | null {
+  /** Hoja de respuestas dedicada: tabla alta en el centro de la página. */
+  const answerSheet = detectTableBandInVerticalRange(canvas, 0.07, 0.99, 0.52, 0.94);
+  if (answerSheet) return answerSheet;
+  /** Hoja mixta legada: tabla en el pie. */
+  return detectTableBandInVerticalRange(canvas, 0.48, 0.99, 0.12, 0.42);
 }
 
 type Point = { x: number; y: number };
@@ -1949,10 +1967,40 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
   return h / w >= 1.2;
 }
 
+function buildAnswerSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
+  return [
+    {
+      tableLeftRatio: 0.036,
+      tableTopRatio: 0.108,
+      tableWidthRatio: 0.928,
+      tableHeightRatio: 0.878,
+      titleStripRatioOfTable: 0.042,
+      qnumWidthRatio: 0.088,
+    },
+    {
+      tableLeftRatio: 0.042,
+      tableTopRatio: 0.114,
+      tableWidthRatio: 0.916,
+      tableHeightRatio: 0.868,
+      titleStripRatioOfTable: 0.048,
+      qnumWidthRatio: 0.092,
+    },
+    {
+      tableLeftRatio: 0.048,
+      tableTopRatio: 0.12,
+      tableWidthRatio: 0.904,
+      tableHeightRatio: 0.858,
+      titleStripRatioOfTable: 0.052,
+      qnumWidthRatio: 0.096,
+    },
+  ];
+}
+
 function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
   // Plantillas calibradas con escaneo real del formato Sonora/CaliFacil enviado por el usuario.
   // Recuadro detectado aprox: left 0.172, top 0.609, width 0.684, height 0.249.
   return [
+    ...buildAnswerSheetFixedTemplateCandidates(),
     {
       tableLeftRatio: 0.166,
       tableTopRatio: 0.602,

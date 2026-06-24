@@ -137,9 +137,9 @@ const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas consecutivos con esquinas alineadas antes de captura automática móvil. */
-const CORNER_ALIGN_STABLE_TICKS = 4;
+const CORNER_ALIGN_STABLE_TICKS = 2;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 280;
+const MOBILE_CORNER_LOOP_MS = 200;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -436,7 +436,7 @@ export default function CalificarPage() {
     (
       source: HTMLImageElement | HTMLCanvasElement,
       fallbackFile?: File,
-      opts?: { skipReviewUi?: boolean }
+      opts?: { skipReviewUi?: boolean; preWarped?: boolean }
     ) => Promise<{ success: boolean; chunkDraft?: Record<string, string> }>
   >(async () => ({ success: false }));
 
@@ -714,13 +714,14 @@ export default function CalificarPage() {
     async (
       source: HTMLImageElement | HTMLCanvasElement,
       fallbackFile?: File,
-      opts?: { skipReviewUi?: boolean }
+      opts?: { skipReviewUi?: boolean; preWarped?: boolean }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       if (!examId || !exam || !supportsCalifacil) {
         toast.error('Selecciona un examen válido antes de escanear.');
         return { success: false };
       }
       const skipReviewUi = opts?.skipReviewUi;
+      const preWarped = Boolean(opts?.preWarped);
       const chunk = sheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0) {
         toast.error('No hay preguntas para escanear en esta hoja.');
@@ -729,17 +730,20 @@ export default function CalificarPage() {
       /** En móvil o archivo subido, respetamos la imagen tal cual: sin auto-rotar/deformar. */
       const isMobileCamera = isMobile && !fallbackFile;
       const preserveCapturedFrame = isMobileCamera ? false : isMobile || Boolean(fallbackFile);
-      const oriented = isMobileCamera
-        ? (autoOrientCalifacilSheet(source, omrCols, {
-            useGuideCrop: false,
-            allowTiltSweep: true,
-          }) ?? source)
-        : preserveCapturedFrame
+      const oriented =
+        preWarped && isMobileCamera
           ? source
-          : (autoOrientCalifacilSheet(source, omrCols, {
-              useGuideCrop: false,
-              allowTiltSweep: true,
-            }) ?? source);
+          : isMobileCamera
+            ? (autoOrientCalifacilSheet(source, omrCols, {
+                useGuideCrop: false,
+                allowTiltSweep: true,
+              }) ?? source)
+            : preserveCapturedFrame
+              ? source
+              : (autoOrientCalifacilSheet(source, omrCols, {
+                  useGuideCrop: false,
+                  allowTiltSweep: true,
+                }) ?? source);
       const examCanvas =
         oriented instanceof HTMLCanvasElement
           ? oriented
@@ -761,12 +765,12 @@ export default function CalificarPage() {
         );
         return { success: false };
       }
-      const useFixedTemplate = isMobileCamera ? sheetStrict : Boolean(fallbackFile);
+      const useFixedTemplate = preWarped && isMobileCamera ? true : isMobileCamera ? sheetStrict : Boolean(fallbackFile);
       let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
       let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
         skipGuideCrop: true,
-        geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
-        preserveInputCanvas: isMobileCamera ? false : preserveCapturedFrame,
+        geometryMode: preWarped && isMobileCamera ? 'fullSheet' : isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
+        preserveInputCanvas: preWarped && isMobileCamera ? true : isMobileCamera ? false : preserveCapturedFrame,
         fixedTemplateAnchor: useFixedTemplate,
         rowCount: omrRowCount,
       });
@@ -774,7 +778,7 @@ export default function CalificarPage() {
       let mapped = mapRawToDraft(raw, chunk);
       const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
 
-      if (isMobile && mapped.resolvedCount < minResolved) {
+      if (isMobile && mapped.resolvedCount < minResolved && !(preWarped && isMobileCamera)) {
         const recoverySource =
           autoOrientCalifacilSheet(source, omrCols, {
             useGuideCrop: false,
@@ -1587,9 +1591,16 @@ export default function CalificarPage() {
                 maxSide: MOBILE_CAPTURE_MAX_SIDE,
               });
               if (!fullCanvas) return;
-              const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas) ?? fullCanvas;
-              await showAutoCaptureSnapshot(warped);
-              const result = await finalizeCapturedSheetRef.current(warped);
+              const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+              if (!warped) {
+                setLiveStatus('No se alinearon las esquinas negras. Mantén la hoja dentro del marco.');
+                toast.error('No se detectaron las 4 esquinas negras. Alinea la hoja e intenta de nuevo.');
+                return;
+              }
+              playAutoCaptureClickSound();
+              const result = await finalizeCapturedSheetRef.current(warped, undefined, {
+                preWarped: true,
+              });
               if (result.success) {
                 playScanCompleteChime();
                 stopLiveCamera();
@@ -2287,8 +2298,13 @@ export default function CalificarPage() {
         toast.error('No se pudo capturar. Intenta de nuevo.');
         return;
       }
-      const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas) ?? fullCanvas;
-      const result = await finalizeCapturedSheet(warped);
+      const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+      if (!warped) {
+        toast.error('No se detectaron las 4 esquinas negras. Alinea la hoja e intenta de nuevo.');
+        return;
+      }
+      playAutoCaptureClickSound();
+      const result = await finalizeCapturedSheet(warped, undefined, { preWarped: true });
       if (result.success) {
         playScanCompleteChime();
       }

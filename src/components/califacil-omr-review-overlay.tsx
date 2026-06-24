@@ -11,7 +11,7 @@ type Props = {
   expectedPicks?: (number | null)[];
   /** Opacidad visual del overlay esperado (0..1). */
   expectedOpacity?: number;
-  /** Filas activas en esta hoja (≤ 10). */
+  /** Filas activas en esta hoja. */
   rowCount: number;
   /** Opcional: recorta el overlay a una región normalizada 0..1. */
   clipRect?: { x: number; y: number; w: number; h: number } | null;
@@ -28,7 +28,7 @@ export function CalifacilOmrReviewOverlay({
   rowCount,
   clipRect = null,
 }: Props) {
-  const rows = Math.min(10, rowCount);
+  const rows = Math.min(rowCount, geometry.cells.length);
   const clipId = useId();
   const W = Math.max(1, geometry.imageWidth);
   const H = Math.max(1, geometry.imageHeight);
