@@ -33,25 +33,29 @@ export function useExamFolders(teacherId: string | undefined) {
     void fetchFolders();
   }, [fetchFolders]);
 
-  const createFolder = async (name: string, parentId: string | null): Promise<ExamFolder | null> => {
-    if (!teacherId) return null;
+  const createFolder = async (
+    name: string,
+    parentId: string | null
+  ): Promise<{ folder: ExamFolder | null; error: string | null }> => {
+    if (!teacherId) return { folder: null, error: 'Sesión no válida' };
     const trimmed = name.trim();
-    if (!trimmed) return null;
+    if (!trimmed) return { folder: null, error: 'El nombre está vacío' };
 
-    try {
-      const { data, error: insertError } = await supabase
-        .from('exam_folders')
-        .insert([{ teacher_id: teacherId, parent_id: parentId, name: trimmed }])
-        .select()
-        .single();
+    const { data, error: insertError } = await supabase
+      .from('exam_folders')
+      .insert([{ teacher_id: teacherId, parent_id: parentId, name: trimmed }])
+      .select()
+      .single();
 
-      if (insertError) throw insertError;
-      setFolders((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name, 'es')));
-      return data;
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al crear carpeta');
-      return null;
+    if (insertError) {
+      const message = insertError.message || 'Error al crear carpeta';
+      setError(message);
+      console.error('createFolder:', insertError);
+      return { folder: null, error: message };
     }
+
+    setFolders((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name, 'es')));
+    return { folder: data, error: null };
   };
 
   const renameFolder = async (folderId: string, name: string): Promise<boolean> => {

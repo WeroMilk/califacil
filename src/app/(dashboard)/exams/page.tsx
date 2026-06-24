@@ -164,12 +164,18 @@ export default function ExamsPage() {
           toast.error('No se pudo renombrar la carpeta');
         }
       } else {
-        const created = await createFolder(name, currentFolderId);
+        const { folder: created, error: createError } = await createFolder(name, currentFolderId);
         if (created) {
           toast.success('Carpeta creada');
           setFolderDialogOpen(false);
         } else {
-          toast.error('No se pudo crear la carpeta. ¿Aplicaste la migración de carpetas en Supabase?');
+          toast.error(createError || 'No se pudo crear la carpeta', {
+            description:
+              createError?.includes('exam_folders') || createError?.includes('schema cache')
+                ? 'Ejecuta en Supabase el archivo 20260624110000_exam_folders_grants_and_policy_fix.sql'
+                : undefined,
+            duration: 8000,
+          });
         }
       }
     } finally {
