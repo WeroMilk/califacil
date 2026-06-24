@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { GeneratedQuestion } from '@/types';
 import type { PdfImageAsset } from '@/lib/pdfImages.server';
 import { pdfBufferBytes } from '@/lib/pdfBuffer.server';
+import { loadPdfJsServer } from '@/lib/pdfjsServer.server';
 import { isQuestionIllustrationImage } from '@/lib/utils';
 
 /** pdfjs-dist exige URLs con slash final y barras normales (incluso en Windows). */
@@ -55,7 +56,7 @@ function groupItemsIntoLines(
 }
 
 export async function extractPdfStructureFromBuffer(buffer: ArrayBuffer): Promise<PdfStructure> {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { getDocument } = await loadPdfJsServer();
   const loadingTask = getDocument({
     data: pdfBufferBytes(buffer),
     useWorkerFetch: false,

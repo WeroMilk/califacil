@@ -1,10 +1,20 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    serverComponentsExternalPackages: ['pdfjs-dist'],
+    serverComponentsExternalPackages: ['pdfjs-dist', '@napi-rs/canvas'],
     outputFileTracingIncludes: {
-      '/api/students/parse-import': ['./node_modules/pdfjs-dist/**/*'],
-      '/api/exams/parse-pdf': ['./node_modules/pdfjs-dist/**/*'],
+      '/api/students/parse-import': [
+        './node_modules/pdfjs-dist/**/*',
+        './node_modules/@napi-rs/canvas/**/*',
+        './node_modules/@napi-rs/canvas-linux-x64-gnu/**/*',
+        './node_modules/@napi-rs/canvas-linux-x64-musl/**/*',
+      ],
+      '/api/exams/parse-pdf': [
+        './node_modules/pdfjs-dist/**/*',
+        './node_modules/@napi-rs/canvas/**/*',
+        './node_modules/@napi-rs/canvas-linux-x64-gnu/**/*',
+        './node_modules/@napi-rs/canvas-linux-x64-musl/**/*',
+      ],
     },
   },
   images: {

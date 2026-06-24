@@ -1,6 +1,7 @@
 import path from 'node:path';
 import sharp from 'sharp';
 import { pdfBufferBytes } from '@/lib/pdfBuffer.server';
+import { loadPdfJsServer } from '@/lib/pdfjsServer.server';
 
 /** pdfjs-dist exige URLs con slash final y barras normales (incluso en Windows). */
 function pdfjsAssetUrl(...segments: string[]): string {
@@ -79,7 +80,7 @@ async function rawImageToDataUrl(imgData: PdfRawImage): Promise<string | null> {
 }
 
 async function loadPdfDocument(buffer: ArrayBuffer): Promise<PdfDocument> {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { getDocument } = await loadPdfJsServer();
   const loadingTask = getDocument({
     data: pdfBufferBytes(buffer),
     useWorkerFetch: false,
@@ -93,7 +94,7 @@ async function loadPdfDocument(buffer: ArrayBuffer): Promise<PdfDocument> {
 }
 
 export async function extractPdfImagesFromBuffer(buffer: ArrayBuffer): Promise<PdfImageAsset[]> {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjs = await loadPdfJsServer();
   const OPS = pdfjs.OPS as Record<string, number>;
   const pdf = await loadPdfDocument(buffer);
   const images: PdfImageAsset[] = [];
