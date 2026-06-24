@@ -45,6 +45,7 @@ export function useStudentExamProctoring(options: {
   onForfeit: (reason: string, voidPersisted: boolean) => void;
   onVisibilityHidden?: () => void;
   onVisibilityVisible?: () => void;
+  onCaptureAttempt?: (source: string) => void;
   onLogEvent?: (eventType: string, metadata?: Record<string, unknown>) => void;
 }) {
   const streamRef = useRef<MediaStream | null>(null);
@@ -124,7 +125,11 @@ export function useStudentExamProctoring(options: {
       active: true,
       onCaptureAttempt: (source) => {
         logEvent('capture_attempt', { source });
-        void forfeit('capture_attempt');
+        if (optsRef.current.onCaptureAttempt) {
+          optsRef.current.onCaptureAttempt(source);
+        } else {
+          void forfeit('capture_attempt');
+        }
       },
     });
   }, [options.active, options.studentId, options.clientSession, forfeit, logEvent]);

@@ -20,6 +20,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video } from 'lucide-react';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { QuestionIllustration } from '@/components/question-illustration';
+import { ExamCaptureBlockedOverlay } from '@/components/exam-capture-blocked-overlay';
+import type { ExamProtectionOverlayVariant } from '@/components/exam-capture-blocked-overlay';
+import { CAPTURE_FORFEIT_DELAY_MS, clearExamClipboardAccess, warmupExamClipboardAccess } from '@/lib/examAntiCapture';
 import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
 import {
@@ -145,13 +148,30 @@ export default function StudentExamPage() {
   const [startingExam, setStartingExam] = useState(false);
   const [clientSessionToken, setClientSessionToken] = useState<string | null>(null);
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
-  const [cameraPortalReady, setCameraPortalReady] = useState(false);
   const [fullscreenMode, setFullscreenMode] = useState<ExamFullscreenMode>('none');
-  const [contentHidden, setContentHidden] = useState(false);
+  const [protectionOverlay, setProtectionOverlay] = useState<ExamProtectionOverlayVariant | null>(
+    null
+  );
+  const captureForfeitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportViolationRef = useRef<(reason: string) => void>(() => undefined);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const clearCaptureForfeitTimer = useCallback(() => {
+    if (captureForfeitTimerRef.current) {
+      clearTimeout(captureForfeitTimerRef.current);
+      captureForfeitTimerRef.current = null;
+    }
+  }, []);
+
   const examShellRef = useRef<HTMLDivElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+
+  const attachPreviewVideo = useCallback((node: HTMLVideoElement | null) => {
+    if (!node) return;
+    const stream = previewStreamRef.current;
+    if (!stream) return;
+    node.srcObject = stream;
+    void node.play().catch(() => undefined);
+  }, []);
 
   const logAttemptEvent = useCallback(
     (eventType: string, metadata?: Record<string, unknown>) => {
@@ -168,10 +188,12 @@ export default function StudentExamPage() {
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
     fullscreenMode,
     onForfeit: (reason, voidPersisted) => {
+      clearCaptureForfeitTimer();
+      clearExamClipboardAccess();
+      setProtectionOverlay(null);
       setExamImmersiveRoot(false);
       void exitExamFullscreenSafe();
       setFullscreenMode('none');
-      setContentHidden(false);
       previewStreamRef.current = null;
       clearExamClientSession(examId, selectedStudentId);
       setClientSessionToken(null);
@@ -185,26 +207,26 @@ export default function StudentExamPage() {
         });
       }
     },
-    onVisibilityHidden: () => setContentHidden(true),
-    onVisibilityVisible: () => setContentHidden(false),
+    onVisibilityHidden: () => setProtectionOverlay('tab_hidden'),
+    onVisibilityVisible: () => {
+      clearCaptureForfeitTimer();
+      setProtectionOverlay(null);
+    },
+    onCaptureAttempt: (source) => {
+      setProtectionOverlay('screenshot');
+      clearCaptureForfeitTimer();
+      captureForfeitTimerRef.current = setTimeout(() => {
+        reportViolationRef.current('capture_attempt');
+      }, CAPTURE_FORFEIT_DELAY_MS);
+    },
     onLogEvent: (eventType, metadata) => logAttemptEvent(eventType, metadata),
   });
 
-  useEffect(() => {
-    setCameraPortalReady(true);
-  }, []);
+  reportViolationRef.current = reportViolation;
 
-  useLayoutEffect(() => {
-    if (!hasStarted || submitted || forfeitReason) return;
-    const el = videoRef.current;
-    const stream = previewStreamRef.current;
-    if (!el || !stream) return;
-    el.srcObject = stream;
-    void el.play().catch(() => undefined);
-    return () => {
-      el.srcObject = null;
-    };
-  }, [hasStarted, submitted, forfeitReason]);
+  useEffect(() => {
+    return () => clearCaptureForfeitTimer();
+  }, [clearCaptureForfeitTimer]);
 
   const fetchExam = useCallback(async () => {
     try {
@@ -462,6 +484,22 @@ export default function StudentExamPage() {
     const token = readExamClientSession(examId, selectedStudentId) || crypto.randomUUID();
 
     try {
+      toast.message('Protección del examen', {
+        description:
+          'Si el navegador pide permiso de portapapeles, acéptalo para detectar capturas de pantalla.',
+        duration: 5000,
+      });
+      const clipboardAccess = await warmupExamClipboardAccess();
+      if (clipboardAccess === 'granted') {
+        toast.success('Protección antcapturas activa');
+      } else if (clipboardAccess === 'denied') {
+        toast.warning('Detección de capturas limitada', {
+          description:
+            'Sin permiso de portapapeles algunas capturas podrían no detectarse. El examen puede continuar.',
+          duration: 7000,
+        });
+      }
+
       let stream: MediaStream | null = null;
       if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
         const attempts: MediaStreamConstraints[] = [
@@ -885,44 +923,28 @@ export default function StudentExamPage() {
       )}
       style={{ WebkitTouchCallout: 'none' }}
     >
-      {contentHidden && (
-        <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-gray-900/95 p-6 text-center text-white backdrop-blur-md">
-          <div>
-            <AlertCircle className="mx-auto mb-4 h-12 w-12 text-amber-400" />
-            <p className="text-lg font-semibold">Contenido oculto</p>
-            <p className="mt-2 text-sm text-gray-300">
-              Vuelve a esta pestaña o aplicación de inmediato o el examen se anulará.
-            </p>
-          </div>
+      {protectionOverlay && <ExamCaptureBlockedOverlay variant={protectionOverlay} />}
+      {hasStarted && !submitted && !forfeitReason && (
+        <div
+          className="pointer-events-none fixed z-[10001] flex flex-col items-end gap-1"
+          style={{
+            right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+            bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+          }}
+        >
+          <span className="rounded-md bg-orange-600/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+            Cámara
+          </span>
+          <video
+            ref={attachPreviewVideo}
+            className="h-[5.5rem] w-[6.75rem] rounded-xl border-[3px] border-orange-500 bg-black object-cover shadow-xl ring-1 ring-orange-300/40 sm:h-28 sm:w-32"
+            playsInline
+            muted
+            autoPlay
+            aria-label="Vista previa de la cámara del examen"
+          />
         </div>
       )}
-      {hasStarted &&
-        !submitted &&
-        !forfeitReason &&
-        cameraPortalReady &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed z-[10000] flex flex-col items-end gap-1"
-            style={{
-              right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
-              bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
-            }}
-          >
-            <span className="rounded-md bg-orange-600/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
-              Cámara
-            </span>
-            <video
-              ref={videoRef}
-              className="h-[5.5rem] w-[6.75rem] rounded-xl border-[3px] border-orange-500 bg-black object-cover shadow-xl ring-1 ring-orange-300/40 sm:h-28 sm:w-32"
-              playsInline
-              muted
-              autoPlay
-              aria-label="Vista previa de la cámara del examen"
-            />
-          </div>,
-          document.body
-        )}
 
       <div
         className={cn(
