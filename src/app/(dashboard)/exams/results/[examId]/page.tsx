@@ -51,6 +51,11 @@ import {
   isMultipleChoiceAnswerCorrect,
   questionPoints,
 } from '@/lib/utils';
+import {
+  decodeWhiteboardReference,
+  isWhiteboardQuestion,
+  isWhiteboardStudentAnswer,
+} from '@/lib/whiteboardAnswer';
 
 interface StudentResult {
   studentId: string;
@@ -84,6 +89,16 @@ type StudentQuestionBreakdown = {
   isCorrect: boolean | null;
 };
 
+function renderAnswerCell(text: string, emptyLabel: string) {
+  if (isWhiteboardStudentAnswer(text)) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={text} alt="Respuesta en pizarrón" className="max-h-28 w-auto rounded border border-gray-200" />
+    );
+  }
+  return text || emptyLabel;
+}
+
 function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Question[]): StudentQuestionBreakdown[] {
   return questions.map((q, idx) => {
     const answer = result.answers.find((a) => a.question_id === q.id);
@@ -97,6 +112,16 @@ function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Que
         studentAnswer,
         correctAnswer,
         isCorrect: isMultipleChoiceAnswerCorrect(q.options, studentAnswer, correctAnswer),
+      };
+    }
+    if (isWhiteboardQuestion(q)) {
+      return {
+        questionId: q.id,
+        questionNumber: idx + 1,
+        questionText: q.text,
+        studentAnswer,
+        correctAnswer: decodeWhiteboardReference(q.correct_answer) ?? '',
+        isCorrect: answer?.is_correct ?? null,
       };
     }
     return {
@@ -870,10 +895,10 @@ export default function ExamResultsPage() {
                                 <tr key={row.questionId} className="border-b align-top">
                                   <td className="px-1 py-2 font-medium text-gray-800 sm:px-3">{row.questionNumber}</td>
                                   <td className="min-w-0 px-1 py-2 text-gray-700 [word-break:break-word] sm:px-3">
-                                    {row.studentAnswer || 'Sin respuesta'}
+                                    {renderAnswerCell(row.studentAnswer, 'Sin respuesta')}
                                   </td>
                                   <td className="min-w-0 px-1 py-2 text-gray-700 [word-break:break-word] sm:px-3">
-                                    {row.correctAnswer || '—'}
+                                    {renderAnswerCell(row.correctAnswer, '—')}
                                   </td>
                                   <td className="px-1 py-2 sm:px-3">
                                     {row.isCorrect === true ? (

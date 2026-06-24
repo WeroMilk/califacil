@@ -20,10 +20,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video, Monitor } from 'lucide-react';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { QuestionIllustration } from '@/components/question-illustration';
+import { ExamWhiteboard } from '@/components/exam-whiteboard';
 import { ExamCaptureBlockedOverlay } from '@/components/exam-capture-blocked-overlay';
 import type { ExamProtectionOverlayVariant } from '@/components/exam-capture-blocked-overlay';
 import { ExamAntiLeakWatermark } from '@/components/exam-anti-leak-watermark';
-import { CAPTURE_FORFEIT_DELAY_MS, clearExamClipboardAccess, warmupExamClipboardAccess } from '@/lib/examAntiCapture';
+import {
+  CAPTURE_FORFEIT_DELAY_MS,
+  clearExamClipboardAccess,
+  warmupExamClipboardAccess,
+} from '@/lib/examAntiCapture';
+import {
+  isWhiteboardQuestion,
+  isWhiteboardStudentAnswer,
+} from '@/lib/whiteboardAnswer';
 import { requestExamScreenShare, isExamScreenShareSupported } from '@/lib/examScreenShare';
 import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
@@ -653,7 +662,11 @@ export default function StudentExamPage() {
 
   const handleSubmit = async () => {
     logAttemptEvent('submit_clicked');
-    const unansweredQuestions = questions.filter((q) => !answers[q.id]);
+    const unansweredQuestions = questions.filter((q) => {
+      const answer = answers[q.id];
+      if (isWhiteboardQuestion(q)) return !isWhiteboardStudentAnswer(answer);
+      return !answer?.trim();
+    });
     if (unansweredQuestions.length > 0) {
       toast.error(`Faltan ${unansweredQuestions.length} preguntas por responder`);
       return;
@@ -692,6 +705,18 @@ export default function StudentExamPage() {
               is_correct: isCorrect as boolean | null,
               score: isCorrect ? pts : 0,
               _points: isCorrect ? pts : 0,
+            };
+          }
+
+          if (isWhiteboardQuestion(question)) {
+            return {
+              exam_id: examId,
+              student_id: studentId,
+              question_id: question.id,
+              answer_text: answerText,
+              is_correct: null,
+              score: null,
+              _points: 0,
             };
           }
 
@@ -785,6 +810,11 @@ export default function StudentExamPage() {
       setScore(calculatePercentage(obtainedPoints, totalPoints));
       setSubmitted(true);
       toast.success('¡Examen enviado exitosamente!');
+      if (questions.some((q) => isWhiteboardQuestion(q))) {
+        toast.message('Las respuestas en pizarrón serán revisadas por tu maestro.', {
+          duration: 6000,
+        });
+      }
       if (openSkippedAi) {
         toast.message(
           'Hay preguntas abiertas sin calificación automática: falta OPENAI_API_KEY en el servidor.',
@@ -1095,7 +1125,20 @@ export default function StudentExamPage() {
                   </RadioGroup>
                 )}
 
-                {question.type === 'open_answer' && (
+                {isWhiteboardQuestion(question) && (
+                  <div className="ml-11">
+                    <p className="mb-2 text-sm text-gray-600">
+                      Dibuja tu respuesta en el pizarrón:
+                    </p>
+                    <ExamWhiteboard
+                      value={answers[question.id] ?? null}
+                      onChange={(dataUrl) => handleAnswerChange(question.id, dataUrl)}
+                      minHeight={240}
+                    />
+                  </div>
+                )}
+
+                {question.type === 'open_answer' && !isWhiteboardQuestion(question) && (
                   <div className="ml-11">
                     <Textarea
                       placeholder="Escribe tu respuesta aquí..."

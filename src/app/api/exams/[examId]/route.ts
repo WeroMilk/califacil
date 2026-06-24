@@ -7,6 +7,7 @@ const PATCHABLE_EXAM_KEYS = [
   'title',
   'description',
   'group_id',
+  'folder_id',
 ] as const;
 
 type PatchableKey = (typeof PATCHABLE_EXAM_KEYS)[number];

@@ -20,10 +20,19 @@ export interface Student {
   created_at: string;
 }
 
+export interface ExamFolder {
+  id: string;
+  teacher_id: string;
+  parent_id: string | null;
+  name: string;
+  created_at: string;
+}
+
 export interface Exam {
   id: string;
   teacher_id: string;
   group_id: string | null;
+  folder_id: string | null;
   title: string;
   description: string | null;
   qr_code: string | null;
@@ -83,4 +92,6 @@ export interface GeneratedQuestion {
   correct_answer?: string;
   illustration?: string;
   points?: number;
+  /** Solo en creación: distingue respuesta abierta en texto vs pizarrón. */
+  responseMode?: 'text' | 'whiteboard';
 }

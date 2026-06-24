@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useGroups } from '@/hooks/useGroups';
 import { useExams } from '@/hooks/useExams';
@@ -26,16 +26,23 @@ import {
   Upload,
   PenLine,
   Plus,
+  Presentation,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
 import { QuestionIllustration } from '@/components/question-illustration';
 import { ExamPdfPreviewCrop } from '@/components/exam-pdf-preview-crop';
 import { QuestionImagePicker } from '@/components/question-image-picker';
+import { WhiteboardReferenceDialog } from '@/components/whiteboard-reference-dialog';
 import type { ExamCroppedImage } from '@/lib/pdfClientPreview';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { EXAM_POINTS_CAP, distributeExamPoints, examMaxScore, dedupeExamQuestions, normalizeQuestionText } from '@/lib/utils';
+import {
+  decodeWhiteboardReference,
+  isWhiteboardCorrectAnswer,
+} from '@/lib/whiteboardAnswer';
+import { ExamWhiteboard } from '@/components/exam-whiteboard';
 
 type QuestionSourceMode = 'ia' | 'pdf' | 'manual';
 
@@ -65,6 +72,8 @@ async function dashboardAuthHeadersOnly(): Promise<Record<string, string>> {
 
 export default function CreateExamPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const createFolderId = searchParams.get('folder');
   const { user } = useAuth();
   const { groups } = useGroups(user?.id);
   const { createExam, deleteExam } = useExams(user?.id);
@@ -91,6 +100,7 @@ export default function CreateExamPage() {
   const [croppedImages, setCroppedImages] = useState<ExamCroppedImage[]>([]);
 
   const [generatedQuestions, setGeneratedQuestions] = useState<GeneratedQuestion[]>([]);
+  const [whiteboardDialogIndex, setWhiteboardDialogIndex] = useState<number | null>(null);
 
   const handleGenerateQuestions = async () => {
     if (!topics.trim()) {
@@ -260,6 +270,18 @@ export default function CreateExamPage() {
       return;
     }
 
+    const missingWhiteboard = generatedQuestions.find(
+      (q) =>
+        q.responseMode === 'whiteboard' &&
+        !decodeWhiteboardReference(q.correct_answer ?? null)
+    );
+    if (missingWhiteboard) {
+      toast.error('Falta la respuesta de referencia en pizarrón', {
+        description: `Dibuja la solución de referencia para: "${missingWhiteboard.text.slice(0, 80)}…"`,
+      });
+      return;
+    }
+
     if (saveExamLockRef.current) return;
     saveExamLockRef.current = true;
 
@@ -269,6 +291,7 @@ export default function CreateExamPage() {
         title: title.trim(),
         description: description.trim() || null,
         group_id: selectedGroupIds[0] ?? null,
+        folder_id: createFolderId,
         status: 'draft',
       });
 
@@ -303,7 +326,10 @@ export default function CreateExamPage() {
           text: q.text.trim(),
           type: q.type,
           options,
-          correct_answer: q.correct_answer?.trim() || null,
+          correct_answer:
+            q.responseMode === 'whiteboard'
+              ? q.correct_answer || null
+              : q.correct_answer?.trim() || null,
           illustration: q.illustration || null,
           points: Math.round(q.points ?? 1),
         };
@@ -811,12 +837,16 @@ export default function CreateExamPage() {
                                 className={`rounded-full px-2 py-0.5 text-xs ${
                                   question.type === 'multiple_choice'
                                     ? 'bg-orange-100 text-orange-700'
-                                    : 'bg-green-100 text-green-700'
+                                    : question.responseMode === 'whiteboard'
+                                      ? 'bg-violet-100 text-violet-700'
+                                      : 'bg-green-100 text-green-700'
                                 }`}
                               >
-                                {question.type === 'multiple_choice'
-                                  ? 'Opción múltiple'
-                                  : 'Respuesta abierta'}
+                                {question.responseMode === 'whiteboard'
+                                  ? 'Pizarrón'
+                                  : question.type === 'multiple_choice'
+                                    ? 'Opción múltiple'
+                                    : 'Respuesta abierta'}
                               </span>
                             )}
                           </div>
@@ -850,17 +880,36 @@ export default function CreateExamPage() {
                               <div className="space-y-2">
                                 <Label>Tipo de pregunta</Label>
                                 <Select
-                                  value={question.type}
+                                  value={
+                                    question.responseMode === 'whiteboard'
+                                      ? 'whiteboard'
+                                      : question.type
+                                  }
                                   onValueChange={(v) => {
+                                    if (v === 'whiteboard') {
+                                      updateQuestion(index, {
+                                        type: 'open_answer',
+                                        responseMode: 'whiteboard',
+                                        options: undefined,
+                                        correct_answer: '',
+                                      });
+                                      setWhiteboardDialogIndex(index);
+                                      return;
+                                    }
                                     if (v === 'open_answer') {
                                       updateQuestion(index, {
                                         type: 'open_answer',
+                                        responseMode: 'text',
                                         options: undefined,
-                                        correct_answer: question.correct_answer ?? '',
+                                        correct_answer: question.correct_answer &&
+                                          !isWhiteboardCorrectAnswer(question.correct_answer)
+                                          ? question.correct_answer
+                                          : '',
                                       });
                                     } else {
                                       updateQuestion(index, {
                                         type: 'multiple_choice',
+                                        responseMode: undefined,
                                         options: question.options?.length
                                           ? question.options
                                           : ['', '', '', ''],
@@ -874,6 +923,7 @@ export default function CreateExamPage() {
                                   <SelectContent>
                                     <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
                                     <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                                    <SelectItem value="whiteboard">Pizarrón</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -931,11 +981,52 @@ export default function CreateExamPage() {
                                 </div>
                               )}
 
-                              {question.type === 'open_answer' && (
+                              {question.responseMode === 'whiteboard' && (
+                                <div className="space-y-3 rounded-lg border border-orange-200 bg-orange-50/60 p-4">
+                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                      <p className="text-sm font-semibold text-orange-950">
+                                        Respuesta de referencia en pizarrón
+                                      </p>
+                                      <p className="text-xs text-orange-900/80">
+                                        Los alumnos dibujarán su respuesta en un espacio similar.
+                                      </p>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      className="bg-orange-600 hover:bg-orange-700"
+                                      onClick={() => setWhiteboardDialogIndex(index)}
+                                    >
+                                      <Presentation className="mr-2 h-4 w-4" />
+                                      {decodeWhiteboardReference(question.correct_answer ?? null)
+                                        ? 'Editar referencia'
+                                        : 'Dibujar referencia'}
+                                    </Button>
+                                  </div>
+                                  {decodeWhiteboardReference(question.correct_answer ?? null) ? (
+                                    <ExamWhiteboard
+                                      readOnly
+                                      value={decodeWhiteboardReference(question.correct_answer ?? null)}
+                                    />
+                                  ) : (
+                                    <p className="text-sm text-amber-800">
+                                      Aún no has dibujado la respuesta de referencia. Es obligatoria
+                                      para guardar el examen.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+
+                              {question.type === 'open_answer' && question.responseMode !== 'whiteboard' && (
                                 <div className="space-y-2">
                                   <Label>Respuesta esperada (opcional)</Label>
                                   <Input
-                                    value={question.correct_answer ?? ''}
+                                    value={
+                                      isWhiteboardCorrectAnswer(question.correct_answer)
+                                        ? ''
+                                        : (question.correct_answer ?? '')
+                                    }
                                     onChange={(e) =>
                                       updateQuestion(index, { correct_answer: e.target.value })
                                     }
@@ -966,7 +1057,23 @@ export default function CreateExamPage() {
                                 </div>
                               )}
 
-                              {question.type === 'open_answer' && question.correct_answer && (
+                              {question.responseMode === 'whiteboard' &&
+                                decodeWhiteboardReference(question.correct_answer ?? null) && (
+                                  <div className="mt-2">
+                                    <p className="mb-2 text-sm font-medium text-green-700">
+                                      Referencia en pizarrón ✓
+                                    </p>
+                                    <ExamWhiteboard
+                                      readOnly
+                                      value={decodeWhiteboardReference(question.correct_answer ?? null)}
+                                    />
+                                  </div>
+                                )}
+
+                              {question.type === 'open_answer' &&
+                                question.responseMode !== 'whiteboard' &&
+                                question.correct_answer &&
+                                !isWhiteboardCorrectAnswer(question.correct_answer) && (
                                 <p className="mt-2 text-sm text-green-600">
                                   Respuesta esperada: {question.correct_answer}
                                 </p>
@@ -1048,6 +1155,22 @@ export default function CreateExamPage() {
           )}
         </CardContent>
       </Card>
+
+      <WhiteboardReferenceDialog
+        open={whiteboardDialogIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setWhiteboardDialogIndex(null);
+        }}
+        initialReference={
+          whiteboardDialogIndex !== null
+            ? generatedQuestions[whiteboardDialogIndex]?.correct_answer ?? null
+            : null
+        }
+        onSave={(encoded) => {
+          if (whiteboardDialogIndex === null) return;
+          updateQuestion(whiteboardDialogIndex, { correct_answer: encoded });
+        }}
+      />
     </div>
   );
 }

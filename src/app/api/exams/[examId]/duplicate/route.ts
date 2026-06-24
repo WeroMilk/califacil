@@ -27,6 +27,7 @@ export async function POST(
       .insert({
         teacher_id: user.id,
         group_id: source.group_id,
+        folder_id: source.folder_id ?? null,
         title: `${source.title} (copia)`,
         description: source.description,
         status: 'draft',

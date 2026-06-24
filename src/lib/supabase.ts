@@ -82,6 +82,7 @@ export type Database = {
           id: string;
           teacher_id: string;
           group_id: string | null;
+          folder_id: string | null;
           title: string;
           description: string | null;
           qr_code: string | null;
@@ -92,6 +93,7 @@ export type Database = {
           id?: string;
           teacher_id: string;
           group_id?: string | null;
+          folder_id?: string | null;
           title: string;
           description?: string | null;
           qr_code?: string | null;
@@ -102,10 +104,34 @@ export type Database = {
           id?: string;
           teacher_id?: string;
           group_id?: string | null;
+          folder_id?: string | null;
           title?: string;
           description?: string | null;
           qr_code?: string | null;
           status?: 'draft' | 'published' | 'closed';
+          created_at?: string;
+        };
+      };
+      exam_folders: {
+        Row: {
+          id: string;
+          teacher_id: string;
+          parent_id: string | null;
+          name: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          teacher_id: string;
+          parent_id?: string | null;
+          name: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          teacher_id?: string;
+          parent_id?: string | null;
+          name?: string;
           created_at?: string;
         };
       };
