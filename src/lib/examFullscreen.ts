@@ -15,6 +15,12 @@ type FullscreenDocument = Document & {
   msExitFullscreen?: () => Promise<void> | void;
 };
 
+/** iPhone / iPad en Safari: el Fullscreen API no aplica a divs. */
+export function isIosExamDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 /** Dispositivos táctiles / móviles donde el fullscreen nativo suele fallar (p. ej. iOS). */
 export function isMobileExamDevice(): boolean {
   if (typeof window === 'undefined') return false;
@@ -79,13 +85,23 @@ export async function exitExamFullscreenSafe(): Promise<void> {
 export async function enterExamFullscreen(
   shellEl?: HTMLElement | null
 ): Promise<ExamFullscreenMode> {
+  if (isIosExamDevice() || isMobileExamDevice()) {
+    return 'pseudo';
+  }
   if (await requestExamFullscreen(shellEl ?? document.documentElement)) {
     return 'native';
-  }
-  if (isMobileExamDevice()) {
-    return 'pseudo';
   }
   return 'none';
 }
 
 export const EXAM_PSEUDO_FULLSCREEN_CLASS = 'exam-pseudo-fullscreen';
+export const EXAM_IMMERSIVE_ROOT_CLASS = 'exam-immersive-root';
+
+export function setExamImmersiveRoot(active: boolean): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.classList.toggle(EXAM_IMMERSIVE_ROOT_CLASS, active);
+  document.body.classList.toggle(EXAM_IMMERSIVE_ROOT_CLASS, active);
+  if (active) {
+    window.scrollTo(0, 0);
+  }
+}

@@ -10,6 +10,11 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: 'CaliFácil - SEC Sonora',
   description: 'Crea exámenes personalizados con IA, aplícalos mediante QR y analiza el rendimiento de tus alumnos.',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'CaliFácil',
+  },
 };
 
 export const viewport: Viewport = {
@@ -33,7 +38,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="exam-layout-chrome flex h-full min-h-0 flex-col overflow-hidden">
             <MathWallpaper />
             <div className="relative z-[1] isolate flex min-h-0 flex-1 flex-col overflow-hidden">
               {children}

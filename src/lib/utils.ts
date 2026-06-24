@@ -72,6 +72,15 @@ export function normalizeScientificNotation(text: string): string {
   );
 }
 
+/** Convierte "kg/m 2" a "kg/m²" cuando el PDF separa el exponente. */
+export function normalizeUnitExponents(text: string): string {
+  return text.replace(
+    /([a-z]+)\/([a-z]+)\s+(\d+)\b/gi,
+    (_match, numerator: string, denominator: string, exponent: string) =>
+      `${numerator}/${denominator}${integerToSuperscript(exponent)}`
+  );
+}
+
 /** Conserva la primera aparición de cada enunciado (sin distinguir mayúsculas/espacios). */
 export function dedupeExamQuestions<T extends { text: string }>(questions: T[]): T[] {
   const seen = new Set<string>();

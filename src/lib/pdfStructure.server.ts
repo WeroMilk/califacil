@@ -3,7 +3,7 @@ import type { GeneratedQuestion } from '@/types';
 import type { PdfImageAsset } from '@/lib/pdfImages.server';
 import { pdfBufferBytes } from '@/lib/pdfBuffer.server';
 import { loadPdfJsServer } from '@/lib/pdfjsServer.server';
-import { isQuestionIllustrationImage, normalizeScientificNotation } from '@/lib/utils';
+import { isQuestionIllustrationImage, normalizeScientificNotation, normalizeUnitExponents } from '@/lib/utils';
 
 /** pdfjs-dist exige URLs con slash final y barras normales (incluso en Windows). */
 function pdfjsAssetUrl(...segments: string[]): string {
@@ -50,7 +50,9 @@ function groupItemsIntoLines(
       pageNumber,
       x: line.x,
       y: line.y,
-      text: normalizeScientificNotation(line.parts.join(' ').replace(/\s+/g, ' ').trim()),
+      text: normalizeUnitExponents(
+        normalizeScientificNotation(line.parts.join(' ').replace(/\s+/g, ' ').trim())
+      ),
     }))
     .filter((line) => line.text);
 }

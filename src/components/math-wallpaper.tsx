@@ -34,6 +34,7 @@ export function MathWallpaper() {
   return (
     <div
       className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
+      data-exam-wallpaper
       aria-hidden
     >
       <div

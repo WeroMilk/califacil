@@ -38,6 +38,7 @@ import {
   enterExamFullscreen,
   exitExamFullscreenSafe,
   isMobileExamDevice,
+  setExamImmersiveRoot,
 } from '@/lib/examFullscreen';
 import { EXAM_SECURE_BODY_CLASS } from '@/lib/examAntiCapture';
 import {
@@ -165,6 +166,7 @@ export default function StudentExamPage() {
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
     fullscreenMode,
     onForfeit: (reason, voidPersisted) => {
+      setExamImmersiveRoot(false);
       void exitExamFullscreenSafe();
       setFullscreenMode('none');
       setContentHidden(false);
@@ -372,37 +374,41 @@ export default function StudentExamPage() {
     return () => document.body.classList.remove(EXAM_SECURE_BODY_CLASS);
   }, [hasStarted, submitted, forfeitReason]);
 
-  useEffect(() => {
-    if (!hasStarted || submitted || forfeitReason) return;
+  useLayoutEffect(() => {
+    if (!hasStarted || submitted || forfeitReason) {
+      setExamImmersiveRoot(false);
+      return;
+    }
+
+    if (isMobileExamDevice()) {
+      setExamImmersiveRoot(true);
+      setFullscreenMode('pseudo');
+      return () => setExamImmersiveRoot(false);
+    }
+
     let cancelled = false;
-    const tryEnter = async () => {
-      if (cancelled) return;
+    const run = async () => {
       const el = examShellRef.current;
-      if (!el) return;
+      if (!el || cancelled) return;
       const mode = await enterExamFullscreen(el);
-      if (!cancelled) {
-        setFullscreenMode(mode);
-        if (
-          mode === 'native' &&
-          typeof navigator !== 'undefined' &&
-          'keyboard' in navigator &&
-          navigator.keyboard &&
-          'lock' in navigator.keyboard
-        ) {
-          try {
-            await navigator.keyboard.lock();
-          } catch {
-            /* no disponible en este navegador */
-          }
+      if (!cancelled) setFullscreenMode(mode);
+      if (
+        !cancelled &&
+        mode === 'native' &&
+        typeof navigator !== 'undefined' &&
+        navigator.keyboard &&
+        'lock' in navigator.keyboard
+      ) {
+        try {
+          await navigator.keyboard.lock();
+        } catch {
+          /* no disponible */
         }
       }
     };
-    const id = requestAnimationFrame(() => {
-      requestAnimationFrame(() => void tryEnter());
-    });
+    void run();
     return () => {
       cancelled = true;
-      cancelAnimationFrame(id);
       if (typeof navigator !== 'undefined' && navigator.keyboard && 'unlock' in navigator.keyboard) {
         void navigator.keyboard.unlock().catch(() => undefined);
       }
@@ -429,6 +435,7 @@ export default function StudentExamPage() {
 
   useEffect(() => {
     if (hasStarted && !submitted && !forfeitReason) return;
+    setExamImmersiveRoot(false);
     void exitExamFullscreenSafe();
     setFullscreenMode('none');
   }, [hasStarted, submitted, forfeitReason]);
@@ -530,6 +537,9 @@ export default function StudentExamPage() {
       bindStream(stream);
 
       setQuestions((prev) => shuffleArray(prev));
+      if (isMobileExamDevice()) {
+        setFullscreenMode('pseudo');
+      }
       setHasStarted(true);
       void rpcLogExamAttemptEvent(examId, selectedStudentId, token, 'exam_started');
     } catch {
@@ -866,18 +876,21 @@ export default function StudentExamPage() {
     );
   }
 
-  return (
+  const mobileImmersive = isMobileExamDevice();
+
+  const examViewport = (
     <div
       ref={examShellRef}
       className={cn(
-        'relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-3 pb-24 pt-5 backdrop-blur-[2px] app-scroll sm:px-4 sm:pt-8 select-none touch-manipulation',
-        fullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
+        'relative flex h-full min-h-0 flex-col overflow-y-auto bg-white px-3 pb-24 pt-5 app-scroll sm:px-4 sm:pt-8 select-none touch-manipulation',
+        (mobileImmersive || fullscreenMode === 'pseudo') && EXAM_PSEUDO_FULLSCREEN_CLASS,
+        !mobileImmersive && fullscreenMode !== 'pseudo' && 'bg-white/35 backdrop-blur-[2px]',
         '[&_input]:select-text [&_textarea]:select-text'
       )}
       style={{ WebkitTouchCallout: 'none' }}
     >
       {contentHidden && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-gray-900/95 p-6 text-center text-white backdrop-blur-md">
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-gray-900/95 p-6 text-center text-white backdrop-blur-md">
           <div>
             <AlertCircle className="mx-auto mb-4 h-12 w-12 text-amber-400" />
             <p className="text-lg font-semibold">Contenido oculto</p>
@@ -894,7 +907,7 @@ export default function StudentExamPage() {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="pointer-events-none fixed z-[85] flex flex-col items-end gap-1"
+            className="pointer-events-none fixed z-[10000] flex flex-col items-end gap-1"
             style={{
               right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
               bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
@@ -1035,4 +1048,10 @@ export default function StudentExamPage() {
       </div>
     </div>
   );
+
+  if (mobileImmersive && typeof document !== 'undefined') {
+    return createPortal(examViewport, document.body);
+  }
+
+  return examViewport;
 }

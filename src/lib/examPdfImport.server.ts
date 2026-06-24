@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import type { GeneratedQuestion } from '@/types';
 import { extractPdfStructureFromBuffer, attachPdfImagesToQuestions, lineAnchorForIndex, type PdfStructure, type PositionedLine } from '@/lib/pdfStructure.server';
 import { extractPdfImagesFromBuffer } from '@/lib/pdfImages.server';
-import { dedupeExamQuestions, normalizeScientificNotation } from '@/lib/utils';
+import { dedupeExamQuestions, normalizeScientificNotation, normalizeUnitExponents } from '@/lib/utils';
 
 const HEADER_SKIP =
   /^(instituto|dr\.|apellido|nombre|grupo|unidad\s+\d+|examen|física|materia|\d+\s*$)/i;
@@ -34,7 +34,9 @@ function stripLeadingSectionNumber(text: string): string {
 }
 
 function sanitizeQuestionText(text: string): string {
-  return normalizeScientificNotation(stripLeadingSectionNumber(text).trim());
+  return normalizeUnitExponents(
+    normalizeScientificNotation(stripLeadingSectionNumber(text).trim())
+  );
 }
 
 function sectionPrefix(section: string): string {
