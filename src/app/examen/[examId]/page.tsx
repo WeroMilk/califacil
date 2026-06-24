@@ -39,6 +39,7 @@ import {
   exitExamFullscreenSafe,
   isMobileExamDevice,
 } from '@/lib/examFullscreen';
+import { EXAM_SECURE_BODY_CLASS } from '@/lib/examAntiCapture';
 import {
   clearExamClientSession,
   readExamClientSession,
@@ -157,7 +158,7 @@ export default function StudentExamPage() {
     [examId, selectedStudentId, clientSessionToken]
   );
 
-  const { bindStream, stopStream } = useStudentExamProctoring({
+  const { bindStream, stopStream, reportViolation } = useStudentExamProctoring({
     examId,
     studentId: selectedStudentId || null,
     clientSession: clientSessionToken,
@@ -363,6 +364,15 @@ export default function StudentExamPage() {
   }, [hasStarted, submitted, forfeitReason]);
 
   useEffect(() => {
+    if (!hasStarted || submitted || forfeitReason) {
+      document.body.classList.remove(EXAM_SECURE_BODY_CLASS);
+      return;
+    }
+    document.body.classList.add(EXAM_SECURE_BODY_CLASS);
+    return () => document.body.classList.remove(EXAM_SECURE_BODY_CLASS);
+  }, [hasStarted, submitted, forfeitReason]);
+
+  useEffect(() => {
     if (!hasStarted || submitted || forfeitReason) return;
     let cancelled = false;
     const tryEnter = async () => {
@@ -370,7 +380,22 @@ export default function StudentExamPage() {
       const el = examShellRef.current;
       if (!el) return;
       const mode = await enterExamFullscreen(el);
-      if (!cancelled) setFullscreenMode(mode);
+      if (!cancelled) {
+        setFullscreenMode(mode);
+        if (
+          mode === 'native' &&
+          typeof navigator !== 'undefined' &&
+          'keyboard' in navigator &&
+          navigator.keyboard &&
+          'lock' in navigator.keyboard
+        ) {
+          try {
+            await navigator.keyboard.lock();
+          } catch {
+            /* no disponible en este navegador */
+          }
+        }
+      }
     };
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => void tryEnter());
@@ -378,8 +403,29 @@ export default function StudentExamPage() {
     return () => {
       cancelled = true;
       cancelAnimationFrame(id);
+      if (typeof navigator !== 'undefined' && navigator.keyboard && 'unlock' in navigator.keyboard) {
+        void navigator.keyboard.unlock().catch(() => undefined);
+      }
     };
   }, [hasStarted, submitted, forfeitReason]);
+
+  useEffect(() => {
+    if (!hasStarted || submitted || forfeitReason || fullscreenMode !== 'pseudo') return;
+    const shell = examShellRef.current;
+    if (!shell) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || shell.contains(target)) return;
+      const camera = document.querySelector('[aria-label="Vista previa de la cámara del examen"]');
+      if (camera?.contains(target)) return;
+      reportViolation('left_fullscreen');
+    };
+
+    const opts = { capture: true } as AddEventListenerOptions;
+    document.addEventListener('pointerdown', onPointerDown, opts);
+    return () => document.removeEventListener('pointerdown', onPointerDown, opts);
+  }, [hasStarted, submitted, forfeitReason, fullscreenMode, reportViolation]);
 
   useEffect(() => {
     if (hasStarted && !submitted && !forfeitReason) return;
@@ -895,7 +941,7 @@ export default function StudentExamPage() {
         <div className="relative space-y-6">
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-0 z-[1] overflow-hidden opacity-[0.07]"
+            className="pointer-events-none absolute inset-0 z-[1] overflow-hidden opacity-[0.14]"
           >
             {Array.from({ length: 8 }).map((_, i) => (
               <span

@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { ExamFullscreenMode } from '@/lib/examFullscreen';
 import { isNativeFullscreenActive } from '@/lib/examFullscreen';
+import { attachExamAntiCaptureHandlers } from '@/lib/examAntiCapture';
 import { rpcVoidStudentExamAttempt } from '@/lib/examAttemptRpc';
 
 const VISIBILITY_GRACE_MS = 2800;
-const FULLSCREEN_EXIT_GRACE_MS = 2800;
 
 const FULLSCREEN_CHANGE_EVENTS = [
   'fullscreenchange',
@@ -49,7 +49,6 @@ export function useStudentExamProctoring(options: {
 }) {
   const streamRef = useRef<MediaStream | null>(null);
   const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fullscreenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forfeitOnceRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const optsRef = useRef(options);
@@ -62,13 +61,6 @@ export function useStudentExamProctoring(options: {
     }
   }, []);
 
-  const clearFullscreenTimer = useCallback(() => {
-    if (fullscreenTimerRef.current) {
-      clearTimeout(fullscreenTimerRef.current);
-      fullscreenTimerRef.current = null;
-    }
-  }, []);
-
   const logEvent = useCallback((eventType: string, metadata?: Record<string, unknown>) => {
     optsRef.current.onLogEvent?.(eventType, metadata);
   }, []);
@@ -78,7 +70,6 @@ export function useStudentExamProctoring(options: {
       if (forfeitOnceRef.current) return;
       forfeitOnceRef.current = true;
       clearHiddenTimer();
-      clearFullscreenTimer();
 
       const { examId, studentId, clientSession } = optsRef.current;
       const session =
@@ -104,7 +95,7 @@ export function useStudentExamProctoring(options: {
       streamRef.current = null;
       optsRef.current.onForfeit(reason, voidPersisted);
     },
-    [clearHiddenTimer, clearFullscreenTimer]
+    [clearHiddenTimer]
   );
 
   const bindStream = useCallback(
@@ -123,15 +114,24 @@ export function useStudentExamProctoring(options: {
 
   const stopStream = useCallback(() => {
     clearHiddenTimer();
-    clearFullscreenTimer();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-  }, [clearHiddenTimer, clearFullscreenTimer]);
+  }, [clearHiddenTimer]);
+
+  useEffect(() => {
+    if (!options.active || !options.studentId || !options.clientSession) return;
+    return attachExamAntiCaptureHandlers({
+      active: true,
+      onCaptureAttempt: (source) => {
+        logEvent('capture_attempt', { source });
+        void forfeit('capture_attempt');
+      },
+    });
+  }, [options.active, options.studentId, options.clientSession, forfeit, logEvent]);
 
   useEffect(() => {
     if (!options.active || !options.studentId || !options.clientSession) {
       clearHiddenTimer();
-      clearFullscreenTimer();
       return;
     }
 
@@ -142,14 +142,6 @@ export function useStudentExamProctoring(options: {
       hiddenTimerRef.current = setTimeout(() => {
         void forfeit(reason);
       }, VISIBILITY_GRACE_MS);
-    };
-
-    const scheduleFullscreenForfeit = () => {
-      clearFullscreenTimer();
-      fullscreenTimerRef.current = setTimeout(() => {
-        logEvent('left_fullscreen');
-        void forfeit('left_fullscreen');
-      }, FULLSCREEN_EXIT_GRACE_MS);
     };
 
     const onVisibility = () => {
@@ -180,9 +172,7 @@ export function useStudentExamProctoring(options: {
       if (optsRef.current.fullscreenMode !== 'native' || forfeitOnceRef.current) return;
       if (!isNativeFullscreenActive()) {
         logEvent('left_fullscreen');
-        scheduleFullscreenForfeit();
-      } else {
-        clearFullscreenTimer();
+        void forfeit('left_fullscreen');
       }
     };
 
@@ -201,7 +191,6 @@ export function useStudentExamProctoring(options: {
         document.removeEventListener(evt, onFullscreenChange);
       }
       clearHiddenTimer();
-      clearFullscreenTimer();
     };
   }, [
     options.active,
@@ -210,7 +199,6 @@ export function useStudentExamProctoring(options: {
     options.fullscreenMode,
     forfeit,
     clearHiddenTimer,
-    clearFullscreenTimer,
     logEvent,
   ]);
 
@@ -254,5 +242,12 @@ export function useStudentExamProctoring(options: {
     };
   }, [options.active]);
 
-  return { bindStream, stopStream, logEvent };
+  const reportViolation = useCallback(
+    (reason: string) => {
+      void forfeit(reason);
+    },
+    [forfeit]
+  );
+
+  return { bindStream, stopStream, logEvent, reportViolation };
 }

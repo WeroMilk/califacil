@@ -5,6 +5,8 @@ export const examForfeitMessages: Record<string, string> = {
   camera_stopped: 'La cámara se desactivó durante el examen. El intento quedó anulado.',
   left_fullscreen:
     'Salió del modo pantalla completa durante el examen. El intento quedó anulado.',
+  capture_attempt:
+    'Se detectó un intento de captura o impresión durante el examen. El intento quedó anulado.',
   abandoned: 'El intento fue abandonado o interrumpido.',
 };
 
@@ -28,6 +30,7 @@ export const examAttemptEventLabels: Record<string, string> = {
   tab_hidden: 'Pestaña oculta / cambio de app',
   tab_visible: 'Pestaña visible de nuevo',
   left_fullscreen: 'Salió de pantalla completa',
+  capture_attempt: 'Intento de captura o impresión',
   camera_stopped: 'Cámara desactivada',
   left_page: 'Abandonó la página',
   question_viewed: 'Vio pregunta',
