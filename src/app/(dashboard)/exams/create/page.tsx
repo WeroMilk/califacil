@@ -39,7 +39,9 @@ import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { EXAM_POINTS_CAP, distributeExamPoints, examMaxScore, dedupeExamQuestions, normalizeQuestionText } from '@/lib/utils';
 import {
+  decodeWhiteboardExpectedText,
   decodeWhiteboardReference,
+  hasWhiteboardExpectedText,
   isWhiteboardCorrectAnswer,
 } from '@/lib/whiteboardAnswer';
 import { ExamWhiteboard } from '@/components/exam-whiteboard';
@@ -273,11 +275,12 @@ export default function CreateExamPage() {
     const missingWhiteboard = generatedQuestions.find(
       (q) =>
         q.responseMode === 'whiteboard' &&
-        !decodeWhiteboardReference(q.correct_answer ?? null)
+        (!decodeWhiteboardReference(q.correct_answer ?? null) ||
+          !hasWhiteboardExpectedText(q.correct_answer ?? null))
     );
     if (missingWhiteboard) {
       toast.error('Falta la respuesta de referencia en pizarrón', {
-        description: `Dibuja la solución de referencia para: "${missingWhiteboard.text.slice(0, 80)}…"`,
+        description: `Dibuja y confirma el texto esperado para: "${missingWhiteboard.text.slice(0, 80)}…"`,
       });
       return;
     }
@@ -1005,10 +1008,20 @@ export default function CreateExamPage() {
                                     </Button>
                                   </div>
                                   {decodeWhiteboardReference(question.correct_answer ?? null) ? (
-                                    <ExamWhiteboard
-                                      readOnly
-                                      value={decodeWhiteboardReference(question.correct_answer ?? null)}
-                                    />
+                                    <>
+                                      <ExamWhiteboard
+                                        readOnly
+                                        value={decodeWhiteboardReference(question.correct_answer ?? null)}
+                                      />
+                                      {hasWhiteboardExpectedText(question.correct_answer ?? null) && (
+                                        <p className="mt-2 text-sm text-green-800">
+                                          Texto esperado:{' '}
+                                          <strong>
+                                            {decodeWhiteboardExpectedText(question.correct_answer ?? null)}
+                                          </strong>
+                                        </p>
+                                      )}
+                                    </>
                                   ) : (
                                     <p className="text-sm text-amber-800">
                                       Aún no has dibujado la respuesta de referencia. Es obligatoria
@@ -1067,6 +1080,14 @@ export default function CreateExamPage() {
                                       readOnly
                                       value={decodeWhiteboardReference(question.correct_answer ?? null)}
                                     />
+                                    {hasWhiteboardExpectedText(question.correct_answer ?? null) && (
+                                      <p className="mt-2 text-sm text-green-800">
+                                        Texto esperado:{' '}
+                                        <strong>
+                                          {decodeWhiteboardExpectedText(question.correct_answer ?? null)}
+                                        </strong>
+                                      </p>
+                                    )}
                                   </div>
                                 )}
 
@@ -1165,6 +1186,11 @@ export default function CreateExamPage() {
           whiteboardDialogIndex !== null
             ? generatedQuestions[whiteboardDialogIndex]?.correct_answer ?? null
             : null
+        }
+        questionText={
+          whiteboardDialogIndex !== null
+            ? generatedQuestions[whiteboardDialogIndex]?.text ?? ''
+            : ''
         }
         onSave={(encoded) => {
           if (whiteboardDialogIndex === null) return;

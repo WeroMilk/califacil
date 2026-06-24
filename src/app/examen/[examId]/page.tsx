@@ -725,8 +725,9 @@ export default function StudentExamPage() {
               });
               const payload = (await res.json().catch(() => ({}))) as {
                 code?: string;
-                score?: number;
-                is_correct?: boolean;
+                score?: number | null;
+                is_correct?: boolean | null;
+                pending?: boolean;
               };
 
               if (res.status === 503 && payload.code === 'NO_KEY') {
@@ -741,14 +742,14 @@ export default function StudentExamPage() {
                   _points: 0,
                 };
               }
-              if (!res.ok) {
+              if (!res.ok || payload.pending) {
                 return {
                   exam_id: examId,
                   student_id: studentId,
                   question_id: question.id,
                   answer_text: answerText,
-                  is_correct: false,
-                  score: 0,
+                  is_correct: null,
+                  score: null,
                   _points: 0,
                 };
               }
@@ -758,7 +759,7 @@ export default function StudentExamPage() {
                 student_id: studentId,
                 question_id: question.id,
                 answer_text: answerText,
-                is_correct: sc > 0,
+                is_correct: payload.is_correct === true,
                 score: sc,
                 _points: sc,
               };
@@ -768,8 +769,8 @@ export default function StudentExamPage() {
                 student_id: studentId,
                 question_id: question.id,
                 answer_text: answerText,
-                is_correct: false,
-                score: 0,
+                is_correct: null,
+                score: null,
                 _points: 0,
               };
             }

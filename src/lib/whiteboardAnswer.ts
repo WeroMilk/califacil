@@ -1,8 +1,35 @@
 /** Codifica respuestas de pizarrón en `correct_answer` sin migración de BD. */
 const WHITEBOARD_PREFIX = '[[CALIFACIL_WHITEBOARD]]';
 
-export function encodeWhiteboardCorrectAnswer(dataUrl: string): string {
-  return `${WHITEBOARD_PREFIX}${JSON.stringify({ v: 1, reference: dataUrl })}`;
+export type WhiteboardPayload = {
+  v?: number;
+  reference?: string;
+  /** Expresión o texto esperado confirmado por el maestro (p. ej. √5). */
+  expectedText?: string;
+};
+
+function parseWhiteboardPayload(
+  correctAnswer: string | null | undefined
+): WhiteboardPayload | null {
+  if (!isWhiteboardCorrectAnswer(correctAnswer)) return null;
+  try {
+    return JSON.parse(correctAnswer!.slice(WHITEBOARD_PREFIX.length)) as WhiteboardPayload;
+  } catch {
+    return null;
+  }
+}
+
+export function encodeWhiteboardCorrectAnswer(
+  dataUrl: string,
+  expectedText?: string | null
+): string {
+  const text = (expectedText ?? '').trim();
+  const payload: WhiteboardPayload = {
+    v: text ? 2 : 1,
+    reference: dataUrl,
+    ...(text ? { expectedText: text } : {}),
+  };
+  return `${WHITEBOARD_PREFIX}${JSON.stringify(payload)}`;
 }
 
 export function isWhiteboardCorrectAnswer(
@@ -16,15 +43,22 @@ export function isWhiteboardCorrectAnswer(
 export function decodeWhiteboardReference(
   correctAnswer: string | null | undefined
 ): string | null {
-  if (!isWhiteboardCorrectAnswer(correctAnswer)) return null;
-  try {
-    const parsed = JSON.parse(correctAnswer!.slice(WHITEBOARD_PREFIX.length)) as {
-      reference?: string;
-    };
-    return typeof parsed.reference === 'string' ? parsed.reference : null;
-  } catch {
-    return null;
-  }
+  const parsed = parseWhiteboardPayload(correctAnswer);
+  return typeof parsed?.reference === 'string' ? parsed.reference : null;
+}
+
+export function decodeWhiteboardExpectedText(
+  correctAnswer: string | null | undefined
+): string | null {
+  const parsed = parseWhiteboardPayload(correctAnswer);
+  const text = (parsed?.expectedText ?? '').trim();
+  return text || null;
+}
+
+export function hasWhiteboardExpectedText(
+  correctAnswer: string | null | undefined
+): boolean {
+  return decodeWhiteboardExpectedText(correctAnswer) !== null;
 }
 
 export function isWhiteboardQuestion(question: {

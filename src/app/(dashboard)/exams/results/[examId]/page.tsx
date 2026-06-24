@@ -20,6 +20,7 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
+  RefreshCw,
   Users,
   TrendingUp,
   CheckCircle,
@@ -27,6 +28,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
 import { 
   BarChart, 
@@ -52,6 +54,7 @@ import {
   questionPoints,
 } from '@/lib/utils';
 import {
+  decodeWhiteboardExpectedText,
   decodeWhiteboardReference,
   isWhiteboardQuestion,
   isWhiteboardStudentAnswer,
@@ -86,7 +89,10 @@ type StudentQuestionBreakdown = {
   questionText: string;
   studentAnswer: string;
   correctAnswer: string;
+  expectedText: string | null;
   isCorrect: boolean | null;
+  answerId: string | null;
+  isWhiteboard: boolean;
 };
 
 function renderAnswerCell(text: string, emptyLabel: string) {
@@ -111,7 +117,10 @@ function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Que
         questionText: q.text,
         studentAnswer,
         correctAnswer,
+        expectedText: null,
         isCorrect: isMultipleChoiceAnswerCorrect(q.options, studentAnswer, correctAnswer),
+        answerId: answer?.id ?? null,
+        isWhiteboard: false,
       };
     }
     if (isWhiteboardQuestion(q)) {
@@ -121,7 +130,10 @@ function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Que
         questionText: q.text,
         studentAnswer,
         correctAnswer: decodeWhiteboardReference(q.correct_answer) ?? '',
+        expectedText: decodeWhiteboardExpectedText(q.correct_answer),
         isCorrect: answer?.is_correct ?? null,
+        answerId: answer?.id ?? null,
+        isWhiteboard: true,
       };
     }
     return {
@@ -130,7 +142,10 @@ function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Que
       questionText: q.text,
       studentAnswer,
       correctAnswer: q.correct_answer ?? '',
+      expectedText: null,
       isCorrect: answer?.is_correct ?? null,
+      answerId: answer?.id ?? null,
+      isWhiteboard: false,
     };
   });
 }
@@ -227,10 +242,11 @@ export default function ExamResultsPage() {
   const router = useRouter();
   const examId = params.examId as string;
   const { exam, loading: examLoading } = useExam(examId);
-  const { answers, loading: answersLoading } = useExamResults(examId);
+  const { answers, loading: answersLoading, updateAnswer, refreshAnswers } = useExamResults(examId);
   const [studentResults, setStudentResults] = useState<StudentResult[]>([]);
   const [selectedStudentBreakdownId, setSelectedStudentBreakdownId] = useState<string>('');
   const [expandedQuestionIds, setExpandedQuestionIds] = useState<Record<string, boolean>>({});
+  const [gradingAnswerId, setGradingAnswerId] = useState<string | null>(null);
   const [assignedGroups, setAssignedGroups] = useState<AssignedGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
 
@@ -644,6 +660,62 @@ export default function ExamResultsPage() {
     }));
   };
 
+  const handleManualWhiteboardGrade = async (
+    answerId: string,
+    questionId: string,
+    isCorrect: boolean
+  ) => {
+    const question = exam.questions.find((q) => q.id === questionId);
+    if (!question) return;
+    const pts = questionPoints(question);
+    setGradingAnswerId(answerId);
+    const ok = await updateAnswer(answerId, {
+      is_correct: isCorrect,
+      score: isCorrect ? pts : 0,
+    });
+    setGradingAnswerId(null);
+    if (ok) {
+      toast.success(isCorrect ? 'Marcada como correcta' : 'Marcada como incorrecta');
+    } else {
+      toast.error('No se pudo actualizar la calificación');
+    }
+  };
+
+  const handleRegradeWhiteboard = async (answerId: string) => {
+    setGradingAnswerId(answerId);
+    try {
+      const res = await fetch(`/api/exams/${examId}/regrade-whiteboard`, {
+        method: 'POST',
+        headers: await dashboardAuthJsonHeaders(),
+        body: JSON.stringify({ answerId }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        pending?: boolean;
+        is_correct?: boolean | null;
+        reason?: string;
+      };
+      if (!res.ok) {
+        toast.error(payload.error ?? 'No se pudo recalificar');
+        return;
+      }
+      await refreshAnswers();
+      if (payload.pending) {
+        toast.message('Pendiente de revisión', {
+          description: payload.reason ?? 'La IA no tuvo confianza suficiente',
+        });
+      } else if (payload.is_correct) {
+        toast.success('Recalificada: correcta');
+      } else {
+        toast.message('Recalificada: incorrecta');
+      }
+    } catch {
+      toast.error('Error al recalificar');
+    } finally {
+      setGradingAnswerId(null);
+    }
+  };
+
   const averageScore = filteredStudentResults.length > 0 
     ? (filteredStudentResults.reduce((sum, r) => sum + r.percentage, 0) / filteredStudentResults.length).toFixed(1)
     : '0';
@@ -886,11 +958,15 @@ export default function ExamResultsPage() {
                               <th className="w-[3.25rem] px-1 py-2 text-left font-semibold sm:w-auto sm:px-3">
                                 Detalle
                               </th>
+                              <th className="w-[5.5rem] px-1 py-2 text-left font-semibold sm:w-auto sm:px-3">
+                                Acciones
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
                             {breakdownRows.flatMap((row) => {
                               const isExpanded = Boolean(expandedQuestionIds[row.questionId]);
+                              const isGrading = row.answerId !== null && gradingAnswerId === row.answerId;
                               const mainRow = (
                                 <tr key={row.questionId} className="border-b align-top">
                                   <td className="px-1 py-2 font-medium text-gray-800 sm:px-3">{row.questionNumber}</td>
@@ -899,6 +975,11 @@ export default function ExamResultsPage() {
                                   </td>
                                   <td className="min-w-0 px-1 py-2 text-gray-700 [word-break:break-word] sm:px-3">
                                     {renderAnswerCell(row.correctAnswer, '—')}
+                                    {row.expectedText && (
+                                      <p className="mt-1 text-[10px] text-green-800 sm:text-xs">
+                                        Esperado: <strong>{row.expectedText}</strong>
+                                      </p>
+                                    )}
                                   </td>
                                   <td className="px-1 py-2 sm:px-3">
                                     {row.isCorrect === true ? (
@@ -925,13 +1006,60 @@ export default function ExamResultsPage() {
                                       <span className="sm:hidden">{isExpanded ? 'Ocultar' : 'Ver'}</span>
                                     </Button>
                                   </td>
+                                  <td className="px-1 py-2 sm:px-3">
+                                    {row.isWhiteboard && row.answerId ? (
+                                      <div className="flex flex-col gap-1">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-1.5 text-[10px] text-green-700 sm:h-8 sm:px-2 sm:text-xs"
+                                          disabled={isGrading}
+                                          onClick={() =>
+                                            void handleManualWhiteboardGrade(row.answerId!, row.questionId, true)
+                                          }
+                                        >
+                                          ✓
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-1.5 text-[10px] text-red-700 sm:h-8 sm:px-2 sm:text-xs"
+                                          disabled={isGrading}
+                                          onClick={() =>
+                                            void handleManualWhiteboardGrade(row.answerId!, row.questionId, false)
+                                          }
+                                        >
+                                          ✗
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-1.5 text-[10px] sm:h-8 sm:px-2 sm:text-xs"
+                                          disabled={isGrading}
+                                          title="Recalificar con IA"
+                                          onClick={() => void handleRegradeWhiteboard(row.answerId!)}
+                                        >
+                                          {isGrading ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          ) : (
+                                            <RefreshCw className="h-3.5 w-3.5" />
+                                          )}
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-xs text-gray-400">—</span>
+                                    )}
+                                  </td>
                                 </tr>
                               );
                               if (!isExpanded) return [mainRow];
                               const detailRow = (
                                 <tr key={`${row.questionId}-detail`} className="border-b bg-gray-50">
                                   <td className="px-3 py-2 text-xs font-semibold text-gray-500">Enunciado</td>
-                                  <td colSpan={4} className="px-3 py-2 text-sm text-gray-800">
+                                  <td colSpan={5} className="px-3 py-2 text-sm text-gray-800">
                                     {row.questionText}
                                   </td>
                                 </tr>

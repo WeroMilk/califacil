@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
-import { decodeWhiteboardReference } from '@/lib/whiteboardAnswer';
+import {
+  decodeWhiteboardExpectedText,
+  decodeWhiteboardReference,
+} from '@/lib/whiteboardAnswer';
+import { gradeWhiteboardAnswer } from '@/lib/whiteboardGrading.server';
 
 export const maxDuration = 60;
 
@@ -28,8 +32,18 @@ function isDataImageUrl(value: string): boolean {
   return value.startsWith('data:image/');
 }
 
+function pendingResponse(reason: string) {
+  return NextResponse.json({
+    score: null,
+    is_correct: null,
+    pending: true,
+    reason,
+    model: 'gpt-4o',
+  });
+}
+
 /**
- * Compara dibujos de pizarrón (referencia vs alumno) con visión por IA.
+ * Califica dibujos de pizarrón: transcribe el alumno y compara con el texto de referencia.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -76,10 +90,7 @@ export async function POST(request: NextRequest) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
     if (!url || !anonKey) {
-      return NextResponse.json(
-        { error: 'Supabase no configurado en el servidor', code: 'NO_SUPABASE' },
-        { status: 502 }
-      );
+      return pendingResponse('Supabase no configurado en el servidor');
     }
 
     const supabase = createClient(url, anonKey, {
@@ -95,10 +106,7 @@ export async function POST(request: NextRequest) {
 
     if (rpcError) {
       console.error('validate_open_answer_attempt:', rpcError);
-      return NextResponse.json(
-        { error: 'No se pudo validar el intento de examen', code: 'RPC_ERROR' },
-        { status: 502 }
-      );
+      return pendingResponse('No se pudo validar el intento de examen');
     }
 
     const v = validation as { ok?: boolean; error?: string } | null;
@@ -120,7 +128,7 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (questionErr) {
-      return NextResponse.json({ error: 'No se pudo cargar la pregunta' }, { status: 502 });
+      return pendingResponse('No se pudo cargar la pregunta');
     }
 
     const questionPoints = Number(questionRow?.points ?? 1) || 1;
@@ -133,59 +141,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const expectedText = decodeWhiteboardExpectedText(body.referenceAnswer);
     const openai = new OpenAI({ apiKey });
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Eres corrector de exámenes. Comparas dos dibujos en pizarrón (referencia y alumno). Responde solo JSON: {"score":0|1,"isCorrect":boolean}. score=1 si expresan la misma respuesta matemática o conceptual aunque difieran posición, tamaño o trazo.',
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Pregunta del examen:\n${questionText}\n\nImagen 1 = respuesta de referencia (correcta).\nImagen 2 = respuesta del alumno.\n¿El alumno respondió correctamente?`,
-            },
-            {
-              type: 'image_url',
-              image_url: { url: referenceImage, detail: 'low' },
-            },
-            {
-              type: 'image_url',
-              image_url: { url: studentAnswer, detail: 'low' },
-            },
-          ],
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 80,
-      response_format: { type: 'json_object' },
+    const result = await gradeWhiteboardAnswer({
+      openai,
+      questionText,
+      referenceImage,
+      studentImage: studentAnswer,
+      expectedText,
+      questionPoints,
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() || '{}';
-    let parsed: { score?: number; isCorrect?: boolean };
-    try {
-      parsed = JSON.parse(raw) as { score?: number; isCorrect?: boolean };
-    } catch {
-      const m = raw.match(/\{[\s\S]*\}/);
-      parsed = m ? (JSON.parse(m[0]) as { score?: number; isCorrect?: boolean }) : {};
+    if (result.pending) {
+      return NextResponse.json({
+        score: null,
+        is_correct: null,
+        pending: true,
+        reason: result.reason,
+        studentExpression: result.studentExpression,
+        expectedExpression: result.expectedExpression,
+        model: 'gpt-4o',
+      });
     }
 
-    const scoreNum = parsed.score === 1 || parsed.isCorrect === true ? 1 : 0;
-    const is_correct = scoreNum === 1;
-    const weightedScore = is_correct ? questionPoints : 0;
-
     return NextResponse.json({
-      score: weightedScore,
-      is_correct,
-      model: 'gpt-4o-mini',
+      score: result.score,
+      is_correct: result.is_correct,
+      pending: false,
+      reason: result.reason,
+      studentExpression: result.studentExpression,
+      expectedExpression: result.expectedExpression,
+      model: 'gpt-4o',
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Error desconocido';
     console.error('grade/whiteboard-answer:', e);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return pendingResponse(msg);
   }
 }
