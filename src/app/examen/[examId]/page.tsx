@@ -348,6 +348,12 @@ export default function StudentExamPage() {
   useEffect(() => {
     if (!hasStarted || submitted || forfeitReason) return;
     const blockCopy = (e: Event) => {
+      if (e.type === 'selectstart' && isMobileExamDevice()) {
+        const target = e.target as HTMLElement | null;
+        if (!target?.closest('input, textarea, [contenteditable="true"]')) {
+          return;
+        }
+      }
       e.preventDefault();
     };
     const opts = { capture: true } as AddEventListenerOptions;
@@ -882,9 +888,9 @@ export default function StudentExamPage() {
     <div
       ref={examShellRef}
       className={cn(
-        'relative flex h-full min-h-0 flex-col overflow-y-auto bg-white px-3 pb-24 pt-5 app-scroll sm:px-4 sm:pt-8 select-none touch-manipulation',
+        'relative flex min-h-0 flex-col overflow-hidden bg-white select-none',
         (mobileImmersive || fullscreenMode === 'pseudo') && EXAM_PSEUDO_FULLSCREEN_CLASS,
-        !mobileImmersive && fullscreenMode !== 'pseudo' && 'bg-white/35 backdrop-blur-[2px]',
+        !mobileImmersive && fullscreenMode !== 'pseudo' && 'h-full bg-white/35 backdrop-blur-[2px]',
         '[&_input]:select-text [&_textarea]:select-text'
       )}
       style={{ WebkitTouchCallout: 'none' }}
@@ -928,6 +934,12 @@ export default function StudentExamPage() {
           document.body
         )}
 
+      <div
+        className={cn(
+          'app-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-28 pt-5 sm:px-4 sm:pt-8',
+          (mobileImmersive || fullscreenMode === 'pseudo') && 'exam-pseudo-fullscreen-scroll'
+        )}
+      >
       <div className="mx-auto w-full max-w-4xl">
         <div className="mb-6">
           <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
@@ -1045,6 +1057,7 @@ export default function StudentExamPage() {
             </p>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
