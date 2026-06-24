@@ -149,6 +149,54 @@ const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 const SELECT_NO_EXAM = '__califacil_no_exam__';
 const SELECT_NO_OPTION = '__califacil_no_option__';
 
+type McGradeStats = { pct: number; correct: number; wrong: number; total: number };
+
+/** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */
+function gradeMcDraftAgainstKey(
+  draft: Record<string, string>,
+  questions: Question[],
+  virtualKey: Record<string, string>
+): McGradeStats {
+  const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
+  let correctCount = 0;
+  let earnedPoints = 0;
+  let maxMcPoints = 0;
+  let gradedTotal = 0;
+
+  for (const q of mcQuestions) {
+    const expected = (virtualKey[q.id] ?? '').trim();
+    if (!expected) continue;
+    gradedTotal++;
+    const pts = questionPoints(q);
+    maxMcPoints += pts;
+    const answerText = (draft[q.id] ?? '').trim();
+    const gotIdx = resolveOptionIndexFromValue(q.options, answerText);
+    const wantIdx = resolveOptionIndexFromValue(q.options, expected);
+    const isCorrect = gotIdx !== null && wantIdx !== null && gotIdx === wantIdx;
+    if (isCorrect) {
+      correctCount++;
+      earnedPoints += pts;
+    }
+  }
+
+  const total = gradedTotal;
+  const wrong = Math.max(0, total - correctCount);
+  const pct = maxMcPoints > 0 ? calculatePercentage(earnedPoints, maxMcPoints) : 0;
+  return { pct, correct: correctCount, wrong, total };
+}
+
+function buildMcDraftFromChunk(
+  chunk: Question[],
+  source: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const q of chunk) {
+    if (q.type !== 'multiple_choice') continue;
+    out[q.id] = source[q.id]?.trim() ?? '';
+  }
+  return out;
+}
+
 function isVirtualCameraLabel(label: string | undefined): boolean {
   return Boolean(label && VIRTUAL_CAMERA_RE.test(label));
 }
@@ -367,6 +415,7 @@ export default function CalificarPage() {
   const [showAutoSnapshot, setShowAutoSnapshot] = useState(false);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
+  const [autoGradePersisted, setAutoGradePersisted] = useState(false);
   const [virtualKeyTableDialogOpen, setVirtualKeyTableDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
     pct: number;
@@ -380,6 +429,9 @@ export default function CalificarPage() {
   const [resultsSheetIdx, setResultsSheetIdx] = useState(0);
   const mobileCaptureBusyRef = useRef(false);
   const phaseRef = useRef<Phase>('elegir');
+  const presentInstantCaptureGradeRef = useRef<(draft: Record<string, string>) => Promise<void>>(
+    async () => {}
+  );
   const finalizeCapturedSheetRef = useRef<
     (
       source: HTMLImageElement | HTMLCanvasElement,
@@ -428,21 +480,10 @@ export default function CalificarPage() {
     [reviewOmrGeometry, currentChunk.length]
   );
 
-  /** Comparación borrador vs clave automática solo en la hoja actual (p. ej. 4/10 · 40%). */
+  /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
-    let correct = 0;
-    const total = currentChunk.length;
-    for (let i = 0; i < currentChunk.length; i++) {
-      const q = currentChunk[i];
-      const draftText = draftSelections[q.id]?.trim() ?? '';
-      const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
-      if (!expectedText) continue;
-      const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
-      const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
-      if (pi !== null && ei !== null && pi === ei) correct++;
-    }
-    const pct = total > 0 ? calculatePercentage(correct, total) : 0;
-    return { correct, total, pct };
+    const draft = buildMcDraftFromChunk(currentChunk, draftSelections);
+    return gradeMcDraftAgainstKey(draft, currentChunk, examVirtualKeyByQuestionId);
   }, [currentChunk, draftSelections, examVirtualKeyByQuestionId]);
 
   const sortedStudents = useMemo(
@@ -766,10 +807,9 @@ export default function CalificarPage() {
         isMobileCamera &&
         ambiguousIdx.length > Math.ceil(chunk.length * AMBIGUOUS_ROW_WARN_RATIO)
       ) {
-        toast.error(
-          'Demasiadas respuestas ambiguas. Mejora el encuadre, la luz y vuelve a capturar.'
+        toast.message(
+          'Algunas respuestas fueron ambiguas; las casillas sin lectura clara se tomarán como incorrectas.'
         );
-        return { success: false };
       }
 
       const si = sheetIndexRef.current;
@@ -970,7 +1010,7 @@ export default function CalificarPage() {
           }
         }
       }
-      if (mergedResolved < minResolved) {
+      if (mergedResolved < minResolved && !isMobileCamera) {
         setDraftSelections({});
         setLiveDraftSelections(mergedDraft);
         setLiveResolvedCount(mergedResolved);
@@ -979,9 +1019,9 @@ export default function CalificarPage() {
             ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
             : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
         );
-        if (isMobileCamera || !skipReviewUi) {
+        if (!skipReviewUi) {
           toast.error(
-            isMobileCamera
+            isMobile
               ? `Lectura insuficiente (${mergedResolved}/${chunk.length}). Vuelve a capturar con mejor encuadre.`
               : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
           );
@@ -989,6 +1029,10 @@ export default function CalificarPage() {
         }
         toast.message(
           `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
+        );
+      } else if (isMobileCamera && mergedResolved < minResolved) {
+        toast.message(
+          `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
         );
       } else if (isMobileCamera && !sheetStrict && !skipReviewUi) {
         toast.message(
@@ -1004,6 +1048,38 @@ export default function CalificarPage() {
       setDraftSelections(mapped.draft);
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
+
+      if (isMobileCamera) {
+        const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
+        const snapSource = meta.reviewSourceCanvas ?? activeScanSource;
+        let snapUrl: string | null = null;
+        if (snapSource instanceof HTMLCanvasElement) {
+          const blob = await new Promise<Blob | null>((resolve) => {
+            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
+          });
+          if (blob) snapUrl = URL.createObjectURL(blob);
+        }
+        if (snapUrl && meta.geometry) {
+          let geom: CalifacilOmrScanGeometry;
+          try {
+            geom = structuredClone(meta.geometry);
+          } catch {
+            geom = JSON.parse(JSON.stringify(meta.geometry)) as CalifacilOmrScanGeometry;
+          }
+          setMobileSheetSnapshots((prev) => [
+            ...prev,
+            {
+              sheetIndex: sheetIndexRef.current,
+              previewUrl: snapUrl!,
+              geometry: geom,
+              questionIds: chunk.map((q) => q.id),
+              selectionsByQuestionId: { ...fullChunkDraft },
+            },
+          ]);
+        }
+        await presentInstantCaptureGradeRef.current(fullChunkDraft);
+        return { success: true, chunkDraft: fullChunkDraft };
+      }
 
       if (!skipReviewUi) {
         const ambiguousRowCount = meta.rows.filter((r, i) => i < chunk.length && r.ambiguous).length;
@@ -1855,12 +1931,15 @@ export default function CalificarPage() {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
+    clearMobileSnapshots();
+    setMobileResultsDraft({});
+    setResultsSheetIdx(0);
     flushSync(() => {
       setPhase('capturar');
     });
     phaseRef.current = 'capturar';
     void startLiveCamera({ skipPhaseGuard: true });
-  }, [exam, examId, examLoading, startLiveCamera, supportsCalifacil]);
+  }, [clearMobileSnapshots, exam, examId, examLoading, startLiveCamera, supportsCalifacil]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -1989,6 +2068,65 @@ export default function CalificarPage() {
     return { pct, correct: correctCount, wrong, total: mcTotal };
   };
 
+  const presentInstantCaptureGrade = useCallback(
+    async (fullDraft: Record<string, string>) => {
+      const stats = gradeMcDraftAgainstKey(fullDraft, questions, examVirtualKeyByQuestionId);
+      setAutoGradeStats(stats);
+      setMobileResultsDraft({ ...fullDraft });
+
+      const canPersist =
+        Boolean(selectedStudentId) &&
+        sortedStudents.some((s) => s.id === selectedStudentId) &&
+        canGradeStudents;
+
+      let persisted = false;
+      if (canPersist) {
+        try {
+          await persistStudentAnswers(fullDraft);
+          persisted = true;
+          toast.success('Calificación guardada.');
+        } catch (err: unknown) {
+          const code = err instanceof Error ? err.message : '';
+          if (code === 'incomplete_key') {
+            toast.error('Clave automática incompleta. No se pudo guardar en la nube.');
+          } else {
+            toast.error('No se pudo guardar en la nube. El resultado se muestra igual.');
+          }
+        }
+      } else {
+        toast.message('Resultado calculado. Las casillas sin marcar cuentan como incorrectas.');
+      }
+
+      setAutoGradePersisted(persisted);
+      setAutoGradeDialogOpen(true);
+      stopLiveCamera();
+      setPhase('elegir');
+      setSheetIndex(0);
+      setConfirmedByQuestionId({});
+      confirmedAnswersRef.current = {};
+      setDraftSelections({});
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setLiveDraftSelections({});
+      setLiveResolvedCount(0);
+      liveLockedAnswersRef.current = {};
+      setReviewOmrGeometry(null);
+      setReviewQualityHint(null);
+    },
+    [
+      canGradeStudents,
+      examVirtualKeyByQuestionId,
+      questions,
+      selectedStudentId,
+      sortedStudents,
+      stopLiveCamera,
+    ]
+  );
+
+  presentInstantCaptureGradeRef.current = presentInstantCaptureGrade;
+
   const submitAll = async (merged: Record<string, string>) => {
     if (!exam || !examId) return;
 
@@ -2013,6 +2151,7 @@ export default function CalificarPage() {
     try {
       const stats = await persistStudentAnswers(merged);
       setAutoGradeStats(stats);
+      setAutoGradePersisted(true);
       if (isMobile) {
         setMobileResultsDraft({ ...merged });
       }
@@ -2103,7 +2242,10 @@ export default function CalificarPage() {
         return;
       }
       const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas) ?? fullCanvas;
-      await finalizeCapturedSheet(warped);
+      const result = await finalizeCapturedSheet(warped);
+      if (result.success) {
+        playScanCompleteChime();
+      }
     } finally {
       mobileCaptureBusyRef.current = false;
       setScanBusy(false);
@@ -2156,9 +2298,13 @@ export default function CalificarPage() {
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Calificación guardada</DialogTitle>
+            <DialogTitle>
+              {autoGradePersisted ? 'Calificación guardada' : 'Resultado del examen'}
+            </DialogTitle>
             <DialogDescription>
-              Resultados para {selectedStudentName.trim() || 'el alumno seleccionado'}.
+              {autoGradePersisted
+                ? `Resultados para ${selectedStudentName.trim() || 'el alumno seleccionado'}.`
+                : 'Las casillas sin marcar se consideraron respuestas incorrectas.'}
             </DialogDescription>
           </DialogHeader>
           {autoGradeStats && (
