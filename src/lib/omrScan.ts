@@ -2506,6 +2506,25 @@ export function hasCalifacilCornerMarkers(
 
 /** Visores móviles: esquinas negras impresas alineadas con el marco guía hoja carta. */
 export function areMobileViewfinderCornersAligned(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return false;
+
+  const insetFrac = 0.028;
+  const patchW = Math.max(8, Math.round(W * 0.068));
+  const patchH = Math.max(8, Math.round(H * 0.068));
+  const ix = Math.round(W * insetFrac);
+  const iy = Math.round(H * insetFrac);
+  const screenCorners = [
+    { x: ix, y: iy },
+    { x: W - patchW - ix, y: iy },
+    { x: ix, y: H - patchH - iy },
+    { x: W - patchW - ix, y: H - patchH - iy },
+  ];
+  if (countDarkCornerPatches(ctx, screenCorners, patchW, patchH) >= 4) return true;
+
   return hasCalifacilCornerMarkers(canvas);
 }
 

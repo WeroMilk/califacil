@@ -136,10 +136,10 @@ const MOBILE_CAPTURE_MAX_SIDE = 2400;
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Fotogramas consecutivos con esquinas alineadas antes de captura automática móvil. */
-const CORNER_ALIGN_STABLE_TICKS = 2;
+/** Fotogramas consecutivos con esquinas alineadas antes de captura automática móvil (1 = instantáneo). */
+const CORNER_ALIGN_STABLE_TICKS = 1;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 200;
+const MOBILE_CORNER_LOOP_MS = 100;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -1563,7 +1563,7 @@ export default function CalificarPage() {
                   'Activé el flash. Alinea los 4 cuadros negros con los visores de esquina.'
                 );
               } else {
-                setLiveStatus('Alinear las 4 esquinas negras impresas con los visores.');
+                setLiveStatus('Alinear las 4 esquinas negras con los visores.');
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -1572,7 +1572,6 @@ export default function CalificarPage() {
             cornerStableTicksRef.current += 1;
             lowVisibilityTicksRef.current = 0;
             if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
-              setLiveStatus('Esquinas detectadas. Mantén la hoja quieta…');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2816,7 +2815,6 @@ export default function CalificarPage() {
                       aligned={cornersAlignedView}
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
-                      letterbox={liveVideoLayout}
                     />
                   </div>
                   {scanBusy ? (
@@ -2848,7 +2846,7 @@ export default function CalificarPage() {
                   }}
                 >
                   <p className="mb-1 text-center text-sm font-semibold text-white">
-                    {cornersAlignedView ? 'Esquinas alineadas' : 'Buscando esquinas…'}
+                    {cornersAlignedView ? 'Capturando…' : 'Buscando esquinas…'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                 </div>
