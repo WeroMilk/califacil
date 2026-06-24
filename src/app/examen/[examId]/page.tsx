@@ -709,15 +709,70 @@ export default function StudentExamPage() {
           }
 
           if (isWhiteboardQuestion(question)) {
-            return {
-              exam_id: examId,
-              student_id: studentId,
-              question_id: question.id,
-              answer_text: answerText,
-              is_correct: null,
-              score: null,
-              _points: 0,
-            };
+            try {
+              const res = await fetch('/api/grade/whiteboard-answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  examId,
+                  studentId,
+                  clientSession: clientSessionToken,
+                  questionId: question.id,
+                  questionText: question.text,
+                  referenceAnswer: question.correct_answer,
+                  studentAnswer: answerText,
+                }),
+              });
+              const payload = (await res.json().catch(() => ({}))) as {
+                code?: string;
+                score?: number;
+                is_correct?: boolean;
+              };
+
+              if (res.status === 503 && payload.code === 'NO_KEY') {
+                openSkippedAi = true;
+                return {
+                  exam_id: examId,
+                  student_id: studentId,
+                  question_id: question.id,
+                  answer_text: answerText,
+                  is_correct: null,
+                  score: null,
+                  _points: 0,
+                };
+              }
+              if (!res.ok) {
+                return {
+                  exam_id: examId,
+                  student_id: studentId,
+                  question_id: question.id,
+                  answer_text: answerText,
+                  is_correct: false,
+                  score: 0,
+                  _points: 0,
+                };
+              }
+              const sc = typeof payload.score === 'number' ? payload.score : 0;
+              return {
+                exam_id: examId,
+                student_id: studentId,
+                question_id: question.id,
+                answer_text: answerText,
+                is_correct: sc > 0,
+                score: sc,
+                _points: sc,
+              };
+            } catch {
+              return {
+                exam_id: examId,
+                student_id: studentId,
+                question_id: question.id,
+                answer_text: answerText,
+                is_correct: false,
+                score: 0,
+                _points: 0,
+              };
+            }
           }
 
           try {
@@ -810,8 +865,8 @@ export default function StudentExamPage() {
       setScore(calculatePercentage(obtainedPoints, totalPoints));
       setSubmitted(true);
       toast.success('¡Examen enviado exitosamente!');
-      if (questions.some((q) => isWhiteboardQuestion(q))) {
-        toast.message('Las respuestas en pizarrón serán revisadas por tu maestro.', {
+      if (questions.some((q) => isWhiteboardQuestion(q)) && openSkippedAi) {
+        toast.message('Pizarrón sin calificación automática: falta OPENAI_API_KEY en el servidor.', {
           duration: 6000,
         });
       }
