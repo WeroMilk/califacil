@@ -38,7 +38,9 @@ import {
   enterExamFullscreen,
   exitExamFullscreenSafe,
   isMobileExamDevice,
+  lockExamKeyboard,
   setExamImmersiveRoot,
+  unlockExamKeyboard,
 } from '@/lib/examFullscreen';
 import { EXAM_SECURE_BODY_CLASS } from '@/lib/examAntiCapture';
 import {
@@ -398,26 +400,14 @@ export default function StudentExamPage() {
       if (!el || cancelled) return;
       const mode = await enterExamFullscreen(el);
       if (!cancelled) setFullscreenMode(mode);
-      if (
-        !cancelled &&
-        mode === 'native' &&
-        typeof navigator !== 'undefined' &&
-        navigator.keyboard &&
-        'lock' in navigator.keyboard
-      ) {
-        try {
-          await navigator.keyboard.lock();
-        } catch {
-          /* no disponible */
-        }
+      if (!cancelled && mode === 'native') {
+        await lockExamKeyboard();
       }
     };
     void run();
     return () => {
       cancelled = true;
-      if (typeof navigator !== 'undefined' && navigator.keyboard && 'unlock' in navigator.keyboard) {
-        void navigator.keyboard.unlock().catch(() => undefined);
-      }
+      void unlockExamKeyboard();
     };
   }, [hasStarted, submitted, forfeitReason]);
 

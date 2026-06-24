@@ -105,3 +105,32 @@ export function setExamImmersiveRoot(active: boolean): void {
     window.scrollTo(0, 0);
   }
 }
+
+type KeyboardNavigator = Navigator & {
+  keyboard?: {
+    lock: () => Promise<void>;
+    unlock: () => Promise<void>;
+  };
+};
+
+export async function lockExamKeyboard(): Promise<void> {
+  if (typeof navigator === 'undefined') return;
+  const keyboard = (navigator as KeyboardNavigator).keyboard;
+  if (!keyboard || typeof keyboard.lock !== 'function') return;
+  try {
+    await keyboard.lock();
+  } catch {
+    /* no disponible en este navegador */
+  }
+}
+
+export async function unlockExamKeyboard(): Promise<void> {
+  if (typeof navigator === 'undefined') return;
+  const keyboard = (navigator as KeyboardNavigator).keyboard;
+  if (!keyboard || typeof keyboard.unlock !== 'function') return;
+  try {
+    await keyboard.unlock();
+  } catch {
+    /* ignore */
+  }
+}
