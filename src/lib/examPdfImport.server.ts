@@ -11,14 +11,14 @@ const MC_OPTION = /^[A-Ea-e][\).:\-]\s+/;
 type QuestionWithAnchor = GeneratedQuestion & {
   _anchorPage?: number;
   _anchorY?: number;
-  _triangle?: string;
+  _triangle?: '1' | '2';
 };
 
 function withAnchor(
   question: GeneratedQuestion,
   positionedLines: PositionedLine[],
   lineIndex: number,
-  triangle?: string
+  triangle?: '1' | '2'
 ): QuestionWithAnchor {
   const anchor = lineAnchorForIndex(positionedLines, lineIndex);
   return {
@@ -200,8 +200,8 @@ function parseTriangleBlanks(
   for (const rawLine of lines) {
     if (isSkippableLine(rawLine)) continue;
 
-    const blanks = [...rawLine.matchAll(/\b([ABCabc])\s*=\s*(_{3,})/g)];
-    const vals = [...rawLine.matchAll(/\b([ABCabc])\s*=\s*([^_\s][^_A-Zabc=]{0,40})/g)]
+    const blanks = Array.from(rawLine.matchAll(/\b([ABCabc])\s*=\s*(_{3,})/g));
+    const vals = Array.from(rawLine.matchAll(/\b([ABCabc])\s*=\s*([^_\s][^_A-Zabc=]{0,40})/g))
       .map((m) => ({ field: m[1], value: m[2].trim() }))
       .filter((m) => !/_{3,}/.test(m.value));
 
