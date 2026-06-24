@@ -44,6 +44,34 @@ export function normalizeQuestionText(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
+const SUPERSCRIPT_DIGITS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+const SUPERSCRIPT_MINUS = '⁻';
+const SUPERSCRIPT_PLUS = '⁺';
+
+function integerToSuperscript(value: string): string {
+  const normalized = value.replace(/\s/g, '');
+  if (!/^[-+]?\d+$/.test(normalized)) return value;
+
+  let out = '';
+  if (normalized.startsWith('-')) out += SUPERSCRIPT_MINUS;
+  else if (normalized.startsWith('+')) out += SUPERSCRIPT_PLUS;
+
+  for (const ch of normalized.replace(/^[-+]/, '')) {
+    const digit = Number(ch);
+    if (Number.isNaN(digit)) return value;
+    out += SUPERSCRIPT_DIGITS[digit];
+  }
+  return out;
+}
+
+/** Convierte "3.33x10 4" (texto PDF) a "3.33×10⁴" con exponente visible. */
+export function normalizeScientificNotation(text: string): string {
+  return text.replace(
+    /(\d[\d.]*)\s*[x×]\s*10\s*([+-]?\s*\d+)/gi,
+    (_match, mantissa: string, exponent: string) => `${mantissa}×10${integerToSuperscript(exponent)}`
+  );
+}
+
 /** Conserva la primera aparición de cada enunciado (sin distinguir mayúsculas/espacios). */
 export function dedupeExamQuestions<T extends { text: string }>(questions: T[]): T[] {
   const seen = new Set<string>();
