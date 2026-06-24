@@ -820,7 +820,13 @@ export default function CalificarPage() {
         picksInChunk[0] !== null &&
         picksInChunk.every((p) => p !== null);
 
-      if (CALIFACIL_VISION_POLICY.onAmbiguousRows && ambiguousIdx.length > 0 && examId && !fallbackFile) {
+      if (
+        CALIFACIL_VISION_POLICY.onAmbiguousRows &&
+        ambiguousIdx.length > 0 &&
+        examId &&
+        !fallbackFile &&
+        !isMobileCamera
+      ) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
           globalNumber: i + 1,
@@ -867,7 +873,8 @@ export default function CalificarPage() {
         chunk.length >= 8 &&
         meta.maxSameColumnCount >= 8 &&
         !allSameCol &&
-        !fallbackFile
+        !fallbackFile &&
+        !isMobileCamera
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
@@ -914,7 +921,8 @@ export default function CalificarPage() {
         allSameCol &&
         examId &&
         !ambiguousIdx.length &&
-        !fallbackFile
+        !fallbackFile &&
+        !isMobileCamera
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
@@ -954,7 +962,13 @@ export default function CalificarPage() {
         }
       }
 
-      if (CALIFACIL_VISION_POLICY.onFinalizeEveryRow && examId && chunk.length > 0 && !fallbackFile) {
+      if (
+        CALIFACIL_VISION_POLICY.onFinalizeEveryRow &&
+        examId &&
+        chunk.length > 0 &&
+        !fallbackFile &&
+        !isMobileCamera
+      ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
           globalNumber: i + 1,
@@ -1077,7 +1091,12 @@ export default function CalificarPage() {
             },
           ]);
         }
-        await presentInstantCaptureGradeRef.current(fullChunkDraft);
+        try {
+          await presentInstantCaptureGradeRef.current(fullChunkDraft);
+        } catch {
+          toast.error('No se pudo mostrar el resultado. Intenta de nuevo.');
+          return { success: false };
+        }
         return { success: true, chunkDraft: fullChunkDraft };
       }
 
@@ -1371,7 +1390,16 @@ export default function CalificarPage() {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
-    if (cameraOpen || startingCameraRef.current) return;
+    if (cameraOpen || startingCameraRef.current) {
+      if (opts?.skipPhaseGuard) {
+        stopLiveCamera();
+        startingCameraRef.current = false;
+        mobileCaptureBusyRef.current = false;
+        await sleep(80);
+      } else {
+        return;
+      }
+    }
     startingCameraRef.current = true;
     try {
       resumeScanAudioContext();
@@ -1552,6 +1580,7 @@ export default function CalificarPage() {
 
             cornerStableTicksRef.current = 0;
             mobileCaptureBusyRef.current = true;
+            setScanBusy(true);
             setLiveStatus('Capturando foto para calificar…');
             try {
               const fullCanvas = captureVideoFullFrame(video, {
@@ -1569,6 +1598,7 @@ export default function CalificarPage() {
               }
             } finally {
               mobileCaptureBusyRef.current = false;
+              setScanBusy(false);
             }
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
@@ -1931,6 +1961,10 @@ export default function CalificarPage() {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return;
     }
+    stopLiveCamera();
+    startingCameraRef.current = false;
+    mobileCaptureBusyRef.current = false;
+    setScanBusy(false);
     clearMobileSnapshots();
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
@@ -1938,8 +1972,20 @@ export default function CalificarPage() {
       setPhase('capturar');
     });
     phaseRef.current = 'capturar';
-    void startLiveCamera({ skipPhaseGuard: true });
-  }, [clearMobileSnapshots, exam, examId, examLoading, startLiveCamera, supportsCalifacil]);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void startLiveCamera({ skipPhaseGuard: true });
+      });
+    });
+  }, [
+    clearMobileSnapshots,
+    exam,
+    examId,
+    examLoading,
+    startLiveCamera,
+    stopLiveCamera,
+    supportsCalifacil,
+  ]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {

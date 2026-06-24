@@ -175,7 +175,7 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>todo el círculo</strong> con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
+      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>todo el cuadrado</strong> con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
       <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="3">
         ${thead}
         <tbody>${rows.join('')}</tbody>
@@ -183,7 +183,7 @@ function califacilOmrTableHtml(
     </aside>`;
 }
 
-const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
+const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
     * { box-sizing: border-box; }
     body {
       font-family: "Times New Roman", Times, serif;
@@ -300,15 +300,147 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     }
     /** Hoja dedicada solo a la tabla de respuestas CaliFacil (separada de las preguntas). */
     .print-page--omr-only {
-      --sheet-inner-height: calc(11in - 8mm);
+      --sheet-inner-height: calc(11in - 6mm);
+      --corner-size: 8pt;
+      --corner-gap: 9pt;
       --omr-bottom-gap: 0;
       position: relative;
+      width: 100%;
+      max-width: none;
       min-height: var(--sheet-inner-height);
       overflow: visible;
+      page-break-after: always;
+      break-after: page;
     }
     .print-page--omr-first {
       page-break-before: always;
       break-before: page;
+    }
+    /** Cuadros de alineación en el margen de la hoja, separados del bloque de respuestas. */
+    .print-page--omr-only .sheet-align-corner {
+      width: var(--corner-size);
+      height: var(--corner-size);
+      z-index: 10;
+    }
+    .print-page--omr-only .sheet-align-corner--tl { top: 0; left: 0; }
+    .print-page--omr-only .sheet-align-corner--tr { top: 0; right: 0; }
+    .print-page--omr-only .sheet-align-corner--bl { bottom: 0; left: 0; }
+    .print-page--omr-only .sheet-align-corner--br { bottom: 0; right: 0; }
+    .print-page--omr-only .print-page-omr-sheet-body {
+      position: relative;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      width: auto;
+      margin: calc(var(--corner-size) + var(--corner-gap))
+        calc(var(--corner-size) + var(--corner-gap))
+        3pt;
+      min-height: calc(var(--sheet-inner-height) - var(--corner-size) - var(--corner-gap) - 6pt);
+      height: auto;
+      page-break-inside: avoid;
+      break-inside: avoid-page;
+    }
+    /** Hoja de respuestas: tabla clásica con cuadrados, usando todo el ancho útil. */
+    .print-page--omr-answer-sheet .sheet-header {
+      margin-bottom: 5pt;
+      padding-bottom: 3pt;
+    }
+    .print-page--omr-answer-sheet .omr-sheet-meta {
+      margin-bottom: 6pt;
+    }
+    .print-page--omr-answer-sheet .califacil-omr {
+      position: relative;
+      left: auto;
+      right: auto;
+      bottom: auto;
+      flex: 1 1 auto;
+      margin: 0;
+      min-height: 0;
+      height: auto;
+      width: 100%;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 2;
+      padding: 3pt 4pt 4pt;
+      border: 1.7pt solid #000;
+      border-radius: 0;
+      background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .print-page--omr-answer-sheet .omr-title {
+      flex-shrink: 0;
+      font-size: 6.5pt;
+      margin-bottom: 3pt;
+      font-weight: bold;
+      text-align: center;
+    }
+    .print-page--omr-answer-sheet .omr-table {
+      flex: 1 1 auto;
+      min-height: 0;
+      font-size: 7pt;
+      border: 1pt solid #000;
+    }
+    .print-page--omr-answer-sheet .omr-tr--head .omr-th {
+      border: 0.8pt solid #000;
+      background: #d8d8d8;
+      color: #000;
+      font-weight: 800;
+      padding: 1.6pt 2pt;
+    }
+    .print-page--omr-answer-sheet tbody .omr-tr .omr-qnum {
+      border: 0.8pt solid #000;
+      background: #efefef;
+      font-size: 7pt;
+      padding: 1.4pt 2.5pt;
+      font-weight: bold;
+    }
+    .print-page--omr-answer-sheet tbody .omr-tr .omr-bubble-cell {
+      border: 0.8pt solid #000;
+      background: #fff;
+      padding: 1.2pt 2pt;
+    }
+    .print-page--omr-answer-sheet tbody .omr-tr:nth-child(2n) .omr-bubble-cell {
+      background: #faf8f5;
+    }
+    .print-page--omr-answer-sheet tbody .omr-tr:nth-child(2n) .omr-qnum {
+      background: #e8e8e8;
+    }
+    .print-page--omr-answer-sheet .omr-bubble-wrap {
+      min-height: 10pt;
+    }
+    .print-page--omr-answer-sheet .omr-square {
+      width: 10pt;
+      height: 10pt;
+      min-width: 10pt;
+      min-height: 10pt;
+      border: 1pt solid #000;
+      border-radius: 1.2pt;
+      background: #fff;
+    }
+    .print-page--omr-answer-sheet .omr-th-letter {
+      font-size: 8.4pt;
+    }
+    .print-page--omr-answer-sheet.print-page--dense-omr .omr-square {
+      width: 8.5pt;
+      height: 8.5pt;
+      min-width: 8.5pt;
+      min-height: 8.5pt;
+    }
+    .print-page--omr-answer-sheet.print-page--dense-omr .omr-bubble-wrap {
+      min-height: 8.5pt;
+    }
+    .print-page--omr-answer-sheet.print-page--dense-omr .omr-bubble-cell {
+      padding: 0.8pt 1.5pt;
+    }
+    .print-page--omr-answer-sheet.print-page--dense-omr .omr-qnum {
+      font-size: 6.4pt;
+      padding: 1pt 2pt;
+    }
+    .print-page--omr-answer-sheet.print-page--dense-omr .omr-table {
+      font-size: 6.4pt;
     }
     .print-page--questions-only .question {
       margin-bottom: 5pt;
@@ -323,7 +455,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     }
     /** Una sola hoja con todas las preguntas (hasta 30). */
     .print-page--all-questions {
-      --sheet-inner-height: calc(11in - 8mm);
+      --sheet-inner-height: calc(11in - 6mm);
       page-break-after: always;
       break-after: page;
       max-width: none;
@@ -394,82 +526,6 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       margin-right: 7pt;
       margin-bottom: 0;
     }
-    .print-page--omr-full .califacil-omr {
-      margin-top: 2pt;
-      padding: 6pt 10pt 8pt;
-      border: 1pt solid #666;
-      border-radius: 12pt;
-      background: linear-gradient(180deg, #fcfcfc 0%, #f6f6f6 100%);
-    }
-    .print-page--omr-full .omr-title {
-      font-size: 6.5pt;
-      margin-bottom: 5pt;
-      font-weight: 600;
-      color: #333;
-    }
-    .print-page--omr-full .omr-table {
-      font-size: 6.2pt;
-      border: none;
-      border-collapse: collapse;
-      border-radius: 8pt;
-      overflow: hidden;
-    }
-    .print-page--omr-full .omr-tr--head .omr-th {
-      border: none;
-      border-bottom: 0.75pt solid #888;
-      background: transparent;
-      color: #222;
-      font-weight: 700;
-      padding-bottom: 3pt;
-    }
-    .print-page--omr-full .omr-tr--head .omr-qnum.omr-th {
-      background: transparent;
-    }
-    .print-page--omr-full tbody .omr-tr .omr-qnum {
-      border: none;
-      border-right: 0.4pt solid #d4d4d4;
-      border-bottom: 0.4pt solid #d0d0d0;
-      background: transparent;
-      color: #333;
-      font-weight: 600;
-    }
-    .print-page--omr-full tbody .omr-tr .omr-bubble-cell {
-      border: none;
-      border-bottom: 0.4pt solid #d0d0d0;
-      background: transparent;
-    }
-    .print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-bubble-cell,
-    .print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-qnum {
-      background: transparent;
-    }
-    .print-page--omr-full .omr-bubble-wrap {
-      min-height: 8pt;
-    }
-    .print-page--omr-full .omr-square {
-      width: 8pt;
-      height: 8pt;
-      min-width: 8pt;
-      min-height: 8pt;
-      border: 1.1pt solid #333;
-      border-radius: 50%;
-      background: #fff;
-    }
-    .print-page--omr-full .omr-th-letter {
-      font-size: 7.5pt;
-    }
-    .print-page--omr-full .omr-qnum {
-      font-size: 6.2pt;
-      padding: 1pt 2.5pt;
-    }
-    .print-page--omr-full .omr-bubble-cell {
-      padding: 1pt 2pt;
-    }
-    .print-page--omr-full .omr-sheet-meta {
-      margin-bottom: 4pt;
-    }
-    .print-page--omr-full .sheet-header {
-      margin-bottom: 4pt;
-    }
     .print-page--dense-questions .q-num {
       font-size: 6.6pt;
       line-height: 1.12;
@@ -477,153 +533,6 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     .print-page--dense-questions .opt-inline {
       font-size: 6.4pt;
       line-height: 1.13;
-    }
-    .print-page--omr-full.print-page--dense-omr .omr-square {
-      width: 7.2pt;
-      height: 7.2pt;
-      min-width: 7.2pt;
-      min-height: 7.2pt;
-      border-radius: 50%;
-    }
-    .print-page--omr-full.print-page--dense-omr .omr-bubble-wrap {
-      min-height: 7.2pt;
-    }
-    .print-page--omr-full.print-page--dense-omr .omr-bubble-cell {
-      padding: 0.4pt 1pt;
-    }
-    .print-page--omr-full.print-page--dense-omr .omr-qnum {
-      font-size: 5.8pt;
-      padding: 0.5pt 1.5pt;
-    }
-    .print-page--omr-full.print-page--dense-omr .omr-table {
-      font-size: 5.8pt;
-    }
-    .print-page--omr-only .print-page-omr-sheet-body {
-      position: relative;
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      height: var(--sheet-inner-height);
-      min-height: var(--sheet-inner-height);
-      max-height: var(--sheet-inner-height);
-      page-break-inside: avoid;
-      break-inside: avoid-page;
-    }
-    .print-page--omr-only .califacil-omr {
-      position: relative;
-      left: auto;
-      right: auto;
-      bottom: auto;
-      flex: 1 1 auto;
-      margin: 8pt 0 0;
-      min-height: 118mm;
-      height: auto;
-      width: auto;
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      z-index: 2;
-      padding: 5pt 8pt 6pt;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .print-page--omr-only .omr-title {
-      flex-shrink: 0;
-      font-size: 7pt;
-      margin-bottom: 4pt;
-    }
-    .print-page--omr-only .omr-table {
-      flex: 1 1 auto;
-      min-height: 0;
-      font-size: 8.5pt;
-    }
-    .print-page--omr-only .omr-qnum {
-      font-size: 8.5pt;
-      padding: 2.4pt 4pt;
-    }
-    .print-page--omr-only .omr-bubble-cell {
-      padding: 2.4pt 3pt;
-    }
-    .print-page--omr-only .omr-bubble-wrap {
-      min-height: 14pt;
-    }
-    .print-page--omr-only .omr-square {
-      width: 13pt;
-      height: 13pt;
-      min-width: 13pt;
-      min-height: 13pt;
-      border-width: 1.2pt;
-    }
-    .print-page--omr-only .omr-th-letter {
-      font-size: 10pt;
-    }
-    /** Hoja de respuestas completa: diseño suave (prioridad sobre reglas genéricas omr-only). */
-    .print-page--omr-only.print-page--omr-full .califacil-omr {
-      margin-top: 2pt;
-      padding: 6pt 10pt 8pt;
-      border: 1pt solid #666;
-      border-radius: 12pt;
-      background: linear-gradient(180deg, #fcfcfc 0%, #f6f6f6 100%);
-      min-height: 0;
-    }
-    .print-page--omr-only.print-page--omr-full .omr-title {
-      font-size: 6.5pt;
-      margin-bottom: 5pt;
-      font-weight: 600;
-      color: #333;
-    }
-    .print-page--omr-only.print-page--omr-full .omr-table {
-      font-size: 6.2pt;
-      border: none;
-      border-collapse: collapse;
-    }
-    .print-page--omr-only.print-page--omr-full .omr-tr--head .omr-th {
-      border: none;
-      border-bottom: 0.75pt solid #888;
-      background: transparent;
-      color: #222;
-      font-weight: 700;
-    }
-    .print-page--omr-only.print-page--omr-full tbody .omr-tr .omr-qnum {
-      border: none;
-      border-right: 0.4pt solid #d4d4d4;
-      border-bottom: 0.4pt solid #d0d0d0;
-      background: transparent;
-      font-size: 6.2pt;
-      padding: 1pt 2.5pt;
-    }
-    .print-page--omr-only.print-page--omr-full tbody .omr-tr .omr-bubble-cell {
-      border: none;
-      border-bottom: 0.4pt solid #d0d0d0;
-      background: transparent;
-      padding: 1pt 2pt;
-    }
-    .print-page--omr-only.print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-bubble-cell,
-    .print-page--omr-only.print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-qnum {
-      background: transparent;
-    }
-    .print-page--omr-only.print-page--omr-full .omr-bubble-wrap {
-      min-height: 8pt;
-    }
-    .print-page--omr-only.print-page--omr-full .omr-square {
-      width: 8pt;
-      height: 8pt;
-      min-width: 8pt;
-      min-height: 8pt;
-      border: 1.1pt solid #333;
-      border-radius: 50%;
-      background: #fff;
-    }
-    .print-page--omr-only.print-page--omr-full.print-page--dense-omr .omr-square {
-      width: 7.2pt;
-      height: 7.2pt;
-      min-width: 7.2pt;
-      min-height: 7.2pt;
-    }
-    .print-page--omr-only.print-page--omr-full.print-page--dense-omr .omr-bubble-wrap {
-      min-height: 7.2pt;
     }
     .omr-sheet-meta {
       display: grid;
@@ -633,13 +542,6 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       font-size: 7pt;
     }
     .omr-sheet-meta label { font-weight: bold; }
-    .print-page--omr-only .sheet-align-corner {
-      width: 10pt;
-      height: 10pt;
-    }
-    .print-page--omr-only .sheet-header {
-      margin-bottom: 8pt;
-    }
     .omr-sheet-label {
       font-size: 8pt;
       font-weight: bold;
@@ -919,7 +821,7 @@ function buildOmrAnswerSheetSection(
   const denseOmrClass = questions.length > 15 ? ' print-page--dense-omr' : '';
 
   return `
-  <section class="print-page print-page--omr-only print-page--omr-full${denseOmrClass} print-page--omr-first print-page--break">
+  <section class="print-page print-page--omr-only print-page--omr-answer-sheet${denseOmrClass} print-page--omr-first print-page--break">
 ${sheetAlignCornersHtml()}
     <div class="print-page-omr-sheet-body">
       <header class="sheet-header">
