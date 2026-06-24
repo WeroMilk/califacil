@@ -1,9 +1,17 @@
 /**
  * Lectura aproximada de la banda CaliFacil del pie de hoja impresa.
- * Debe coincidir con el layout de `printExam.ts` (tabla 10 filas × N columnas de burbujas).
+ * Debe coincidir con el layout de `printExam.ts` (tabla N filas × columnas de burbujas).
  */
 
-import { CALIFACIL_VIEWFINDER_GUIDE } from '@/lib/printExam';
+import { CALIFACIL_VIEWFINDER_GUIDE, CALIFACIL_PRINT_MAX_QUESTIONS } from '@/lib/printExam';
+
+export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
+export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
+
+export function clampCalifacilOmrRowCount(raw?: number): number {
+  const n = Math.round(raw ?? CALIFACIL_OMR_DEFAULT_ROWS);
+  return Math.min(CALIFACIL_OMR_MAX_ROWS, Math.max(2, n));
+}
 
 export const CALIFACIL_OMR_SCAN = {
   /** Fracción inferior de la imagen donde cae el recuadro CaliFacil impreso */
@@ -98,6 +106,8 @@ export type CalifacilScanOptions = {
   preserveInputCanvas?: boolean;
   /** Anclaje por plantilla fija para la hoja escaneada de formato constante. */
   fixedTemplateAnchor?: boolean;
+  /** Filas de la tabla impresa (2–30). Por defecto 10. */
+  rowCount?: number;
 };
 
 type ScanThresholds = {
@@ -140,7 +150,7 @@ export type CalifacilOmrScanGeometry = {
   /** Dimensiones del canvas usado en la lectura (puede estar escalado respecto a la foto original). */
   imageWidth: number;
   imageHeight: number;
-  /** 10 filas × `cols` celdas de opción (solo cuerpo de tabla, sin cabecera). */
+  /** N filas × `cols` celdas de opción (solo cuerpo de tabla, sin cabecera). */
   cells: OmrNormRect[][];
 };
 
@@ -211,7 +221,7 @@ export function califacilGeometryTableBounds(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
 ): OmrNormRect | null {
-  const rows = Math.min(10, Math.max(0, rowCount), geometry.cells.length);
+  const rows = Math.min(Math.max(0, rowCount), geometry.cells.length);
   if (rows <= 0) return null;
   let minX = 1;
   let minY = 1;
@@ -2116,29 +2126,31 @@ function inferColumnEdgesGlobalFromVerticalLines(
  * Elige 11 líneas horizontales coherentes con el espaciado esperado (~altura de fila).
  * Devuelve y ordenadas de arriba abajo o null.
  */
-function pickElevenTableLines(
+function pickUniformTableLines(
   peaks: number[],
+  rowCount: number,
   expectedGap: number,
   dataTop: number,
   dataHeight: number
 ): number[] | null {
-  if (peaks.length < 11) return null;
+  const lineCount = rowCount + 1;
+  if (peaks.length < lineCount) return null;
   peaks = [...peaks].sort((a, b) => a - b);
   const yMin = dataTop - dataHeight * 0.08;
   const yMax = dataTop + dataHeight * 1.08;
   const filtered = peaks.filter((y) => y >= yMin && y <= yMax);
-  if (filtered.length < 11) return null;
+  if (filtered.length < lineCount) return null;
 
   let best: number[] | null = null;
   let bestScore = Number.POSITIVE_INFINITY;
   const n = filtered.length;
-  for (let s = 0; s <= n - 11; s++) {
-    const window = filtered.slice(s, s + 11);
+  for (let s = 0; s <= n - lineCount; s++) {
+    const window = filtered.slice(s, s + lineCount);
     const gaps: number[] = [];
-    for (let i = 0; i < 10; i++) gaps.push(window[i + 1]! - window[i]!);
-    const mean = gaps.reduce((a, b) => a + b, 0) / 10;
+    for (let i = 0; i < rowCount; i++) gaps.push(window[i + 1]! - window[i]!);
+    const mean = gaps.reduce((a, b) => a + b, 0) / rowCount;
     if (mean < expectedGap * 0.42 || mean > expectedGap * 2.2) continue;
-    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / 10;
+    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / rowCount;
     const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
     if (cv > 0.42) continue;
     const spacingPenalty =
@@ -2153,7 +2165,7 @@ function pickElevenTableLines(
 }
 
 /**
- * Detecta 11 líneas horizontales de la rejilla impresa y devuelve sus y (11 bordes → 10 filas).
+ * Detecta líneas horizontales de la rejilla impresa y devuelve sus y (N+1 bordes → N filas).
  */
 function refineOmrRowBoundariesFromTableLines(
   data: Uint8ClampedArray,
@@ -2161,9 +2173,10 @@ function refineOmrRowBoundariesFromTableLines(
   height: number,
   bubbleAreaLeft: number,
   dataTop: number,
-  dataHeight: number
+  dataHeight: number,
+  rowCount: number
 ): number[] | null {
-  const rowHGuess = dataHeight / 10;
+  const rowHGuess = dataHeight / rowCount;
   const pad = Math.max(3, rowHGuess * 0.12);
   const yStart = Math.max(1, Math.floor(dataTop - pad));
   const yEnd = Math.min(height - 2, Math.ceil(dataTop + dataHeight + pad));
@@ -2177,10 +2190,10 @@ function refineOmrRowBoundariesFromTableLines(
 
   const minDist = Math.max(2, rowHGuess * 0.38);
   const peaks = findHorizontalLinePeaks(proj, yStart, yEnd, minDist, 0.14);
-  const lines = pickElevenTableLines(peaks, rowHGuess, dataTop, dataHeight);
+  const lines = pickUniformTableLines(peaks, rowCount, rowHGuess, dataTop, dataHeight);
   if (!lines) return null;
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < rowCount; i++) {
     const g = lines[i + 1]! - lines[i]!;
     if (g < 3 || g > rowHGuess * 2.5) return null;
   }
@@ -2200,9 +2213,13 @@ function refineOmrRowBoundariesFromTableLines(
  */
 export function hasCalifacilPrintedTableGrid(
   canvas: HTMLCanvasElement,
-  columns: number
+  columns: number,
+  rowCount?: number
 ): boolean {
   void columns;
+  const rowCountsToTry = rowCount
+    ? [clampCalifacilOmrRowCount(rowCount)]
+    : [10, 20, 30, CALIFACIL_OMR_DEFAULT_ROWS];
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
   const { width, height } = canvas;
@@ -2232,26 +2249,29 @@ export function hasCalifacilPrintedTableGrid(
   ];
   const shifts = [0, -6, 6, -8, 8, -14, 14, -20, 20];
 
-  for (const profile of profiles) {
-    const bandH = height * profile.bottomBandRatio;
-    const bandTop = height - bandH;
-    const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
-    const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
-    const qNumW = width * profile.qnumWidthRatio;
-    for (const colShift of shifts) {
-      const bubbleAreaLeft = Math.max(
-        2,
-        Math.min(width * 0.45, Math.round(qNumW + colShift))
-      );
-      const lineYs = refineOmrRowBoundariesFromTableLines(
-        data,
-        width,
-        height,
-        bubbleAreaLeft,
-        dataTop,
-        dataHeight
-      );
-      if (lineYs && lineYs.length === 11) return true;
+  for (const rows of rowCountsToTry) {
+    for (const profile of profiles) {
+      const bandH = height * profile.bottomBandRatio;
+      const bandTop = height - bandH;
+      const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
+      const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
+      const qNumW = width * profile.qnumWidthRatio;
+      for (const colShift of shifts) {
+        const bubbleAreaLeft = Math.max(
+          2,
+          Math.min(width * 0.45, Math.round(qNumW + colShift))
+        );
+        const lineYs = refineOmrRowBoundariesFromTableLines(
+          data,
+          width,
+          height,
+          bubbleAreaLeft,
+          dataTop,
+          dataHeight,
+          rows
+        );
+        if (lineYs && lineYs.length === rows + 1) return true;
+      }
     }
   }
   return false;
@@ -2274,20 +2294,26 @@ export function isCalifacilExamSheetLikely(
 }
 
 /** Comprueba los cuatro cuadros negros de esquina impresos (`.sheet-align-corner`). */
-function hasCalifacilCornerMarkers(canvas: HTMLCanvasElement): boolean {
+export function hasCalifacilCornerMarkers(
+  canvas: HTMLCanvasElement,
+  opts?: { insetFrac?: number }
+): boolean {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
   const W = canvas.width;
   const H = canvas.height;
   if (W < 80 || H < 80) return false;
 
-  const patchW = Math.max(5, Math.round(W * 0.035));
-  const patchH = Math.max(5, Math.round(H * 0.035));
+  const insetFrac = Math.max(0, Math.min(0.2, opts?.insetFrac ?? 0));
+  const patchW = Math.max(5, Math.round(W * 0.06));
+  const patchH = Math.max(5, Math.round(H * 0.06));
+  const ix = Math.round(W * insetFrac);
+  const iy = Math.round(H * insetFrac);
   const corners = [
-    { x: 0, y: 0 },
-    { x: W - patchW, y: 0 },
-    { x: 0, y: H - patchH },
-    { x: W - patchW, y: H - patchH },
+    { x: ix, y: iy },
+    { x: W - patchW - ix, y: iy },
+    { x: ix, y: H - patchH - iy },
+    { x: W - patchW - ix, y: H - patchH - iy },
   ];
 
   let darkCorners = 0;
@@ -2302,6 +2328,29 @@ function hasCalifacilCornerMarkers(canvas: HTMLCanvasElement): boolean {
     if (darkCount / total >= 0.07) darkCorners++;
   }
   return darkCorners >= 3;
+}
+
+/** Visores móviles: esquinas negras impresas alineadas con el marco en pantalla. */
+export function areMobileViewfinderCornersAligned(
+  canvas: HTMLCanvasElement,
+  insetFrac = 0.05
+): boolean {
+  return hasCalifacilCornerMarkers(canvas, { insetFrac });
+}
+
+export function detectCalifacilSheetCornerQuad(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  return detectCalifacilQuadFromCornerMarkers(canvas);
+}
+
+/** Endereza la hoja usando los cuatro marcadores negros de esquina. */
+export function warpCalifacilSheetFromCornerMarkers(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  const quad = detectCalifacilQuadFromCornerMarkers(canvas);
+  if (!quad) return null;
+  return warpPerspectiveToRect(canvas, quad);
 }
 
 export type CalifacilSheetQualityProbe = {
@@ -2348,13 +2397,17 @@ export function isCalifacilExamSheetStrict(
 function scanCalifacilOmrCanvasDetailed(
   canvas: HTMLCanvasElement,
   columns: number,
-  thresholds: ScanThresholds
+  thresholds: ScanThresholds,
+  rowCount = CALIFACIL_OMR_DEFAULT_ROWS
 ): ScanDetailedResult {
   return scanCalifacilOmrCanvasDetailedWithProfile(
     canvas,
     columns,
     thresholds,
-    CALIFACIL_OMR_SCAN
+    CALIFACIL_OMR_SCAN,
+    0,
+    undefined,
+    rowCount
   );
 }
 
@@ -2364,14 +2417,16 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   thresholds: ScanThresholds,
   profile: OmrGeometryProfile,
   columnShiftPx = 0,
-  fixedTemplate?: OmrFixedTemplate
+  fixedTemplate?: OmrFixedTemplate,
+  rowCount = CALIFACIL_OMR_DEFAULT_ROWS
 ): ScanDetailedResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const out: (number | null)[] = Array(10).fill(null);
+  const out: (number | null)[] = Array(rows).fill(null);
   const rowMetas: OmrScanRowDetail[] = [];
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < rows; i++) {
       rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
     }
     return {
@@ -2401,7 +2456,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const dataHeight = fixedTemplate
     ? bandH * (1 - fixedTemplate.titleStripRatioOfTable)
     : bandH * (1 - profile.titleStripRatioOfBand);
-  const rowH = dataHeight / 10;
+  const rowH = dataHeight / rows;
 
   const qNumW = fixedTemplate ? tableW * fixedTemplate.qnumWidthRatio : width * profile.qnumWidthRatio;
   const maxRight = fixedTemplate ? Math.min(width - 2, tableLeft + tableW - 3) : width * 0.45;
@@ -2430,11 +2485,12 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     height,
     bubbleAreaLeft,
     dataTop,
-    dataHeight
+    dataHeight,
+    rows
   );
   if (lineYs && fixedTemplate) {
     let rowAligned = true;
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < rows + 1; i++) {
       const expected = dataTop + i * rowH;
       const maxDev = rowH * 0.82;
       if (Math.abs(lineYs[i]! - expected) > maxDev) {
@@ -2493,7 +2549,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     bubbleAreaLeft + 8,
     Math.min(width - 1, Math.round(columnEdges[columnEdges.length - 1] ?? width - 1))
   );
-  const hasDetectedRowLines = Boolean(lineYs && lineYs.length === 11);
+  const hasDetectedRowLines = Boolean(lineYs && lineYs.length === rows + 1);
   const hasDetectedColumnEdges = Boolean(inferredColEdges && inferredColEdges.length === cols + 1);
   const minCellW = Math.min(
     ...Array.from({ length: cols }, (_, c) => Math.max(1, columnEdges[c + 1]! - columnEdges[c]!))
@@ -2507,27 +2563,25 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   let confidenceSum = 0;
   let clarityStripGapSum = 0;
   const cells: OmrNormRect[][] = [];
-  for (let row = 0; row < 10; row++) {
+  for (let row = 0; row < rows; row++) {
     let yRowTop: number;
     let yRowBot: number;
     let cy: number;
-    if (lineYs && lineYs.length === 11) {
+    if (lineYs && lineYs.length === rows + 1) {
       yRowTop = lineYs[row]!;
       yRowBot = lineYs[row + 1]!;
       cy = (yRowTop + yRowBot) * 0.5;
-      // Última fila: si el hueco entre la línea 9 y 10 no coincide con el resto, la rejilla
-      // detectada suele desplazar el centro vertical y se lee mal la columna (p. ej. B → A).
-      if (row === 9) {
+      if (row === rows - 1) {
         let sumG = 0;
-        for (let i = 0; i < 9; i++) {
+        for (let i = 0; i < rows - 1; i++) {
           sumG += lineYs[i + 1]! - lineYs[i]!;
         }
-        const meanGap = sumG / 9;
-        const lastGap = lineYs[10]! - lineYs[9]!;
+        const meanGap = sumG / Math.max(1, rows - 1);
+        const lastGap = lineYs[rows]! - lineYs[rows - 1]!;
         if (lastGap < meanGap * 0.68 || lastGap > meanGap * 1.42) {
-          yRowTop = dataTop + 9 * rowH;
-          yRowBot = dataTop + 10 * rowH;
-          cy = dataTop + 9.5 * rowH;
+          yRowTop = dataTop + (rows - 1) * rowH;
+          yRowBot = dataTop + rows * rowH;
+          cy = dataTop + (rows - 0.5) * rowH;
         }
       }
     } else {
@@ -2564,9 +2618,9 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       stripY1,
       otsuT
     );
-    if (row === 9 && lineYs && lineYs.length === 11) {
-      const y0g = Math.min(height - 1, Math.ceil(dataTop + 9 * rowH + stripPad));
-      const y1g = Math.max(y0g, Math.floor(dataTop + 10 * rowH - stripPad));
+    if (row === rows - 1 && lineYs && lineYs.length === rows + 1) {
+      const y0g = Math.min(height - 1, Math.ceil(dataTop + (rows - 1) * rowH + stripPad));
+      const y1g = Math.max(y0g, Math.floor(dataTop + rows * rowH - stripPad));
       const stripGeo = columnStripInkFractionsForEdges(
         data,
         width,
@@ -2900,16 +2954,17 @@ function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
 
 /**
  * @param columns — Número de columnas de burbujas impresas (2–5)
- * @returns Siempre 10 entradas: índice de columna elegida (0 = A) o null si no hay lectura clara
+ * @returns Una entrada por fila impresa: índice de columna elegida (0 = A) o null
  */
 export function scanCalifacilOmrSheet(
   source: HTMLImageElement | HTMLCanvasElement,
   columns: number,
   opts?: CalifacilScanOptions
 ): (number | null)[] {
-  if (typeof document === 'undefined') return Array(10).fill(null);
+  const rowCount = clampCalifacilOmrRowCount(opts?.rowCount);
+  if (typeof document === 'undefined') return Array(rowCount).fill(null);
   let canvas = drawSourceToCanvas(source);
-  if (!canvas) return Array(10).fill(null);
+  if (!canvas) return Array(rowCount).fill(null);
   if (!opts?.skipGuideCrop) {
     const cropped = cropCanvasToCalifacilGuideOverlay(canvas);
     if (cropped) canvas = cropped;
@@ -2940,13 +2995,13 @@ export function scanCalifacilOmrSheet(
     ? buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
-  const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
+  const emptyRows: OmrScanRowDetail[] = Array.from({ length: rowCount }, () => ({
     pick: null,
     ambiguous: false,
     inkFractions: [],
   }));
   let best: ScanDetailedResult = {
-    picks: Array(10).fill(null),
+    picks: Array(rowCount).fill(null),
     resolvedCount: 0,
     confidenceSum: Number.NEGATIVE_INFINITY,
     rows: emptyRows,
@@ -2996,7 +3051,8 @@ export function scanCalifacilOmrSheet(
             thresholds,
             fullSheetProfile,
             colShift,
-            fixedTemplate
+            fixedTemplate,
+            rowCount
           );
           const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
@@ -3036,7 +3092,9 @@ export function scanCalifacilOmrSheet(
             columns,
             thresholds,
             profileQ,
-            colShift
+            colShift,
+            undefined,
+            rowCount
           );
           const detailScore = omrSweepCandidateScore(detail) + profilePrior;
           if (detailScore > bestSweepScore) {
@@ -3059,10 +3117,13 @@ export function scanCalifacilOmrSheetWithMeta(
   columns: number,
   opts?: CalifacilScanOptions
 ): OmrScanMetaResult {
+  const rowCount = clampCalifacilOmrRowCount(opts?.rowCount);
+  const emptyMetaRows = () =>
+    Array.from({ length: rowCount }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
   if (typeof document === 'undefined') {
     return {
-      picks: Array(10).fill(null),
-      rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
+      picks: Array(rowCount).fill(null),
+      rows: emptyMetaRows(),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
       geometry: null,
@@ -3072,8 +3133,8 @@ export function scanCalifacilOmrSheetWithMeta(
   let canvas = drawSourceToCanvas(source);
   if (!canvas) {
     return {
-      picks: Array(10).fill(null),
-      rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
+      picks: Array(rowCount).fill(null),
+      rows: emptyMetaRows(),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
       geometry: null,
@@ -3110,13 +3171,13 @@ export function scanCalifacilOmrSheetWithMeta(
     ? buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
-  const emptyRows: OmrScanRowDetail[] = Array.from({ length: 10 }, () => ({
+  const emptyRows: OmrScanRowDetail[] = Array.from({ length: rowCount }, () => ({
     pick: null,
     ambiguous: false,
     inkFractions: [],
   }));
   let best: ScanDetailedResult = {
-    picks: Array(10).fill(null),
+    picks: Array(rowCount).fill(null),
     resolvedCount: 0,
     confidenceSum: Number.NEGATIVE_INFINITY,
     rows: emptyRows,
@@ -3168,7 +3229,8 @@ export function scanCalifacilOmrSheetWithMeta(
             thresholds,
             fullSheetProfile,
             colShift,
-            fixedTemplate
+            fixedTemplate,
+            rowCount
           );
           const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
@@ -3209,7 +3271,9 @@ export function scanCalifacilOmrSheetWithMeta(
             columns,
             thresholds,
             profileQ,
-            colShift
+            colShift,
+            undefined,
+            rowCount
           );
           const detailScore = omrSweepCandidateScore(detail) + profilePrior;
           if (detailScore > bestSweepScore) {

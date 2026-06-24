@@ -1,6 +1,8 @@
 import type { ExamWithQuestions, Question } from '@/types';
 import { resolveOptionIndexFromValue } from '@/lib/utils';
 
+export const CALIFACIL_PRINT_MAX_QUESTIONS = 30;
+
 /**
  * Relación ancho:alto del recuadro CaliFacil impreso (borde exterior del aside: título + tabla).
  * Calíbralo con captura real: debe coincidir con la caja `.califacil-omr` (--califacil-footer-band 76mm + padding).
@@ -103,17 +105,6 @@ function questionBlock(
     </div>`;
 }
 
-function questionPlaceholderBlock(index: number): string {
-  const n = index + 1;
-  return `
-    <div class="question question--placeholder">
-      <p class="q-num"><strong>${n}.</strong> ________________________________</p>
-      <div class="open-lines">
-        <div class="write-line"></div>
-      </div>
-    </div>`;
-}
-
 export function chunkQuestions<T>(items: T[], size: number): T[][] {
   if (items.length === 0) return [[]];
   const out: T[][] = [];
@@ -143,10 +134,10 @@ export function califacilOmrColumnCount(questions: Question[]): number {
 }
 
 function califacilOmrTableHtml(
-  chunkQs: Question[],
-  startIdx: number,
+  questions: Question[],
   omrCols: number
 ): string {
+  const rowCount = questions.length;
   const headerCells: string[] = [
     `<th class="omr-qnum omr-th" scope="col"><span class="omr-th-num">N.º</span></th>`,
   ];
@@ -159,9 +150,9 @@ function califacilOmrTableHtml(
   const thead = `<thead><tr class="omr-tr omr-tr--head">${headerCells.join('')}</tr></thead>`;
 
   const rows: string[] = [];
-  for (let i = 0; i < 10; i++) {
-    const q = chunkQs[i];
-    const qNum = startIdx + i + 1;
+  for (let i = 0; i < rowCount; i++) {
+    const q = questions[i];
+    const qNum = i + 1;
     if (!q || q.type !== 'multiple_choice') {
       rows.push(
         `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">—</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
@@ -184,8 +175,8 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
-      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-version="2">
+      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>todo el círculo</strong> con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="3">
         ${thead}
         <tbody>${rows.join('')}</tbody>
       </table>
@@ -306,6 +297,350 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     .print-page--break {
       page-break-after: always;
       break-after: page;
+    }
+    /** Hoja dedicada solo a la tabla de respuestas CaliFacil (separada de las preguntas). */
+    .print-page--omr-only {
+      --sheet-inner-height: calc(11in - 8mm);
+      --omr-bottom-gap: 0;
+      position: relative;
+      min-height: var(--sheet-inner-height);
+      overflow: visible;
+    }
+    .print-page--omr-first {
+      page-break-before: always;
+      break-before: page;
+    }
+    .print-page--questions-only .question {
+      margin-bottom: 5pt;
+    }
+    .print-page--questions-only .q-num {
+      font-size: 8.5pt;
+      line-height: 1.16;
+    }
+    .print-page--questions-only .opt-inline {
+      font-size: 8pt;
+      line-height: 1.18;
+    }
+    /** Una sola hoja con todas las preguntas (hasta 30). */
+    .print-page--all-questions {
+      --sheet-inner-height: calc(11in - 8mm);
+      page-break-after: always;
+      break-after: page;
+      max-width: none;
+      width: 100%;
+      min-height: var(--sheet-inner-height);
+      height: var(--sheet-inner-height);
+    }
+    .print-page--all-questions .print-page-questions-body {
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: var(--sheet-inner-height);
+      height: var(--sheet-inner-height);
+    }
+    .print-page--all-questions .sheet-header {
+      flex: 0 0 auto;
+      margin-bottom: 6pt;
+      padding-bottom: 4pt;
+      border-bottom: 0.75pt solid #222;
+    }
+    .print-page--all-questions .header-exam-title {
+      font-size: 10pt;
+      letter-spacing: 0.01em;
+    }
+    .print-page--all-questions .header-exam-range {
+      font-size: 7.5pt;
+      color: #444;
+      margin-top: 1pt;
+    }
+    .print-page--all-questions .meta-grid {
+      flex: 0 0 auto;
+      margin-bottom: 10pt;
+    }
+    .print-page--all-questions .print-chunk {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .print-page--all-questions .questions-block {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 0;
+    }
+    .print-page--all-questions .question {
+      margin-bottom: 0;
+      flex: 0 0 auto;
+    }
+    .print-page--all-questions .question + .question {
+      padding-top: 0;
+      border-top: none;
+    }
+    .print-page--all-questions .q-num {
+      font-size: 7.2pt;
+      line-height: 1.14;
+      margin-bottom: 1.5pt;
+    }
+    .print-page--all-questions .opt-inline {
+      font-size: 6.8pt;
+      line-height: 1.15;
+      margin-left: 6pt;
+      margin-top: 1pt;
+    }
+    .print-page--all-questions .opt-inline-item {
+      margin-right: 7pt;
+      margin-bottom: 0;
+    }
+    .print-page--omr-full .califacil-omr {
+      margin-top: 2pt;
+      padding: 6pt 10pt 8pt;
+      border: 1pt solid #666;
+      border-radius: 12pt;
+      background: linear-gradient(180deg, #fcfcfc 0%, #f6f6f6 100%);
+    }
+    .print-page--omr-full .omr-title {
+      font-size: 6.5pt;
+      margin-bottom: 5pt;
+      font-weight: 600;
+      color: #333;
+    }
+    .print-page--omr-full .omr-table {
+      font-size: 6.2pt;
+      border: none;
+      border-collapse: collapse;
+      border-radius: 8pt;
+      overflow: hidden;
+    }
+    .print-page--omr-full .omr-tr--head .omr-th {
+      border: none;
+      border-bottom: 0.75pt solid #888;
+      background: transparent;
+      color: #222;
+      font-weight: 700;
+      padding-bottom: 3pt;
+    }
+    .print-page--omr-full .omr-tr--head .omr-qnum.omr-th {
+      background: transparent;
+    }
+    .print-page--omr-full tbody .omr-tr .omr-qnum {
+      border: none;
+      border-right: 0.4pt solid #d4d4d4;
+      border-bottom: 0.4pt solid #d0d0d0;
+      background: transparent;
+      color: #333;
+      font-weight: 600;
+    }
+    .print-page--omr-full tbody .omr-tr .omr-bubble-cell {
+      border: none;
+      border-bottom: 0.4pt solid #d0d0d0;
+      background: transparent;
+    }
+    .print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-bubble-cell,
+    .print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-qnum {
+      background: transparent;
+    }
+    .print-page--omr-full .omr-bubble-wrap {
+      min-height: 8pt;
+    }
+    .print-page--omr-full .omr-square {
+      width: 8pt;
+      height: 8pt;
+      min-width: 8pt;
+      min-height: 8pt;
+      border: 1.1pt solid #333;
+      border-radius: 50%;
+      background: #fff;
+    }
+    .print-page--omr-full .omr-th-letter {
+      font-size: 7.5pt;
+    }
+    .print-page--omr-full .omr-qnum {
+      font-size: 6.2pt;
+      padding: 1pt 2.5pt;
+    }
+    .print-page--omr-full .omr-bubble-cell {
+      padding: 1pt 2pt;
+    }
+    .print-page--omr-full .omr-sheet-meta {
+      margin-bottom: 4pt;
+    }
+    .print-page--omr-full .sheet-header {
+      margin-bottom: 4pt;
+    }
+    .print-page--dense-questions .q-num {
+      font-size: 6.6pt;
+      line-height: 1.12;
+    }
+    .print-page--dense-questions .opt-inline {
+      font-size: 6.4pt;
+      line-height: 1.13;
+    }
+    .print-page--omr-full.print-page--dense-omr .omr-square {
+      width: 7.2pt;
+      height: 7.2pt;
+      min-width: 7.2pt;
+      min-height: 7.2pt;
+      border-radius: 50%;
+    }
+    .print-page--omr-full.print-page--dense-omr .omr-bubble-wrap {
+      min-height: 7.2pt;
+    }
+    .print-page--omr-full.print-page--dense-omr .omr-bubble-cell {
+      padding: 0.4pt 1pt;
+    }
+    .print-page--omr-full.print-page--dense-omr .omr-qnum {
+      font-size: 5.8pt;
+      padding: 0.5pt 1.5pt;
+    }
+    .print-page--omr-full.print-page--dense-omr .omr-table {
+      font-size: 5.8pt;
+    }
+    .print-page--omr-only .print-page-omr-sheet-body {
+      position: relative;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: var(--sheet-inner-height);
+      min-height: var(--sheet-inner-height);
+      max-height: var(--sheet-inner-height);
+      page-break-inside: avoid;
+      break-inside: avoid-page;
+    }
+    .print-page--omr-only .califacil-omr {
+      position: relative;
+      left: auto;
+      right: auto;
+      bottom: auto;
+      flex: 1 1 auto;
+      margin: 8pt 0 0;
+      min-height: 118mm;
+      height: auto;
+      width: auto;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 2;
+      padding: 5pt 8pt 6pt;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .print-page--omr-only .omr-title {
+      flex-shrink: 0;
+      font-size: 7pt;
+      margin-bottom: 4pt;
+    }
+    .print-page--omr-only .omr-table {
+      flex: 1 1 auto;
+      min-height: 0;
+      font-size: 8.5pt;
+    }
+    .print-page--omr-only .omr-qnum {
+      font-size: 8.5pt;
+      padding: 2.4pt 4pt;
+    }
+    .print-page--omr-only .omr-bubble-cell {
+      padding: 2.4pt 3pt;
+    }
+    .print-page--omr-only .omr-bubble-wrap {
+      min-height: 14pt;
+    }
+    .print-page--omr-only .omr-square {
+      width: 13pt;
+      height: 13pt;
+      min-width: 13pt;
+      min-height: 13pt;
+      border-width: 1.2pt;
+    }
+    .print-page--omr-only .omr-th-letter {
+      font-size: 10pt;
+    }
+    /** Hoja de respuestas completa: diseño suave (prioridad sobre reglas genéricas omr-only). */
+    .print-page--omr-only.print-page--omr-full .califacil-omr {
+      margin-top: 2pt;
+      padding: 6pt 10pt 8pt;
+      border: 1pt solid #666;
+      border-radius: 12pt;
+      background: linear-gradient(180deg, #fcfcfc 0%, #f6f6f6 100%);
+      min-height: 0;
+    }
+    .print-page--omr-only.print-page--omr-full .omr-title {
+      font-size: 6.5pt;
+      margin-bottom: 5pt;
+      font-weight: 600;
+      color: #333;
+    }
+    .print-page--omr-only.print-page--omr-full .omr-table {
+      font-size: 6.2pt;
+      border: none;
+      border-collapse: collapse;
+    }
+    .print-page--omr-only.print-page--omr-full .omr-tr--head .omr-th {
+      border: none;
+      border-bottom: 0.75pt solid #888;
+      background: transparent;
+      color: #222;
+      font-weight: 700;
+    }
+    .print-page--omr-only.print-page--omr-full tbody .omr-tr .omr-qnum {
+      border: none;
+      border-right: 0.4pt solid #d4d4d4;
+      border-bottom: 0.4pt solid #d0d0d0;
+      background: transparent;
+      font-size: 6.2pt;
+      padding: 1pt 2.5pt;
+    }
+    .print-page--omr-only.print-page--omr-full tbody .omr-tr .omr-bubble-cell {
+      border: none;
+      border-bottom: 0.4pt solid #d0d0d0;
+      background: transparent;
+      padding: 1pt 2pt;
+    }
+    .print-page--omr-only.print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-bubble-cell,
+    .print-page--omr-only.print-page--omr-full tbody .omr-tr:nth-child(2n) .omr-qnum {
+      background: transparent;
+    }
+    .print-page--omr-only.print-page--omr-full .omr-bubble-wrap {
+      min-height: 8pt;
+    }
+    .print-page--omr-only.print-page--omr-full .omr-square {
+      width: 8pt;
+      height: 8pt;
+      min-width: 8pt;
+      min-height: 8pt;
+      border: 1.1pt solid #333;
+      border-radius: 50%;
+      background: #fff;
+    }
+    .print-page--omr-only.print-page--omr-full.print-page--dense-omr .omr-square {
+      width: 7.2pt;
+      height: 7.2pt;
+      min-width: 7.2pt;
+      min-height: 7.2pt;
+    }
+    .print-page--omr-only.print-page--omr-full.print-page--dense-omr .omr-bubble-wrap {
+      min-height: 7.2pt;
+    }
+    .omr-sheet-meta {
+      display: grid;
+      grid-template-columns: minmax(0, 2.35fr) minmax(0, 0.55fr) minmax(0, 1.1fr);
+      gap: 2pt 6pt;
+      margin: 0 0 10pt;
+      font-size: 7pt;
+    }
+    .omr-sheet-meta label { font-weight: bold; }
+    .print-page--omr-only .sheet-header {
+      margin-bottom: 8pt;
+    }
+    .omr-sheet-label {
+      font-size: 8pt;
+      font-weight: bold;
+      margin: 2pt 0 0;
+      color: #222;
     }
     /* Siguientes bloques de 10 reactivos: nueva hoja fiable en todos los navegadores */
     .print-page--continuation {
@@ -506,6 +841,14 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
     @media print {
       body { max-width: none; }
       .no-print { display: none; }
+      .print-page--all-questions,
+      .print-page--all-questions .print-page-questions-body {
+        height: var(--sheet-inner-height);
+        min-height: var(--sheet-inner-height);
+      }
+      .print-page--all-questions .questions-block {
+        justify-content: space-between;
+      }
       .print-page--with-omr .print-page-omr-bundle {
         height: var(--sheet-inner-height);
         min-height: var(--sheet-inner-height);
@@ -518,6 +861,79 @@ const PRINT_STYLES = `    @page { size: letter; margin: 4mm 7mm; }
       }
     }`;
 
+function sheetAlignCornersHtml(): string {
+  return `
+    <span class="sheet-align-corner sheet-align-corner--tl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--tr" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--bl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--br" aria-hidden="true"></span>`;
+}
+
+function buildQuestionPageSection(
+  questions: Question[],
+  title: string,
+  includeAnswerKey: boolean
+): string {
+  const questionsInPage = questions
+    .map((q, i) => questionBlock(q, i, includeAnswerKey))
+    .join('');
+
+  const qb = questionsInPage || '<p class="empty-note">Sin preguntas.</p>';
+
+  const denseClass = questions.length > 15 ? ' print-page--dense-questions' : '';
+
+  return `
+  <section class="print-page print-page--questions-only print-page--all-questions${denseClass} print-page--break">
+    <div class="print-page-questions-body">
+    <header class="sheet-header">
+      <div class="sheet-header-text">
+        <div class="header-exam-title">${title}</div>
+        <div class="header-exam-range">Preguntas 1 a ${questions.length}</div>
+      </div>
+    </header>
+  <div class="meta-grid">
+    <div><label>Nombre del alumno</label><div class="meta-line"></div></div>
+    <div><label>Grupo</label><div class="meta-line"></div></div>
+    <div><label>Fecha</label><div class="meta-line"></div></div>
+  </div>
+    <div class="print-chunk">
+      <div class="questions-block">
+        ${qb}
+      </div>
+    </div>
+    </div>
+  </section>`;
+}
+
+function buildOmrAnswerSheetSection(
+  questions: Question[],
+  title: string,
+  omrCols: number
+): string {
+  const omrHtml = califacilOmrTableHtml(questions, omrCols);
+  const sheetNote = `Hoja de respuestas · Preguntas 1 a ${questions.length}`;
+  const denseOmrClass = questions.length > 15 ? ' print-page--dense-omr' : '';
+
+  return `
+  <section class="print-page print-page--omr-only print-page--omr-full${denseOmrClass} print-page--omr-first print-page--break">
+${sheetAlignCornersHtml()}
+    <div class="print-page-omr-sheet-body">
+      <header class="sheet-header">
+        <div class="sheet-header-text">
+          <div class="header-exam-title">${title}</div>
+          <div class="omr-sheet-label">${sheetNote}</div>
+        </div>
+      </header>
+      <div class="omr-sheet-meta">
+        <div><label>Nombre del alumno</label><div class="meta-line"></div></div>
+        <div><label>Grupo</label><div class="meta-line"></div></div>
+        <div><label>Fecha</label><div class="meta-line"></div></div>
+      </div>
+${omrHtml}
+    </div>
+  </section>`;
+}
+
 /**
  * HTML completo del examen (mismo documento que se usa para imprimir).
  */
@@ -529,86 +945,14 @@ export function buildPrintExamHtml(
   const title = escapeHtml(exam.title);
 
   const omrCols = califacilOmrColumnCount(exam.questions);
+  const questions = exam.questions;
 
-  const chunks = chunkQuestions(exam.questions, 10);
-  const pagesHtml = chunks
-    .map((chunkQs, pageIdx) => {
-      const isFirst = pageIdx === 0;
-      const isLast = pageIdx === chunks.length - 1;
-      const startIdx = pageIdx * 10;
-      const rangeStart = startIdx + 1;
-      const rangeEnd = startIdx + 10;
-      const questionsInPage = Array.from({ length: 10 }, (_, i) => {
-        const q = chunkQs[i];
-        return q
-          ? questionBlock(q, startIdx + i, includeAnswerKey)
-          : questionPlaceholderBlock(startIdx + i);
-      })
-        .join('');
-      const breakClass = !isLast ? ' print-page--break' : '';
-      const continuationClass = !isFirst ? ' print-page--continuation' : '';
-      const pageClass = `print-page${continuationClass}${breakClass}`.trim().replace(/\s+/g, ' ');
+  const questionPagesHtml = buildQuestionPageSection(questions, title, includeAnswerKey);
 
-      const headerRight = isFirst
-        ? `<div class="header-exam-title">${title}</div>`
-        : `<div class="header-exam-title">${title}</div><div class="header-exam-range">Preguntas ${rangeStart} a ${rangeEnd}</div>`;
+  const omrPagesHtml =
+    omrCols > 0 ? buildOmrAnswerSheetSection(questions, title, omrCols) : '';
 
-      const firstPageBlock = isFirst
-        ? `
-  <div class="meta-grid">
-    <div><label>Nombre del alumno</label><div class="meta-line"></div></div>
-    <div><label>Grupo</label><div class="meta-line"></div></div>
-    <div><label>Fecha</label><div class="meta-line"></div></div>
-  </div>`
-        : '';
-
-      const qb = questionsInPage || '<p class="empty-note">Sin preguntas en esta sección.</p>';
-      const withOmr = omrCols > 0;
-      const omrHtml = withOmr ? califacilOmrTableHtml(chunkQs, startIdx, omrCols) : '';
-
-      const sectionClass = `${pageClass}${withOmr ? ' print-page--with-omr' : ''}`;
-
-      const sheetHeaderHtml = `
-    <header class="sheet-header">
-      <div class="sheet-header-text">
-        ${headerRight}
-      </div>
-    </header>`;
-
-
-      const bodyInner = withOmr
-        ? `
-    <div class="print-page-omr-bundle">
-      <div class="print-page-top">
-${sheetHeaderHtml}
-${firstPageBlock}
-      </div>
-      <div class="print-page-fill">
-        <div class="questions-block">
-          ${qb}
-        </div>
-      </div>
-${omrHtml}
-    </div>`
-        : `
-${sheetHeaderHtml}
-${firstPageBlock}
-    <div class="print-chunk">
-      <div class="questions-block">
-        ${qb}
-      </div>
-    </div>`;
-
-      return `
-  <section class="${sectionClass}">
-    <span class="sheet-align-corner sheet-align-corner--tl" aria-hidden="true"></span>
-    <span class="sheet-align-corner sheet-align-corner--tr" aria-hidden="true"></span>
-    <span class="sheet-align-corner sheet-align-corner--bl" aria-hidden="true"></span>
-    <span class="sheet-align-corner sheet-align-corner--br" aria-hidden="true"></span>
-${bodyInner}
-  </section>`;
-    })
-    .join('');
+  const pagesHtml = questionPagesHtml + omrPagesHtml;
 
   return `<!DOCTYPE html>
 <html lang="es">

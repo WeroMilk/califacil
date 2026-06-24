@@ -141,6 +141,11 @@ export default function CreateExamPage() {
           `Se omitieron ${data.questions.length - uniqueQuestions.length} preguntas repetidas`
         );
       }
+      if (uniqueQuestions.length < questionCount) {
+        toast.warning(
+          `Solo se obtuvieron ${uniqueQuestions.length} de ${questionCount} preguntas. Intenta de nuevo o reduce el número.`
+        );
+      }
       const pointValues = distributeExamPoints(uniqueQuestions.length);
       setGeneratedQuestions(
         uniqueQuestions.map((q: GeneratedQuestion, index: number) => ({
@@ -150,7 +155,9 @@ export default function CreateExamPage() {
       );
       setQuestionSourceMode('ia');
       setCurrentStep(3);
-      toast.success(`${uniqueQuestions.length} preguntas generadas`);
+      toast.success(
+        `${uniqueQuestions.length} pregunta${uniqueQuestions.length === 1 ? '' : 's'} generada${uniqueQuestions.length === 1 ? '' : 's'}`
+      );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Error desconocido';
       toast.error('Error al generar preguntas', {

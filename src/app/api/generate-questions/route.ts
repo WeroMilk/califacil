@@ -7,10 +7,15 @@ import {
   isSubscriptionActive,
   isCalifacilSuperUserEmail,
 } from '@/lib/billing';
-import { dedupeExamQuestions } from '@/lib/utils';
+import { dedupeExamQuestions, normalizeQuestionText } from '@/lib/utils';
 
 const DIFFICULTY_LEVELS = ['easy', 'medium', 'hard', 'extreme'] as const;
 type Difficulty = (typeof DIFFICULTY_LEVELS)[number];
+
+const MAX_QUESTIONS_PER_REQUEST = 30;
+const OPENAI_BATCH_SIZE = 6;
+
+export const maxDuration = 120;
 
 function shuffleArrayInPlace<T>(arr: T[]): void {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -40,6 +45,12 @@ function withShuffledMcOptions(questions: Record<string, unknown>[]): Record<str
   return questions.map((q) => shuffleMultipleChoiceOptions(q));
 }
 
+function clampQuestionCount(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(MAX_QUESTIONS_PER_REQUEST, Math.max(1, Math.round(n)));
+}
+
 function difficultyInstructions(level: string): string {
   const normalized = DIFFICULTY_LEVELS.includes(level as Difficulty)
     ? (level as Difficulty)
@@ -55,6 +66,204 @@ function difficultyInstructions(level: string): string {
       'NIVEL EXTREMO: máximo rigor; problemas exigentes, sutilezas, síntesis o complejidad alta (sin salirte de los temas indicados).',
   };
   return map[normalized];
+}
+
+function buildGenerationPrompt(params: {
+  topics: string;
+  count: number;
+  batchIndex: number;
+  batchTotal: number;
+  globalStart: number;
+  globalTotal: number;
+  questionTypes: string[];
+  difficulty: string;
+  existingTexts?: string[];
+}): string {
+  const {
+    topics,
+    count,
+    batchIndex,
+    batchTotal,
+    globalStart,
+    globalTotal,
+    questionTypes,
+    difficulty,
+    existingTexts = [],
+  } = params;
+  const rangeLabel =
+    batchTotal > 1
+      ? `Este es el lote ${batchIndex + 1} de ${batchTotal}. Genera exactamente ${count} preguntas distintas (reactivos ${globalStart + 1} a ${globalStart + count} de ${globalTotal}).`
+      : `Genera exactamente ${count} preguntas.`;
+
+  const avoidRepeatBlock =
+    existingTexts.length > 0
+      ? `\nEnunciados ya usados (no repitas ni parafrasees de forma similar):\n${existingTexts
+          .slice(-24)
+          .map((t, i) => `${i + 1}. ${t.slice(0, 200)}`)
+          .join('\n')}\n`
+      : '';
+
+  return `Genera ${count} preguntas de examen sobre los siguientes temas: ${topics}
+
+${difficultyInstructions(difficulty)}
+
+${rangeLabel}
+${avoidRepeatBlock}
+Para cada pregunta, incluye:
+- text: El texto de la pregunta (sin numeración tipo "1." o "Pregunta 1")
+- type: Tipo de pregunta (${questionTypes.join(' o ')})
+- Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta
+- Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)
+- illustration: Una breve descripción de una ilustración (opcional)
+
+IMPORTANTE: Cada pregunta debe ser única y cubrir un aspecto distinto. No repitas enunciados.
+
+Responde ÚNICAMENTE con JSON: {"questions":[...]}`;
+}
+
+function parseQuestionsJson(raw: string): Record<string, unknown>[] {
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No valid JSON found in response');
+  const parsedResponse = JSON.parse(jsonMatch[0]) as { questions?: unknown };
+  if (!parsedResponse.questions || !Array.isArray(parsedResponse.questions)) {
+    throw new Error('Invalid response format');
+  }
+  return parsedResponse.questions as Record<string, unknown>[];
+}
+
+async function generateOpenAIQuestionsBatch(
+  openai: OpenAI,
+  params: {
+    topics: string;
+    count: number;
+    batchIndex: number;
+    batchTotal: number;
+    globalStart: number;
+    globalTotal: number;
+    questionTypes: string[];
+    difficulty: string;
+    existingTexts?: string[];
+  }
+): Promise<Record<string, unknown>[]> {
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Eres un asistente experto en crear reactivos de examen escolares en español. Genera el número exacto de preguntas pedido. Responde únicamente con JSON válido.',
+      },
+      {
+        role: 'user',
+        content: buildGenerationPrompt(params),
+      },
+    ],
+    temperature: 0.7,
+    max_tokens: 4096,
+    response_format: { type: 'json_object' },
+  });
+
+  const responseContent = completion.choices[0]?.message?.content || '';
+  return parseQuestionsJson(responseContent);
+}
+
+async function generateAllOpenAIQuestions(
+  openai: OpenAI,
+  topics: string,
+  totalCount: number,
+  questionTypes: string[],
+  difficulty: string
+): Promise<Record<string, unknown>[]> {
+  const collected: Record<string, unknown>[] = [];
+  const batchTotal = Math.ceil(totalCount / OPENAI_BATCH_SIZE);
+
+  for (let offset = 0; offset < totalCount; offset += OPENAI_BATCH_SIZE) {
+    const batchCount = Math.min(OPENAI_BATCH_SIZE, totalCount - offset);
+    const batchIndex = Math.floor(offset / OPENAI_BATCH_SIZE);
+    const existingTexts = collected
+      .map((q) => (q.text != null ? String(q.text).trim() : ''))
+      .filter(Boolean);
+
+    try {
+      const batch = await generateOpenAIQuestionsBatch(openai, {
+        topics,
+        count: batchCount,
+        batchIndex,
+        batchTotal,
+        globalStart: offset,
+        globalTotal: totalCount,
+        questionTypes,
+        difficulty,
+        existingTexts,
+      });
+      collected.push(...batch);
+    } catch (batchError) {
+      console.error(`OpenAI batch ${batchIndex + 1}/${batchTotal} failed:`, batchError);
+    }
+  }
+
+  return collected;
+}
+
+function mergeToTargetCount(
+  primary: { text: string }[],
+  topics: string,
+  targetCount: number,
+  includeMultipleChoice: boolean,
+  includeOpenAnswer: boolean,
+  difficulty: string
+): { text: string }[] {
+  let merged = dedupeExamQuestions(primary);
+  if (merged.length >= targetCount) return merged.slice(0, targetCount);
+
+  const seen = new Set(merged.map((q) => normalizeQuestionText(q.text)));
+  let seed = 0;
+  while (merged.length < targetCount && seed < targetCount * 6) {
+    const pad = generateFallbackQuestions(
+      topics,
+      targetCount - merged.length,
+      includeMultipleChoice,
+      includeOpenAnswer,
+      difficulty,
+      seed
+    ) as { text: string }[];
+    let added = 0;
+    for (const q of pad) {
+      const key = normalizeQuestionText(q.text);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(q);
+      added++;
+      if (merged.length >= targetCount) break;
+    }
+    seed += Math.max(pad.length, 1);
+    if (added === 0) seed += 1;
+  }
+
+  while (merged.length < targetCount) {
+    const idx = merged.length;
+    const pad = generateFallbackQuestions(
+      topics,
+      1,
+      includeMultipleChoice,
+      includeOpenAnswer,
+      difficulty,
+      idx + seed
+    ) as { text: string }[];
+    const base = pad[0];
+    if (!base) break;
+    const suffix = ` (reactivo ${idx + 1})`;
+    const text = base.text.endsWith(suffix) ? base.text : `${base.text}${suffix}`;
+    const key = normalizeQuestionText(text);
+    if (seen.has(key)) {
+      seed += 1;
+      continue;
+    }
+    seen.add(key);
+    merged.push({ ...base, text });
+  }
+
+  return merged.slice(0, targetCount);
 }
 
 export async function POST(request: NextRequest) {
@@ -119,7 +328,7 @@ export async function POST(request: NextRequest) {
 
     const {
       topics,
-      count,
+      count: countRaw,
       includeMultipleChoice,
       includeOpenAnswer,
       difficulty: difficultyRaw,
@@ -128,15 +337,16 @@ export async function POST(request: NextRequest) {
     const difficulty = DIFFICULTY_LEVELS.includes(difficultyRaw)
       ? difficultyRaw
       : 'medium';
+    const questionCount = clampQuestionCount(countRaw);
 
-    if (!topics || !count) {
+    if (!topics?.trim()) {
       return NextResponse.json(
         { error: 'Topics and count are required' },
         { status: 400 }
       );
     }
 
-    const questionTypes = [];
+    const questionTypes: string[] = [];
     if (includeMultipleChoice) questionTypes.push('multiple_choice');
     if (includeOpenAnswer) questionTypes.push('open_answer');
 
@@ -147,42 +357,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const prompt = `Genera ${count} preguntas de examen sobre los siguientes temas: ${topics}
-
-${difficultyInstructions(difficulty)}
-
-Para cada pregunta, incluye:
-- text: El texto de la pregunta (sin numeración tipo "1." o "Pregunta 1")
-- type: Tipo de pregunta (${questionTypes.join(' o ')})
-- Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta (el orden de las opciones puede ser cualquiera)
-- Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)
-- illustration: Una breve descripción de una ilustración que ayude a entender la pregunta (opcional)
-
-IMPORTANTE: Cada pregunta debe ser única. No repitas ni parafrasees el mismo enunciado.
-
-Responde ÚNICAMENTE con un JSON válido en este formato exacto:
-{
-  "questions": [
-    {
-      "text": "¿Pregunta?",
-      "type": "multiple_choice",
-      "options": ["Texto de una opción", "Otra opción", "Tercera opción", "Cuarta opción"],
-      "correct_answer": "Texto de una opción",
-      "illustration": "Descripción de ilustración"
-    }
-  ]
-}`;
-
+    const topicsTrimmed = String(topics).trim();
     const apiKey = process.env.OPENAI_API_KEY?.trim();
+
     if (!apiKey) {
       const fallbackQuestions = generateFallbackQuestions(
-        topics,
-        count,
+        topicsTrimmed,
+        questionCount,
         includeMultipleChoice,
         includeOpenAnswer,
-        difficulty
+        difficulty,
+        0
       );
-      return NextResponse.json({ questions: dedupeExamQuestions(fallbackQuestions) });
+      return NextResponse.json({
+        questions: mergeToTargetCount(
+          fallbackQuestions as { text: string }[],
+          topicsTrimmed,
+          questionCount,
+          includeMultipleChoice,
+          includeOpenAnswer,
+          difficulty
+        ),
+      });
     }
 
     const openai = new OpenAI({ apiKey });
@@ -201,73 +397,84 @@ Responde ÚNICAMENTE con un JSON válido en este formato exacto:
     }
 
     try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Eres un asistente experto en crear reactivos de examen. Respetas estrictamente el nivel de dificultad indicado. Responde únicamente con JSON válido.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 4000,
-      });
-
-      const responseContent = completion.choices[0]?.message?.content || '';
-      
-      // Extract JSON from response
-      const jsonMatch = responseContent.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No valid JSON found in response');
-      }
-
-      const parsedResponse = JSON.parse(jsonMatch[0]);
-      
-      if (!parsedResponse.questions || !Array.isArray(parsedResponse.questions)) {
-        throw new Error('Invalid response format');
-      }
-
-      return NextResponse.json({
-        questions: dedupeExamQuestions(
-          withShuffledMcOptions(parsedResponse.questions as Record<string, unknown>[]) as { text: string }[]
-        ),
-      });
-    } catch (openaiError: any) {
-      console.error('OpenAI error:', openaiError);
-      
-      // Fallback: Generate sample questions
-      const fallbackQuestions = generateFallbackQuestions(
-        topics,
-        count,
+      const rawQuestions = await generateAllOpenAIQuestions(
+        openai,
+        topicsTrimmed,
+        questionCount,
+        questionTypes,
+        difficulty
+      );
+      const shuffled = withShuffledMcOptions(rawQuestions) as { text: string }[];
+      const questions = mergeToTargetCount(
+        shuffled,
+        topicsTrimmed,
+        questionCount,
         includeMultipleChoice,
         includeOpenAnswer,
         difficulty
       );
-      return NextResponse.json({ questions: dedupeExamQuestions(fallbackQuestions) });
+
+      return NextResponse.json({ questions });
+    } catch (openaiError: unknown) {
+      console.error('OpenAI error:', openaiError);
+
+      const fallbackQuestions = generateFallbackQuestions(
+        topicsTrimmed,
+        questionCount,
+        includeMultipleChoice,
+        includeOpenAnswer,
+        difficulty,
+        0
+      );
+      return NextResponse.json({
+        questions: mergeToTargetCount(
+          fallbackQuestions as { text: string }[],
+          topicsTrimmed,
+          questionCount,
+          includeMultipleChoice,
+          includeOpenAnswer,
+          difficulty
+        ),
+      });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error generating questions:', error);
     return NextResponse.json(
-      { error: 'Failed to generate questions', message: error.message },
+      { error: 'Failed to generate questions', message },
       { status: 500 }
     );
   }
 }
+
+const MC_STEMS = [
+  '¿Cuál afirmación es correcta sobre {topic}?',
+  '¿Qué opción describe mejor un aspecto de {topic}?',
+  'En el contexto de {topic}, ¿cuál respuesta es adecuada?',
+  '¿Qué concepto se relaciona directamente con {topic}?',
+  '¿Cuál ejemplo ilustra correctamente {topic}?',
+  '¿Qué diferencia es importante en {topic}?',
+  '¿Cuál regla o idea aplica a {topic}?',
+  '¿Qué elemento es esencial en {topic}?',
+];
+
+const OPEN_STEMS = [
+  'Explica con tus palabras un aspecto importante de {topic}.',
+  'Describe un ejemplo relacionado con {topic}.',
+  '¿Cómo aplicarías {topic} en un caso sencillo?',
+  'Menciona dos ideas clave sobre {topic}.',
+];
 
 function generateFallbackQuestions(
   topics: string,
   count: number,
   includeMultipleChoice: boolean,
   includeOpenAnswer: boolean,
-  difficulty: string
-): any[] {
-  const questions = [];
-  const topicList = topics.split(',').map((t) => t.trim());
+  difficulty: string,
+  seedOffset = 0
+): Record<string, unknown>[] {
+  const questions: Record<string, unknown>[] = [];
+  const topicList = topics.split(',').map((t) => t.trim()).filter(Boolean);
   const levelLabel: Record<string, string> = {
     easy: '[Nivel fácil]',
     medium: '[Nivel medio]',
@@ -277,31 +484,37 @@ function generateFallbackQuestions(
   const tag = levelLabel[difficulty] || levelLabel.medium;
 
   for (let i = 0; i < count; i++) {
-    const topic = topicList[i % topicList.length] || 'el tema';
-    const isMultipleChoice = includeMultipleChoice && (!includeOpenAnswer || i % 2 === 0);
+    const globalIndex = seedOffset + i;
+    const topic = topicList[globalIndex % topicList.length] || topics.trim() || 'el tema';
+    const isMultipleChoice = includeMultipleChoice && (!includeOpenAnswer || globalIndex % 2 === 0);
+    const stemPool = isMultipleChoice ? MC_STEMS : OPEN_STEMS;
+    const stemTemplate = stemPool[globalIndex % stemPool.length] ?? stemPool[0]!;
+    const stem = stemTemplate.replace(/\{topic\}/g, topic);
+    const uniqueStem = `${stem} (reactivo ${globalIndex + 1})`;
 
     if (isMultipleChoice) {
+      const correct = `Respuesta correcta (${globalIndex + 1}) sobre ${topic}`;
       questions.push({
-        text: `${tag} ¿Cuál es el concepto más importante de ${topic}?`,
+        text: `${tag} ${uniqueStem}`,
         type: 'multiple_choice',
         options: [
-          `Concepto principal de ${topic}`,
-          `Concepto secundario de ${topic}`,
-          `Concepto relacionado con ${topic}`,
-          `Ninguna de las anteriores`
+          correct,
+          `Opción alternativa A (${globalIndex + 1})`,
+          `Opción alternativa B (${globalIndex + 1})`,
+          `Ninguna de las anteriores`,
         ],
-        correct_answer: `Concepto principal de ${topic}`,
-        illustration: `Diagrama ilustrativo sobre ${topic}`,
+        correct_answer: correct,
+        illustration: `Ilustración ${globalIndex + 1} sobre ${topic}`,
       });
     } else {
       questions.push({
-        text: `${tag} Explica brevemente los conceptos clave de ${topic}.`,
+        text: `${tag} ${uniqueStem}`,
         type: 'open_answer',
-        correct_answer: `Los conceptos clave de ${topic} incluyen...`,
-        illustration: `Ejemplo visual de ${topic}`,
+        correct_answer: `Respuesta modelo ${globalIndex + 1} sobre ${topic}`,
+        illustration: `Ejemplo ${globalIndex + 1} sobre ${topic}`,
       });
     }
   }
-  
+
   return withShuffledMcOptions(questions);
 }

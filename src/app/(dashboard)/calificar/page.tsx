@@ -20,11 +20,11 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
-  chunkQuestions,
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
 import {
+  areMobileViewfinderCornersAligned,
   autoOrientCalifacilSheet,
   califacilGeometryTableBounds,
   califacilImageToJpegDataUrl,
@@ -38,6 +38,7 @@ import {
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   scanCalifacilOmrSheetWithMeta,
+  warpCalifacilSheetFromCornerMarkers,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
@@ -46,6 +47,7 @@ import {
   type LiveVideoLetterbox,
 } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
+import { MobileScanViewfinderOverlay } from '@/components/mobile-scan-viewfinder-overlay';
 import {
   type ExamFullscreenMode,
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -134,8 +136,12 @@ const MOBILE_CAPTURE_MAX_SIDE = 2400;
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Intervalo del loop OMR en móvil (ms). */
-const MOBILE_LIVE_LOOP_MS = 1000;
+/** Fotogramas consecutivos con esquinas alineadas antes de captura automática móvil. */
+const CORNER_ALIGN_STABLE_TICKS = 4;
+/** Intervalo del loop de detección de esquinas en móvil (ms). */
+const MOBILE_CORNER_LOOP_MS = 280;
+/** Inset de visores (debe coincidir con MobileScanViewfinderOverlay). */
+const MOBILE_VIEWFINDER_INSET_FRAC = 0.05;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -204,7 +210,7 @@ function draftSelectionsToColumnPicks(
   chunk: Question[],
   draft: Record<string, string>
 ): (number | null)[] {
-  const out: (number | null)[] = Array(10).fill(null);
+  const out: (number | null)[] = Array(chunk.length).fill(null);
   for (let i = 0; i < chunk.length; i++) {
     const q = chunk[i];
     const text = draft[q.id]?.trim() ?? '';
@@ -318,6 +324,7 @@ export default function CalificarPage() {
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
+  const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -340,6 +347,7 @@ export default function CalificarPage() {
   const liveReadingStreakRef = useRef<Record<string, { value: string; streak: number }>>({});
   /** Ticks consecutivos con hoja detectada en vivo. */
   const strictValidationTicksRef = useRef(0);
+  const cornerStableTicksRef = useRef(0);
   /** Último sondeo de calidad OMR del loop en vivo (líneas/columnas detectadas). */
   const lastQualityProbeRef = useRef<CalifacilSheetQualityProbe | null>(null);
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
@@ -405,8 +413,9 @@ export default function CalificarPage() {
     }
     return out;
   }, [virtualKey.rows]);
-  const sheets = useMemo(() => chunkQuestions(questions, 10), [questions]);
+  const sheets = useMemo(() => (questions.length > 0 ? [questions] : []), [questions]);
   const totalSheets = sheets.length;
+  const omrRowCount = questions.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
   const maxQuestions = 30;
   const expectedChunkPicks = useMemo(
@@ -533,6 +542,7 @@ export default function CalificarPage() {
     liveLockedAnswersRef.current = {};
     liveReadingStreakRef.current = {};
     strictValidationTicksRef.current = 0;
+    cornerStableTicksRef.current = 0;
     lastQualityProbeRef.current = null;
     liveDraftDisplaySigRef.current = '';
     liveResolvedDisplayedRef.current = -1;
@@ -546,9 +556,10 @@ export default function CalificarPage() {
     setLiveScanAmbiguousRows([]);
     setLiveVideoLayout(null);
     setLiveShowBubbleOverlay(false);
+    setCornersAlignedView(false);
     setLiveStatus(
       isMobile
-        ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas. Pulsa el botón naranja o espera captura automática.'
+        ? 'Alinea los 4 cuadros negros de esquina con los visores. La captura es automática al detectarlas.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -718,6 +729,7 @@ export default function CalificarPage() {
         geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
         preserveInputCanvas: isMobileCamera ? false : preserveCapturedFrame,
         fixedTemplateAnchor: useFixedTemplate,
+        rowCount: omrRowCount,
       });
       let raw = [...meta.picks];
       let mapped = mapRawToDraft(raw, chunk);
@@ -735,6 +747,7 @@ export default function CalificarPage() {
           geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
           preserveInputCanvas: false,
           fixedTemplateAnchor: useFixedTemplate,
+          rowCount: omrRowCount,
         });
         const recoveryRaw = [...recoveryMeta.picks];
         const recoveryMapped = mapRawToDraft(recoveryRaw, chunk);
@@ -772,7 +785,7 @@ export default function CalificarPage() {
       if (CALIFACIL_VISION_POLICY.onAmbiguousRows && ambiguousIdx.length > 0 && examId && !fallbackFile) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
-          globalNumber: si * 10 + i + 1,
+          globalNumber: i + 1,
           options: chunk[i].options ?? [],
         }));
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
@@ -820,7 +833,7 @@ export default function CalificarPage() {
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
-          globalNumber: si * 10 + i + 1,
+          globalNumber: i + 1,
           options: q.options ?? [],
         }));
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
@@ -867,7 +880,7 @@ export default function CalificarPage() {
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
-          globalNumber: si * 10 + i + 1,
+          globalNumber: i + 1,
           options: q.options ?? [],
         }));
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
@@ -906,7 +919,7 @@ export default function CalificarPage() {
       if (CALIFACIL_VISION_POLICY.onFinalizeEveryRow && examId && chunk.length > 0 && !fallbackFile) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
-          globalNumber: si * 10 + i + 1,
+          globalNumber: i + 1,
           options: q.options ?? [],
         }));
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
@@ -1030,7 +1043,7 @@ export default function CalificarPage() {
 
       return { success: true, chunkDraft: mapped.draft };
     },
-    [exam, examId, isMobile, mapRawToDraft, omrCols, setPreviewFromSource, sheets, supportsCalifacil]
+    [exam, examId, isMobile, mapRawToDraft, omrCols, omrRowCount, setPreviewFromSource, sheets, supportsCalifacil]
   );
 
   finalizeCapturedSheetRef.current = finalizeCapturedSheet;
@@ -1368,7 +1381,7 @@ export default function CalificarPage() {
       };
 
       const runLiveScanLoop = async () => {
-        let nextDelay = isMobile ? MOBILE_LIVE_LOOP_MS : 600;
+        let nextDelay = isMobile ? MOBILE_CORNER_LOOP_MS : 600;
         if (!streamRef.current || !examId || !exam || phaseRef.current !== 'capturar') {
           stopScanningHum();
           liveTickRef.current = null;
@@ -1409,17 +1422,85 @@ export default function CalificarPage() {
               return;
             }
             if (estimateCanvasMeanLuminance(fullFrame) < MIN_FRAME_LUMINANCE) {
+              setCornersAlignedView(false);
               setLiveScanGeometry(null);
               setLiveScanPicks([]);
               setLiveScanLockedRows([]);
               setLiveScanAmbiguousRows([]);
               setLiveShowBubbleOverlay(false);
-              strictValidationTicksRef.current = 0;
+              cornerStableTicksRef.current = 0;
               nextDelay = 200;
+              setLiveStatus('Mejora la iluminación o activa el flash.');
               return;
             }
-            oriented = fullFrame;
-            sheetLikely = isCalifacilExamSheetLikely(fullFrame, omrCols);
+
+            const cornersOk = areMobileViewfinderCornersAligned(
+              fullFrame,
+              MOBILE_VIEWFINDER_INSET_FRAC
+            );
+            setCornersAlignedView(cornersOk);
+            setLiveShowBubbleOverlay(false);
+            setLiveScanGeometry(null);
+            setLiveScanPicks([]);
+            setLiveScanLockedRows([]);
+            setLiveScanAmbiguousRows([]);
+
+            if (!cornersOk) {
+              cornerStableTicksRef.current = 0;
+              lowVisibilityTicksRef.current += 1;
+              if (
+                flashSupported &&
+                !flashOn &&
+                !autotorchTriedRef.current &&
+                lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
+              ) {
+                autotorchTriedRef.current = true;
+                void setTorchEnabled(true);
+                setLiveStatus(
+                  'Activé el flash. Alinea los 4 cuadros negros con los visores de esquina.'
+                );
+              } else {
+                setLiveStatus('Alinear las 4 esquinas negras impresas con los visores.');
+              }
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            cornerStableTicksRef.current += 1;
+            lowVisibilityTicksRef.current = 0;
+            if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
+              setLiveStatus('Esquinas detectadas. Mantén la hoja quieta…');
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            if (mobileCaptureBusyRef.current) {
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            cornerStableTicksRef.current = 0;
+            mobileCaptureBusyRef.current = true;
+            setLiveStatus('Capturando foto para calificar…');
+            try {
+              const fullCanvas = captureVideoFullFrame(video, {
+                maxSide: MOBILE_CAPTURE_MAX_SIDE,
+              });
+              if (!fullCanvas) return;
+              const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas) ?? fullCanvas;
+              await showAutoCaptureSnapshot(warped);
+              const result = await finalizeCapturedSheetRef.current(warped);
+              if (result.success) {
+                playScanCompleteChime();
+                stopLiveCamera();
+              } else {
+                setLiveStatus('No se pudo leer la captura. Vuelve a alinear las esquinas.');
+              }
+            } finally {
+              mobileCaptureBusyRef.current = false;
+            }
+            nextDelay = MOBILE_CORNER_LOOP_MS;
+            return;
           } else {
             if (!scanCtx) return;
             let targetW = video.videoWidth;
@@ -1522,6 +1603,7 @@ export default function CalificarPage() {
             geometryMode: isMobile ? 'fullSheet' : 'fullSheet',
             preserveInputCanvas: isMobile,
             fixedTemplateAnchor: false,
+            rowCount: omrRowCount,
           });
           const raw = [...scanMeta.picks];
           const mapped = mapRawToDraft(raw, chunk);
@@ -1717,38 +1799,12 @@ export default function CalificarPage() {
 
           if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
-            if (isMobile) {
-              const qualityOk =
-                strictOk &&
-                mergedResolved >= autoCaptureMin &&
-                strictValidationTicksRef.current >= STABLE_FULL_TICKS;
-              if (!qualityOk) {
-                return;
-              }
-              if (mobileCaptureBusyRef.current) {
-                return;
-              }
-              mobileCaptureBusyRef.current = true;
-              try {
-                const videoCap = videoRef.current;
-                if (!videoCap || videoCap.readyState < 2) return;
-                const fullCanvas = captureVideoFullFrame(videoCap, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
-                if (!fullCanvas) return;
-                const result = await finalizeCapturedSheetRef.current(fullCanvas);
-                if (result.success) {
-                  playScanCompleteChime();
-                }
-              } finally {
-                mobileCaptureBusyRef.current = false;
-              }
-            } else {
-              await showAutoCaptureSnapshot(oriented);
-              const nextStatus =
-                'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.';
-              if (nextStatus !== hotLoopStatus) {
-                hotLoopStatus = nextStatus;
-                setLiveStatus(nextStatus);
-              }
+            await showAutoCaptureSnapshot(oriented);
+            const nextStatus =
+              'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.';
+            if (nextStatus !== hotLoopStatus) {
+              hotLoopStatus = nextStatus;
+              setLiveStatus(nextStatus);
             }
           }
         } finally {
@@ -1788,6 +1844,7 @@ export default function CalificarPage() {
     resetLiveReadings,
     setTorchEnabled,
     showAutoCaptureSnapshot,
+    stopLiveCamera,
     sheets,
     supportsCalifacil,
   ]);
@@ -2050,7 +2107,8 @@ export default function CalificarPage() {
         toast.error('No se pudo capturar. Intenta de nuevo.');
         return;
       }
-      await finalizeCapturedSheet(fullCanvas);
+      const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas) ?? fullCanvas;
+      await finalizeCapturedSheet(warped);
     } finally {
       mobileCaptureBusyRef.current = false;
       setScanBusy(false);
@@ -2427,9 +2485,9 @@ export default function CalificarPage() {
                     Listo para hoja {sheetIndex + 1} de {totalSheets}
                   </p>
                   <p className="text-xs text-orange-900/90">
-                    La cámara abre a pantalla completa. Encuadra la hoja con el marco blanco y coloca las{' '}
-                    <strong>esquinas naranjas</strong> sobre los <strong>cuatro cuadros negros</strong> impresos en
-                    las esquinas de la hoja.
+                    La cámara abre a pantalla completa. Coloca los{' '}
+                    <strong>cuatro cuadros negros</strong> impresos en las esquinas de la hoja dentro de los{' '}
+                    <strong>visores</strong>; al detectarlos se captura y califica automáticamente.
                   </p>
                   <Button
                     type="button"
@@ -2471,7 +2529,7 @@ export default function CalificarPage() {
                   Hoja {sheetIndex + 1} de {totalSheets}
                 </p>
                 <p className="text-[11px] text-white/70">
-                  Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} · Encuadra la hoja carta
+                  Preguntas 1–{currentChunk.length} · Encuadra la hoja carta
                   completa
                 </p>
               </div>
@@ -2551,13 +2609,11 @@ export default function CalificarPage() {
                       letterbox={liveVideoLayout}
                       visible={liveShowBubbleOverlay}
                     />
-                    <div className="pointer-events-none absolute inset-0">
-                      <div className="absolute inset-[3%] rounded-sm border-2 border-white/35" />
-                      <span className="absolute left-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-l-[3px] border-t-[3px] border-orange-400" aria-hidden />
-                      <span className="absolute right-[3%] top-[3%] z-10 block h-5 w-5 rounded-sm border-r-[3px] border-t-[3px] border-orange-400" aria-hidden />
-                      <span className="absolute bottom-[3%] left-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-l-[3px] border-orange-400" aria-hidden />
-                      <span className="absolute bottom-[3%] right-[3%] z-10 block h-5 w-5 rounded-sm border-b-[3px] border-r-[3px] border-orange-400" aria-hidden />
-                    </div>
+                    <MobileScanViewfinderOverlay
+                      aligned={cornersAlignedView}
+                      examTitle={exam.title}
+                      sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
+                    />
                   </div>
                   {scanBusy ? (
                     <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/35">
@@ -2569,12 +2625,13 @@ export default function CalificarPage() {
                   ) : null}
                   <button
                     type="button"
-                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-30 flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-white/90 bg-orange-500 shadow-lg shadow-black/40 disabled:opacity-60"
+                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-30 flex h-[3.5rem] w-[3.5rem] -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/80 bg-white/20 shadow-lg backdrop-blur-sm disabled:opacity-60"
                     disabled={scanBusy}
-                    aria-label="Capturar foto del examen"
+                    aria-label="Capturar manualmente"
+                    title="Captura manual si la automática no dispara"
                     onClick={() => void captureMobilePhotoManually()}
                   >
-                    <span className="block h-[3.25rem] w-[3.25rem] rounded-full border-2 border-white/80 bg-orange-400" />
+                    <span className="block h-[2.75rem] w-[2.75rem] rounded-full border-2 border-white bg-white/30" />
                   </button>
                 </>
               )}
@@ -2586,10 +2643,10 @@ export default function CalificarPage() {
                       'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
                   }}
                 >
-                  <p className="mb-1 text-center text-sm font-semibold tabular-nums text-orange-200">
-                    {liveResolvedCount} / {currentChunk.length} respuestas
+                  <p className="mb-1 text-center text-sm font-semibold text-white">
+                    {cornersAlignedView ? 'Esquinas alineadas' : 'Buscando esquinas…'}
                   </p>
-                  <p className="text-center text-xs leading-snug text-orange-50">{liveStatus}</p>
+                  <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                 </div>
               ) : null}
             </div>
@@ -2604,7 +2661,7 @@ export default function CalificarPage() {
               Hoja de alumno {sheetIndex + 1} de {totalSheets}
             </CardTitle>
             <CardDescription>
-              Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
+              Preguntas 1–{currentChunk.length} ·{' '}
               {isMobile
                 ? 'Encuadra toda la hoja dentro de la pantalla; debe verse la tabla de respuestas al pie.'
                 : 'Puedes pasar foto de la hoja completa o solo del pie: debe verse entera la tabla (N.º, A–D) y las marcas.'}
@@ -2717,7 +2774,7 @@ export default function CalificarPage() {
                   </Alert>
                 ) : null}
                 {currentChunk.map((q, idx) => {
-                  const globalNum = sheetIndex * 10 + idx + 1;
+                  const globalNum = idx + 1;
                   const opts = q.options ?? [];
                   const val = draftSelections[q.id]?.trim() ?? '';
                   return (
@@ -2857,7 +2914,7 @@ export default function CalificarPage() {
                       </div>
                     ) : null}
                     {chunk.map((q, idx) => {
-                      const globalNum = snap.sheetIndex * 10 + idx + 1;
+                      const globalNum = idx + 1;
                       const opts = q.options ?? [];
                       const val = mobileResultsDraft[q.id]?.trim() ?? '';
                       return (
