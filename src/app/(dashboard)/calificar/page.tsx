@@ -24,21 +24,29 @@ import {
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
 import {
-  areMobileViewfinderCornersAligned,
   autoOrientCalifacilSheet,
   califacilGeometryTableBounds,
   califacilImageToJpegDataUrl,
+  califacilViewfinderGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
+  captureVideoGuideRoiFrame,
+  detectLargestQuadInRoiCanvas,
   estimateCanvasMeanLuminance,
   fileToImage,
   getObjectContainVideoLayout,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
+  isValidMobileRoiQuad,
+  mapRoiQuadToFrame,
+  mobileRoiQuadsAreStable,
+  MOBILE_ROI_DETECT_MAX_SIDE,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
+  scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
   warpCalifacilSheetFromCornerMarkers,
+  warpCalifacilSheetFromQuad,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
@@ -136,10 +144,10 @@ const MOBILE_CAPTURE_MAX_SIDE = 2400;
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Fotogramas consecutivos con esquinas alineadas antes de captura automática móvil (1 = instantáneo). */
-const CORNER_ALIGN_STABLE_TICKS = 1;
+/** Fotogramas consecutivos con cuadrilátero estable en ROI antes de captura automática móvil. */
+const CORNER_ALIGN_STABLE_TICKS = 3;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 100;
+const MOBILE_CORNER_LOOP_MS = 90;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -369,6 +377,10 @@ export default function CalificarPage() {
   const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
+  const mobileGuideRectPx = useMemo(() => {
+    if (!liveVideoLayout) return null;
+    return califacilViewfinderGuideInViewportPx(liveVideoLayout);
+  }, [liveVideoLayout]);
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
@@ -394,6 +406,10 @@ export default function CalificarPage() {
   /** Ticks consecutivos con hoja detectada en vivo. */
   const strictValidationTicksRef = useRef(0);
   const cornerStableTicksRef = useRef(0);
+  /** Último cuadrilátero detectado en el ROI (coordenadas del canvas ROI). */
+  const lastRoiQuadRef = useRef<
+    [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }] | null
+  >(null);
   /** Último sondeo de calidad OMR del loop en vivo (líneas/columnas detectadas). */
   const lastQualityProbeRef = useRef<CalifacilSheetQualityProbe | null>(null);
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
@@ -582,6 +598,7 @@ export default function CalificarPage() {
     liveReadingStreakRef.current = {};
     strictValidationTicksRef.current = 0;
     cornerStableTicksRef.current = 0;
+    lastRoiQuadRef.current = null;
     lastQualityProbeRef.current = null;
     liveDraftDisplaySigRef.current = '';
     liveResolvedDisplayedRef.current = -1;
@@ -1522,12 +1539,15 @@ export default function CalificarPage() {
           let oriented: HTMLCanvasElement | null = null;
           let sheetLikely = false;
           if (isMobile) {
-            const fullFrame = captureVideoFullFrame(video, { maxSide: MOBILE_SCAN_MAX_WIDTH });
-            if (!fullFrame) {
+            const roiCapture = captureVideoGuideRoiFrame(video, {
+              maxSide: MOBILE_ROI_DETECT_MAX_SIDE,
+            });
+            if (!roiCapture) {
               nextDelay = 100;
               return;
             }
-            if (estimateCanvasMeanLuminance(fullFrame) < MIN_FRAME_LUMINANCE) {
+            const { roiCanvas, roiRect, frameW, frameH } = roiCapture;
+            if (estimateCanvasMeanLuminance(roiCanvas) < MIN_FRAME_LUMINANCE) {
               setCornersAlignedView(false);
               setLiveScanGeometry(null);
               setLiveScanPicks([]);
@@ -1535,21 +1555,27 @@ export default function CalificarPage() {
               setLiveScanAmbiguousRows([]);
               setLiveShowBubbleOverlay(false);
               cornerStableTicksRef.current = 0;
+              lastRoiQuadRef.current = null;
               nextDelay = 200;
               setLiveStatus('Mejora la iluminación o activa el flash.');
               return;
             }
 
-            const cornersOk = areMobileViewfinderCornersAligned(fullFrame);
-            setCornersAlignedView(cornersOk);
+            const roiQuad = detectLargestQuadInRoiCanvas(roiCanvas);
+            const roiW = roiCanvas.width;
+            const roiH = roiCanvas.height;
+            const quadValid = roiQuad !== null && isValidMobileRoiQuad(roiQuad, roiW, roiH);
+
             setLiveShowBubbleOverlay(false);
             setLiveScanGeometry(null);
             setLiveScanPicks([]);
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            if (!cornersOk) {
+            if (!quadValid || !roiQuad) {
               cornerStableTicksRef.current = 0;
+              lastRoiQuadRef.current = null;
+              setCornersAlignedView(false);
               lowVisibilityTicksRef.current += 1;
               if (
                 flashSupported &&
@@ -1559,19 +1585,29 @@ export default function CalificarPage() {
               ) {
                 autotorchTriedRef.current = true;
                 void setTorchEnabled(true);
-                setLiveStatus(
-                  'Activé el flash. Alinea los 4 cuadros negros con los visores de esquina.'
-                );
+                setLiveStatus('Activé el flash. Encuadra la hoja dentro del rectángulo.');
               } else {
-                setLiveStatus('Alinear las 4 esquinas negras con los visores.');
+                setLiveStatus('Encuadra la hoja dentro del rectángulo verde.');
               }
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            const stable = mobileRoiQuadsAreStable(lastRoiQuadRef.current, roiQuad, roiW, roiH);
+            lastRoiQuadRef.current = roiQuad;
+            if (!stable) {
+              cornerStableTicksRef.current = 0;
+              setCornersAlignedView(false);
+              setLiveStatus('Ajusta la hoja dentro del rectángulo…');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
 
             cornerStableTicksRef.current += 1;
             lowVisibilityTicksRef.current = 0;
+            setCornersAlignedView(true);
             if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
+              setLiveStatus('Mantén la hoja quieta…');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -1582,21 +1618,32 @@ export default function CalificarPage() {
             }
 
             cornerStableTicksRef.current = 0;
+            lastRoiQuadRef.current = null;
             mobileCaptureBusyRef.current = true;
-            setScanBusy(true);
             setLiveStatus('Capturando foto para calificar…');
             try {
+              const frameQuad = mapRoiQuadToFrame(roiQuad, roiRect, roiW, roiH);
               const fullCanvas = captureVideoFullFrame(video, {
                 maxSide: MOBILE_CAPTURE_MAX_SIDE,
               });
               if (!fullCanvas) return;
-              const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+              const scaledQuad = scaleQuadToCanvas(
+                frameQuad,
+                frameW,
+                frameH,
+                fullCanvas.width,
+                fullCanvas.height
+              );
+              playAutoCaptureClickSound();
+              const warped =
+                warpCalifacilSheetFromQuad(fullCanvas, scaledQuad) ??
+                warpCalifacilSheetFromCornerMarkers(fullCanvas);
               if (!warped) {
-                setLiveStatus('No se alinearon las esquinas negras. Mantén la hoja dentro del marco.');
-                toast.error('No se detectaron las 4 esquinas negras. Alinea la hoja e intenta de nuevo.');
+                setLiveStatus('No se alinearon las esquinas. Vuelve a encuadrar la hoja.');
+                toast.error('No se detectaron las 4 esquinas. Alinea la hoja e intenta de nuevo.');
                 return;
               }
-              playAutoCaptureClickSound();
+              setScanBusy(true);
               const result = await finalizeCapturedSheetRef.current(warped, undefined, {
                 preWarped: true,
               });
@@ -1604,7 +1651,7 @@ export default function CalificarPage() {
                 playScanCompleteChime();
                 stopLiveCamera();
               } else {
-                setLiveStatus('No se pudo leer la captura. Vuelve a alinear las esquinas.');
+                setLiveStatus('No se pudo leer la captura. Vuelve a encuadrar la hoja.');
               }
             } finally {
               mobileCaptureBusyRef.current = false;
@@ -2815,6 +2862,7 @@ export default function CalificarPage() {
                       aligned={cornersAlignedView}
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
+                      guideRect={mobileGuideRectPx}
                     />
                   </div>
                   {scanBusy ? (
@@ -2846,7 +2894,7 @@ export default function CalificarPage() {
                   }}
                 >
                   <p className="mb-1 text-center text-sm font-semibold text-white">
-                    {cornersAlignedView ? 'Capturando…' : 'Buscando esquinas…'}
+                    {cornersAlignedView ? 'Esquinas alineadas' : 'Buscando hoja…'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                 </div>

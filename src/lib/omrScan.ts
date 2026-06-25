@@ -1657,6 +1657,281 @@ export function captureCalifacilGuideFrame(
   return drawSourceToCanvas(cropped, 1400);
 }
 
+/** Resolución máxima del lado largo al analizar el ROI en vivo (velocidad móvil). */
+export const MOBILE_ROI_DETECT_MAX_SIDE = 640;
+
+export type MobileGuideRoiCapture = {
+  roiCanvas: HTMLCanvasElement;
+  /** Recorte guía en coordenadas del fotograma del sensor (píxeles). */
+  roiRect: { left: number; top: number; width: number; height: number };
+  frameW: number;
+  frameH: number;
+};
+
+/**
+ * Extrae SOLO el marco guía del video y lo escala a baja resolución.
+ * No dibuja ni analiza el fotograma completo.
+ */
+export function captureVideoGuideRoiFrame(
+  video: HTMLVideoElement,
+  opts?: { maxSide?: number }
+): MobileGuideRoiCapture | null {
+  if (typeof document === 'undefined') return null;
+  const fw = video.videoWidth;
+  const fh = video.videoHeight;
+  if (fw < 40 || fh < 40) return null;
+
+  const norm = califacilViewfinderNormRect(fw, fh);
+  if (!norm) return null;
+
+  const sx = norm.x * fw;
+  const sy = norm.y * fh;
+  const sw = norm.w * fw;
+  const sh = norm.h * fh;
+  if (sw < 80 || sh < 80) return null;
+
+  const maxSide = opts?.maxSide ?? MOBILE_ROI_DETECT_MAX_SIDE;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const outW = Math.max(1, Math.round(sw * scale));
+  const outH = Math.max(1, Math.round(sh * scale));
+
+  const roiCanvas = document.createElement('canvas');
+  roiCanvas.width = outW;
+  roiCanvas.height = outH;
+  const ctx = roiCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, outW, outH);
+
+  return {
+    roiCanvas,
+    roiRect: { left: sx, top: sy, width: sw, height: sh },
+    frameW: fw,
+    frameH: fh,
+  };
+}
+
+function quadShoelaceArea(quad: [Point, Point, Point, Point]): number {
+  const [tl, tr, br, bl] = quad;
+  return (
+    Math.abs(
+      tl.x * tr.y +
+        tr.x * br.y +
+        br.x * bl.y +
+        bl.x * tl.y -
+        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+    ) * 0.5
+  );
+}
+
+/** Fiduciales en las cuatro esquinas del ROI (hoja ≈ tamaño del recorte guía). */
+function detectCornerMarkersOnRoiCanvas(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 80 || height < 80) return null;
+
+  const id = ctx.getImageData(0, 0, width, height);
+  const d = id.data;
+  const regionW = Math.max(8, Math.round(width * 0.12));
+  const regionH = Math.max(8, Math.round(height * 0.12));
+
+  const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
+  const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
+  const br = findCornerMarkerPoint(
+    d,
+    width,
+    height,
+    width - regionW,
+    height - regionH,
+    regionW,
+    regionH
+  );
+  const bl = findCornerMarkerPoint(d, width, height, 0, height - regionH, regionW, regionH);
+  if (!tl || !tr || !br || !bl) return null;
+  return [tl, tr, br, bl];
+}
+
+/** Detección de bordes (Sobel) + contorno rectangular más grande dentro del ROI. */
+function detectLargestQuadViaRoiEdges(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width: w, height: h } = canvas;
+  if (w < 80 || h < 80) return null;
+
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  const step = 2;
+  const edge = new Uint8Array(w * h);
+
+  for (let y = step; y < h - step; y += step) {
+    for (let x = step; x < w - step; x += step) {
+      const i = (y * w + x) * 4;
+      const lum =
+        d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+      const iL = (y * w + (x - step)) * 4;
+      const iR = (y * w + (x + step)) * 4;
+      const iU = ((y - step) * w + x) * 4;
+      const iD = ((y + step) * w + x) * 4;
+      const gx =
+        (d[iR]! * 0.299 + d[iR + 1]! * 0.587 + d[iR + 2]! * 0.114) -
+        (d[iL]! * 0.299 + d[iL + 1]! * 0.587 + d[iL + 2]! * 0.114);
+      const gy =
+        (d[iD]! * 0.299 + d[iD + 1]! * 0.587 + d[iD + 2]! * 0.114) -
+        (d[iU]! * 0.299 + d[iU + 1]! * 0.587 + d[iU + 2]! * 0.114);
+      const mag = Math.hypot(gx, gy);
+      if (mag >= 22 && lum >= 40 && lum <= 245) {
+        edge[y * w + x] = 1;
+      }
+    }
+  }
+
+  const edgeD = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ei = y * w + x;
+      const di = ei * 4;
+      const v = edge[ei] ? 0 : 255;
+      edgeD[di] = v;
+      edgeD[di + 1] = v;
+      edgeD[di + 2] = v;
+      edgeD[di + 3] = 255;
+    }
+  }
+
+  const ink = detectCalifacilQuadFromDarkInk(edgeD, w, h);
+  if (ink) return ink;
+
+  const paper = detectCalifacilQuadFromBrightPaper(edgeD, w, h, 0.55);
+  if (paper) return paper;
+
+  return detectCalifacilQuadFromBrightPaper(d, w, h, 0.58);
+}
+
+/**
+ * Encuentra el cuadrilátero de hoja más grande dentro del ROI (baja resolución).
+ * Orden: fiduciales → bordes/contornos → heurística de papel.
+ */
+export function detectLargestQuadInRoiCanvas(
+  roiCanvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const w = roiCanvas.width;
+  const h = roiCanvas.height;
+  if (w < 80 || h < 80) return null;
+
+  const candidates: ([Point, Point, Point, Point] | null)[] = [
+    detectCornerMarkersOnRoiCanvas(roiCanvas),
+    detectLargestQuadViaRoiEdges(roiCanvas),
+    detectCalifacilQuad(roiCanvas),
+  ];
+
+  let best: [Point, Point, Point, Point] | null = null;
+  let bestArea = 0;
+  for (const quad of candidates) {
+    if (!quad || !isValidMobileRoiQuad(quad, w, h)) continue;
+    const area = quadShoelaceArea(quad);
+    if (area > bestArea) {
+      bestArea = area;
+      best = quad;
+    }
+  }
+  return best;
+}
+
+/** Valida cuadrilátero detectado: 4 esquinas y área mínima dentro del ROI. */
+export function isValidMobileRoiQuad(
+  quad: [Point, Point, Point, Point],
+  roiW: number,
+  roiH: number
+): boolean {
+  const [tl, tr, br, bl] = quad;
+  const corners = [tl, tr, br, bl];
+  for (const p of corners) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
+  }
+  const minDist = Math.min(roiW, roiH) * 0.08;
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      if (Math.hypot(corners[i]!.x - corners[j]!.x, corners[i]!.y - corners[j]!.y) < minDist) {
+        return false;
+      }
+    }
+  }
+
+  const area = quadShoelaceArea(quad);
+  if (area < roiW * roiH * 0.12) return false;
+
+  const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
+  const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+  const avgW = (topW + bottomW) * 0.5;
+  const avgH = (leftH + rightH) * 0.5;
+  if (avgW < roiW * 0.32 || avgH < roiH * 0.32) return false;
+
+  const aspect = avgW / Math.max(1, avgH);
+  if (aspect < 0.45 || aspect > 1.15) return false;
+
+  return true;
+}
+
+/** Compara dos cuads consecutivos en el ROI para exigir estabilidad temporal. */
+export function mobileRoiQuadsAreStable(
+  prev: [Point, Point, Point, Point] | null,
+  next: [Point, Point, Point, Point],
+  roiW: number,
+  roiH: number,
+  maxCornerShiftFrac = 0.028
+): boolean {
+  if (!prev) return false;
+  const maxShift = Math.max(roiW, roiH) * maxCornerShiftFrac;
+  for (let i = 0; i < 4; i++) {
+    const dx = next[i]!.x - prev[i]!.x;
+    const dy = next[i]!.y - prev[i]!.y;
+    if (Math.hypot(dx, dy) > maxShift) return false;
+  }
+  return true;
+}
+
+/** Lleva esquinas del ROI escalado a coordenadas del fotograma completo del sensor. */
+export function mapRoiQuadToFrame(
+  quad: [Point, Point, Point, Point],
+  roiRect: { left: number; top: number; width: number; height: number },
+  roiCanvasW: number,
+  roiCanvasH: number
+): [Point, Point, Point, Point] {
+  const sx = roiRect.width / Math.max(1, roiCanvasW);
+  const sy = roiRect.height / Math.max(1, roiCanvasH);
+  return quad.map((p) => ({
+    x: roiRect.left + p.x * sx,
+    y: roiRect.top + p.y * sy,
+  })) as [Point, Point, Point, Point];
+}
+
+/** Escala un cuadrilátero cuando el canvas de captura se redimensionó respecto al sensor. */
+export function scaleQuadToCanvas(
+  quad: [Point, Point, Point, Point],
+  frameW: number,
+  frameH: number,
+  canvasW: number,
+  canvasH: number
+): [Point, Point, Point, Point] {
+  const sx = canvasW / Math.max(1, frameW);
+  const sy = canvasH / Math.max(1, frameH);
+  return quad.map((p) => ({ x: p.x * sx, y: p.y * sy })) as [Point, Point, Point, Point];
+}
+
+/** Endereza la hoja con un cuadrilátero ya detectado (tras captura en alta resolución). */
+export function warpCalifacilSheetFromQuad(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point]
+): HTMLCanvasElement | null {
+  return warpPerspectiveToRect(canvas, quad);
+}
+
 export type PrepareMobileCameraScanOptions = {
   /** En vivo omitimos barrido fino de inclinación por rendimiento. */
   live?: boolean;
