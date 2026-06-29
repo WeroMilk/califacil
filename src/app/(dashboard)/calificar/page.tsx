@@ -43,10 +43,8 @@ import {
   MOBILE_ROI_DETECT_MAX_SIDE,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
-  scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
   warpCalifacilSheetFromCornerMarkers,
-  warpCalifacilSheetFromQuad,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
@@ -789,6 +787,7 @@ export default function CalificarPage() {
         geometryMode: preWarped && isMobileCamera ? 'fullSheet' : isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
         preserveInputCanvas: preWarped && isMobileCamera ? true : isMobileCamera ? false : preserveCapturedFrame,
         fixedTemplateAnchor: useFixedTemplate,
+        answerSheetTemplateOnly: preWarped && isMobileCamera,
         rowCount: omrRowCount,
       });
       let raw = [...meta.picks];
@@ -1546,7 +1545,7 @@ export default function CalificarPage() {
               nextDelay = 100;
               return;
             }
-            const { roiCanvas, roiRect, frameW, frameH } = roiCapture;
+            const { roiCanvas } = roiCapture;
             if (estimateCanvasMeanLuminance(roiCanvas) < MIN_FRAME_LUMINANCE) {
               setCornersAlignedView(false);
               setLiveScanGeometry(null);
@@ -1622,22 +1621,12 @@ export default function CalificarPage() {
             mobileCaptureBusyRef.current = true;
             setLiveStatus('Capturando foto para calificar…');
             try {
-              const frameQuad = mapRoiQuadToFrame(roiQuad, roiRect, roiW, roiH);
               const fullCanvas = captureVideoFullFrame(video, {
                 maxSide: MOBILE_CAPTURE_MAX_SIDE,
               });
               if (!fullCanvas) return;
-              const scaledQuad = scaleQuadToCanvas(
-                frameQuad,
-                frameW,
-                frameH,
-                fullCanvas.width,
-                fullCanvas.height
-              );
               playAutoCaptureClickSound();
-              const warped =
-                warpCalifacilSheetFromQuad(fullCanvas, scaledQuad) ??
-                warpCalifacilSheetFromCornerMarkers(fullCanvas);
+              const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
               if (!warped) {
                 setLiveStatus('No se alinearon las esquinas. Vuelve a encuadrar la hoja.');
                 toast.error('No se detectaron las 4 esquinas. Alinea la hoja e intenta de nuevo.');

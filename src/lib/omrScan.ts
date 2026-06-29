@@ -3,7 +3,7 @@
  * Debe coincidir con el layout de `printExam.ts` (tabla N filas × columnas de burbujas).
  */
 
-import { CALIFACIL_VIEWFINDER_GUIDE, CALIFACIL_PRINT_MAX_QUESTIONS } from '@/lib/printExam';
+import { CALIFACIL_VIEWFINDER_GUIDE, CALIFACIL_PRINT_MAX_QUESTIONS, buildCalifacilAnswerSheetOmrTemplate } from '@/lib/printExam';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -106,6 +106,8 @@ export type CalifacilScanOptions = {
   preserveInputCanvas?: boolean;
   /** Anclaje por plantilla fija para la hoja escaneada de formato constante. */
   fixedTemplateAnchor?: boolean;
+  /** Solo plantillas de hoja de respuestas dedicada (sin pie legado de hoja mixta). */
+  answerSheetTemplateOnly?: boolean;
   /** Filas de la tabla impresa (2–30). Por defecto 10. */
   rowCount?: number;
 };
@@ -1511,14 +1513,16 @@ function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, P
 
 function warpPerspectiveToRect(
   canvas: HTMLCanvasElement,
-  quad: [Point, Point, Point, Point]
+  quad: [Point, Point, Point, Point],
+  outWOverride?: number,
+  outHOverride?: number
 ): HTMLCanvasElement | null {
   const topW = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y);
   const bottomW = Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y);
   const leftH = Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y);
   const rightH = Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y);
-  const outW = Math.max(120, Math.round((topW + bottomW) * 0.5));
-  const outH = Math.max(120, Math.round((leftH + rightH) * 0.5));
+  const outW = outWOverride ?? Math.max(120, Math.round((topW + bottomW) * 0.5));
+  const outH = outHOverride ?? Math.max(120, Math.round((leftH + rightH) * 0.5));
 
   const h = computeHomographyFromRectToQuad(outW, outH, quad);
   if (!h) return null;
@@ -2242,40 +2246,35 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
   return h / w >= 1.2;
 }
 
-function buildAnswerSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
+function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_QUESTIONS): OmrFixedTemplate[] {
+  const base = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const nudge = (
+    t: OmrFixedTemplate,
+    dLeft: number,
+    dTop: number,
+    dWidth: number,
+    dHeight: number,
+    dTitle: number,
+    dQnum: number
+  ): OmrFixedTemplate => ({
+    tableLeftRatio: t.tableLeftRatio + dLeft,
+    tableTopRatio: t.tableTopRatio + dTop,
+    tableWidthRatio: t.tableWidthRatio + dWidth,
+    tableHeightRatio: t.tableHeightRatio + dHeight,
+    titleStripRatioOfTable: Math.max(0.03, t.titleStripRatioOfTable + dTitle),
+    qnumWidthRatio: Math.max(0.07, Math.min(0.12, t.qnumWidthRatio + dQnum)),
+  });
   return [
-    {
-      tableLeftRatio: 0.036,
-      tableTopRatio: 0.108,
-      tableWidthRatio: 0.928,
-      tableHeightRatio: 0.878,
-      titleStripRatioOfTable: 0.042,
-      qnumWidthRatio: 0.088,
-    },
-    {
-      tableLeftRatio: 0.042,
-      tableTopRatio: 0.114,
-      tableWidthRatio: 0.916,
-      tableHeightRatio: 0.868,
-      titleStripRatioOfTable: 0.048,
-      qnumWidthRatio: 0.092,
-    },
-    {
-      tableLeftRatio: 0.048,
-      tableTopRatio: 0.12,
-      tableWidthRatio: 0.904,
-      tableHeightRatio: 0.858,
-      titleStripRatioOfTable: 0.052,
-      qnumWidthRatio: 0.096,
-    },
+    base,
+    nudge(base, -0.003, -0.004, 0.006, 0.003, 0.003, 0.002),
+    nudge(base, 0.003, 0.004, -0.006, -0.003, -0.003, -0.002),
   ];
 }
 
-function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
+function buildLegacyFooterFixedTemplateCandidates(): OmrFixedTemplate[] {
   // Plantillas calibradas con escaneo real del formato Sonora/CaliFacil enviado por el usuario.
   // Recuadro detectado aprox: left 0.172, top 0.609, width 0.684, height 0.249.
   return [
-    ...buildAnswerSheetFixedTemplateCandidates(),
     {
       tableLeftRatio: 0.166,
       tableTopRatio: 0.602,
@@ -2300,6 +2299,31 @@ function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
       titleStripRatioOfTable: 0.17,
       qnumWidthRatio: 0.103,
     },
+  ];
+}
+
+function buildFullSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_QUESTIONS): OmrFixedTemplate[] {
+  return [
+    ...buildAnswerSheetFixedTemplateCandidates(rowCount),
+    ...buildLegacyFooterFixedTemplateCandidates(),
+  ];
+}
+
+function resolveFixedTemplateCandidates(
+  canvas: HTMLCanvasElement,
+  opts: CalifacilScanOptions | undefined,
+  rowCount: number
+): OmrFixedTemplate[] {
+  if (opts?.answerSheetTemplateOnly) {
+    return buildAnswerSheetFixedTemplateCandidates(rowCount);
+  }
+  const strictFixedTemplateMode =
+    opts?.geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
+  if (!strictFixedTemplateMode) return [];
+  const detectedTemplate = detectFullSheetFixedTemplate(canvas);
+  return [
+    ...(detectedTemplate ? [detectedTemplate] : []),
+    ...buildFullSheetFixedTemplateCandidates(rowCount),
   ];
 }
 
@@ -2809,13 +2833,24 @@ export function detectCalifacilSheetCornerQuad(
   return detectCalifacilQuadFromCornerMarkers(canvas);
 }
 
+/** Salida estándar tras warp por fiduciales (carta vertical 8.5×11). */
+export const CALIFACIL_WARP_LETTER_WIDTH = 850;
+export const CALIFACIL_WARP_LETTER_HEIGHT = Math.round(
+  CALIFACIL_WARP_LETTER_WIDTH * (11 / 8.5)
+);
+
 /** Endereza la hoja usando los cuatro marcadores negros de esquina. */
 export function warpCalifacilSheetFromCornerMarkers(
   canvas: HTMLCanvasElement
 ): HTMLCanvasElement | null {
   const quad = detectCalifacilQuadFromCornerMarkers(canvas);
   if (!quad) return null;
-  return warpPerspectiveToRect(canvas, quad);
+  return warpPerspectiveToRect(
+    canvas,
+    quad,
+    CALIFACIL_WARP_LETTER_WIDTH,
+    CALIFACIL_WARP_LETTER_HEIGHT
+  );
 }
 
 export type CalifacilSheetQualityProbe = {
@@ -2955,21 +2990,25 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   );
   if (lineYs && fixedTemplate) {
     let rowAligned = true;
+    let avgDev = 0;
     for (let i = 0; i < rows + 1; i++) {
       const expected = dataTop + i * rowH;
-      const maxDev = rowH * 0.82;
-      if (Math.abs(lineYs[i]! - expected) > maxDev) {
+      const dev = Math.abs(lineYs[i]! - expected);
+      avgDev += dev;
+      const maxDev = rowH * 0.92;
+      if (dev > maxDev) {
         rowAligned = false;
         break;
       }
     }
+    avgDev /= rows + 1;
     if (!rowAligned) {
       lineYs = null;
     } else {
-      // Mezcla leve para conservar el anclaje del template pero adaptarse al escaneo real.
+      const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
       lineYs = lineYs.map((y, i) => {
         const expected = dataTop + i * rowH;
-        const blended = y * 0.7 + expected * 0.3;
+        const blended = y * detectedWeight + expected * (1 - detectedWeight);
         return Math.round(blended);
       });
     }
@@ -3496,16 +3535,14 @@ export function scanCalifacilOmrSheet(
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
-  const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([-6, 0, 6] as const) : ([-16, -8, 0, 8, 16] as const);
+  const strictFixedTemplateMode =
+    Boolean(opts?.answerSheetTemplateOnly) ||
+    (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([-4, 0, 4] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
-    const detectedTemplate = strictFixedTemplateMode ? detectFullSheetFixedTemplate(c) : null;
     const fixedTemplates = strictFixedTemplateMode
-      ? [
-          ...(detectedTemplate ? [detectedTemplate] : []),
-          ...buildFullSheetFixedTemplateCandidates(),
-        ]
+      ? resolveFixedTemplateCandidates(c, opts, rowCount)
       : [];
     if (fixedTemplates.length > 0) {
       for (const fixedTemplate of fixedTemplates) {
@@ -3519,7 +3556,11 @@ export function scanCalifacilOmrSheet(
             fixedTemplate,
             rowCount
           );
-          const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
+          const fixedBonus = detail.hasDetectedRowLines
+            ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
+            : opts?.answerSheetTemplateOnly
+              ? -340
+              : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
           if (detailScore > bestSweepScore) {
             best = detail;
@@ -3674,16 +3715,14 @@ export function scanCalifacilOmrSheetWithMeta(
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
-  const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([-6, 0, 6] as const) : ([-16, -8, 0, 8, 16] as const);
+  const strictFixedTemplateMode =
+    Boolean(opts?.answerSheetTemplateOnly) ||
+    (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([-4, 0, 4] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
-    const detectedTemplate = strictFixedTemplateMode ? detectFullSheetFixedTemplate(c) : null;
     const fixedTemplates = strictFixedTemplateMode
-      ? [
-          ...(detectedTemplate ? [detectedTemplate] : []),
-          ...buildFullSheetFixedTemplateCandidates(),
-        ]
+      ? resolveFixedTemplateCandidates(c, opts, rowCount)
       : [];
     if (fixedTemplates.length > 0) {
       for (const fixedTemplate of fixedTemplates) {
@@ -3697,7 +3736,11 @@ export function scanCalifacilOmrSheetWithMeta(
             fixedTemplate,
             rowCount
           );
-          const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
+          const fixedBonus = detail.hasDetectedRowLines
+            ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
+            : opts?.answerSheetTemplateOnly
+              ? -340
+              : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
           if (detailScore > bestSweepScore) {
             best = detail;

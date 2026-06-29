@@ -914,6 +914,54 @@ function omrFillRowHeightPt(rowCount: number): number {
   return Math.round(Math.max(8.5, rowPt) * 10) / 10;
 }
 
+/** Mismas medidas que `.print-page--omr-answer-sheet` (carta vertical, márgenes @page). */
+export const CALIFACIL_ANSWER_SHEET_PAGE = {
+  widthPt: 612,
+  innerHeightPt: 775,
+  bodyInsetPt: 12,
+  chromeAboveOmrPt: 54,
+  omrBorderPadTopPt: 3.5,
+  omrTitlePt: 10,
+  qnumColFrac: 0.09,
+} as const;
+
+export type CalifacilAnswerSheetOmrTemplate = {
+  tableLeftRatio: number;
+  tableTopRatio: number;
+  tableWidthRatio: number;
+  tableHeightRatio: number;
+  titleStripRatioOfTable: number;
+  qnumWidthRatio: number;
+};
+
+/**
+ * Plantilla OMR normalizada (0–1) alineada con la hoja de respuestas impresa.
+ * Debe usarse tras enderezar la captura con los 4 fiduciales de esquina.
+ */
+export function buildCalifacilAnswerSheetOmrTemplate(
+  rowCount: number
+): CalifacilAnswerSheetOmrTemplate {
+  const { widthPt, innerHeightPt, bodyInsetPt, chromeAboveOmrPt, omrBorderPadTopPt, omrTitlePt, qnumColFrac } =
+    CALIFACIL_ANSWER_SHEET_PAGE;
+  const rowPt = omrFillRowHeightPt(rowCount);
+  const theadPt = rowPt * 1.12;
+
+  const tableLeft = bodyInsetPt;
+  const tableTop = bodyInsetPt + chromeAboveOmrPt;
+  const tableW = widthPt - 2 * bodyInsetPt;
+  const tableH = innerHeightPt - tableTop - bodyInsetPt;
+  const titleStripPt = omrBorderPadTopPt + omrTitlePt + theadPt;
+
+  return {
+    tableLeftRatio: tableLeft / widthPt,
+    tableTopRatio: tableTop / innerHeightPt,
+    tableWidthRatio: tableW / widthPt,
+    tableHeightRatio: tableH / innerHeightPt,
+    titleStripRatioOfTable: titleStripPt / tableH,
+    qnumWidthRatio: qnumColFrac,
+  };
+}
+
 function omrSheetMetaRowHtml(): string {
   return `
       <div class="omr-sheet-meta-row">
