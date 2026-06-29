@@ -39,7 +39,8 @@ export const CALIFACIL_WARP_PAGE_FRAME_NORM = {
 const ANSWER_SHEET_LAYOUT = {
   cornerSizePt: 14,
   cornerGapPt: 5,
-  rightStripWidthPt: 12,
+  /** Franjas negras verticales (izquierda y derecha) para alinear la captura móvil. */
+  alignStripWidthPt: 12,
 } as const;
 
 export type CalifacilVirtualKeyRow = {
@@ -191,7 +192,7 @@ function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
       <p class="omr-title">Marca <strong>un círculo</strong> por reactivo con bolígrafo <strong>azul o negro</strong> (tinta oscura).</p>
-      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="4">
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="5">
         ${thead}
         <tbody>${rows.join('')}</tbody>
       </table>
@@ -393,16 +394,22 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
     .print-page--omr-only .sheet-align-corner--tr { top: 0; right: 0; }
     .print-page--omr-only .sheet-align-corner--bl { bottom: 0; left: 0; }
     .print-page--omr-only .sheet-align-corner--br { bottom: 0; right: 0; }
+    .print-page--omr-only .sheet-align-strip-left,
     .print-page--omr-only .sheet-align-strip-right {
       position: absolute;
       top: var(--omr-body-inset);
-      right: 0;
       width: var(--align-strip-width);
       height: calc(100% - 2 * var(--omr-body-inset));
       background: #000;
       z-index: 10;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
+    }
+    .print-page--omr-only .sheet-align-strip-left {
+      left: 0;
+    }
+    .print-page--omr-only .sheet-align-strip-right {
+      right: 0;
     }
     .print-page--omr-only .print-page-omr-sheet-body {
       position: relative;
@@ -414,6 +421,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       max-height: calc(var(--sheet-inner-height) - 2 * var(--omr-body-inset));
       min-height: 0;
       margin: var(--omr-body-inset);
+      margin-left: calc(var(--omr-body-inset) + var(--align-strip-width) + var(--corner-gap));
       margin-right: calc(var(--omr-body-inset) + var(--align-strip-width) + var(--corner-gap));
       overflow: visible;
       page-break-inside: avoid;
@@ -492,6 +500,9 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       font-weight: bold;
       text-align: center;
       line-height: 1.12;
+      background: #e8e8e8;
+      padding: 2pt 4pt;
+      border: 0.5pt solid #bbb;
     }
     .print-page--omr-answer-sheet .omr-table {
       flex: 1 1 auto;
@@ -950,6 +961,7 @@ function answerSheetAlignMarkersHtml(): string {
     <span class="sheet-align-corner sheet-align-corner--tr" aria-hidden="true"></span>
     <span class="sheet-align-corner sheet-align-corner--bl" aria-hidden="true"></span>
     <span class="sheet-align-corner sheet-align-corner--br" aria-hidden="true"></span>
+    <span class="sheet-align-strip-left" aria-hidden="true"></span>
     <span class="sheet-align-strip-right" aria-hidden="true"></span>`;
 }
 
@@ -1060,14 +1072,15 @@ const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0.006;
 function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
   const pageW = CALIFACIL_WARP_PAGE.widthPx;
   const pageH = CALIFACIL_WARP_PAGE.heightPx;
-  const { cornerSizePt, cornerGapPt, rightStripWidthPt } = ANSWER_SHEET_LAYOUT;
+  const { cornerSizePt, cornerGapPt, alignStripWidthPt } = ANSWER_SHEET_LAYOUT;
   const bodyInsetPx = ptToWarpPx(cornerSizePt + cornerGapPt);
-  const rightMarginPx = bodyInsetPx + ptToWarpPx(rightStripWidthPt + cornerGapPt);
+  const stripPx = ptToWarpPx(alignStripWidthPt);
+  const sideMarginPx = bodyInsetPx + stripPx + ptToWarpPx(cornerGapPt);
   const chromeTopPx = ptToWarpPx(CALIFACIL_ANSWER_SHEET_PAGE.chromeAboveOmrPt);
 
-  const tableLeftPx = bodyInsetPx;
+  const tableLeftPx = sideMarginPx;
   const tableTopPx = bodyInsetPx + chromeTopPx;
-  const tableRightPx = pageW - rightMarginPx;
+  const tableRightPx = pageW - sideMarginPx;
   const tableBottomPx = pageH - bodyInsetPx;
   const tableW = Math.max(1, tableRightPx - tableLeftPx);
   const tableH = Math.max(1, tableBottomPx - tableTopPx);
@@ -1128,23 +1141,45 @@ export const CALIFACIL_FIDUCIAL_CENTERS_NORM = {
   br: fiducialCenterNorm('br'),
 } as const;
 
-/** Franja negra derecha de la hoja de respuestas (coords. 0–1 en canvas 850×1100). */
-export const CALIFACIL_RIGHT_ALIGN_STRIP_NORM = {
-  left: (CALIFACIL_WARP_PAGE.widthPx - ptToWarpPx(ANSWER_SHEET_LAYOUT.rightStripWidthPt)) /
-    CALIFACIL_WARP_PAGE.widthPx,
-  top:
-    ptToWarpPx(ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt) /
-    CALIFACIL_WARP_PAGE.heightPx,
-  width: ptToWarpPx(ANSWER_SHEET_LAYOUT.rightStripWidthPt) / CALIFACIL_WARP_PAGE.widthPx,
-  height:
-    (CALIFACIL_WARP_PAGE.heightPx -
+/** Franjas negras verticales de alineación (coords. 0–1 en canvas 850×1100). */
+function answerSheetAlignStripNorm(side: 'left' | 'right'): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const pageW = CALIFACIL_WARP_PAGE.widthPx;
+  const pageH = CALIFACIL_WARP_PAGE.heightPx;
+  const stripW = ptToWarpPx(ANSWER_SHEET_LAYOUT.alignStripWidthPt) / pageW;
+  const top =
+    ptToWarpPx(ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt) / pageH;
+  const height =
+    (pageH -
       2 * ptToWarpPx(ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt)) /
-    CALIFACIL_WARP_PAGE.heightPx,
-} as const;
+    pageH;
+  return {
+    left: side === 'left' ? 0 : 1 - stripW,
+    top,
+    width: stripW,
+    height,
+  };
+}
+
+/** Franja negra izquierda de la hoja de respuestas. */
+export const CALIFACIL_LEFT_ALIGN_STRIP_NORM = answerSheetAlignStripNorm('left');
+
+/** Franja negra derecha de la hoja de respuestas. */
+export const CALIFACIL_RIGHT_ALIGN_STRIP_NORM = answerSheetAlignStripNorm('right');
+
+/** Par de franjas negras (izquierda y derecha) para guías de cámara. */
+export const CALIFACIL_ALIGN_STRIPS_NORM = [
+  CALIFACIL_LEFT_ALIGN_STRIP_NORM,
+  CALIFACIL_RIGHT_ALIGN_STRIP_NORM,
+] as const;
 
 /**
- * Marco de alineación móvil: ancho de hoja carta × alto de la franja negra derecha.
- * La franja define el largo útil de la hoja de respuestas.
+ * Marco de alineación móvil: ancho de hoja carta × alto de las franjas negras laterales.
+ * Las franjas definen el largo útil de la hoja de respuestas.
  */
 export const CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM = {
   x: 0,
@@ -1153,7 +1188,7 @@ export const CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM = {
   h: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.height,
 } as const;
 
-/** Relación ancho÷alto del marco de alineación (franja negra = alto de referencia). */
+/** Relación ancho÷alto del marco de alineación (franjas negras = alto de referencia). */
 export function califacilAnswerSheetAlignFrameAspect(): number {
   const pageW = CALIFACIL_WARP_PAGE.widthPx;
   const pageH = CALIFACIL_WARP_PAGE.heightPx;

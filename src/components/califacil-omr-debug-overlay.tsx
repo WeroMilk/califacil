@@ -1,7 +1,7 @@
 'use client';
 
 import type { WarpAlignmentReport } from '@/lib/omrScan';
-import { CALIFACIL_FIDUCIAL_CENTERS_NORM, CALIFACIL_RIGHT_ALIGN_STRIP_NORM } from '@/lib/printExam';
+import { CALIFACIL_FIDUCIAL_CENTERS_NORM, CALIFACIL_ALIGN_STRIPS_NORM } from '@/lib/printExam';
 import type { CalifacilAnswerSheetOmrTemplate } from '@/lib/printExam';
 
 type Props = {
@@ -30,12 +30,12 @@ export function CalifacilOmrDebugOverlay({
     h: template.tableHeightRatio * H,
   };
 
-  const stripRect = {
-    x: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.left * W,
-    y: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.top * H,
-    w: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.width * W,
-    h: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.height * H,
-  };
+  const stripRects = CALIFACIL_ALIGN_STRIPS_NORM.map((strip) => ({
+    x: strip.left * W,
+    y: strip.top * H,
+    w: strip.width * W,
+    h: strip.height * H,
+  }));
 
   const fiducialIds = ['tl', 'tr', 'br', 'bl'] as const;
 
@@ -46,16 +46,19 @@ export function CalifacilOmrDebugOverlay({
       preserveAspectRatio="xMidYMid meet"
       aria-hidden
     >
-      <rect
-        x={stripRect.x}
-        y={stripRect.y}
-        width={stripRect.w}
-        height={stripRect.h}
-        fill="none"
-        stroke="rgba(59,130,246,0.75)"
-        strokeWidth={Math.max(1.5, W * 0.003)}
-        strokeDasharray="4 4"
-      />
+      {stripRects.map((stripRect, index) => (
+        <rect
+          key={index}
+          x={stripRect.x}
+          y={stripRect.y}
+          width={stripRect.w}
+          height={stripRect.h}
+          fill="none"
+          stroke="rgba(59,130,246,0.75)"
+          strokeWidth={Math.max(1.5, W * 0.003)}
+          strokeDasharray="4 4"
+        />
+      ))}
       <rect
         x={tableRect.x}
         y={tableRect.y}

@@ -3237,7 +3237,7 @@ export default function CalificarPage() {
                             ? 'Coloca los cuadros negros en las esquinas'
                             : cornersAlignedView
                               ? 'Mantén la hoja quieta'
-                              : 'Alinea la franja negra con la barra del visor'}
+                              : 'Alinea las dos franjas negras con las barras del visor'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                   <p className="mt-1 text-center text-[10px] text-white/70">

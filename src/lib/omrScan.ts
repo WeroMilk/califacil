@@ -3555,7 +3555,7 @@ function pickAnswerSheetRowAbsolute(params: {
 
 /**
  * Lee marcas solo dentro de las celdas de la plantilla (mismo marco que el overlay naranja).
- * Evita falsos positivos en la franja negra derecha o fuera de la tabla.
+ * Evita falsos positivos en las franjas negras laterales o fuera de la tabla.
  */
 function readAnswerSheetPicksFromTemplateGeometry(
   canvas: HTMLCanvasElement,
@@ -3638,7 +3638,7 @@ function readAnswerSheetPicksFromTemplateGeometry(
       }
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
-      const marginX = c === cols - 1 ? 0.24 : 0.16;
+      const marginX = c === 0 || c === cols - 1 ? 0.24 : 0.16;
       const marginY = 0.14;
       const xa = cell.x * W + cellW * marginX;
       const xb = cell.x * W + cellW * (1 - marginX);

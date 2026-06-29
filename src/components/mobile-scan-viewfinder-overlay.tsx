@@ -127,7 +127,7 @@ export function MobileScanViewfinderOverlay({
           : shadowWarning
             ? 'Mejor luz o flash — sigue alineando'
             : useSheetCorners
-              ? 'Alinea la franja negra de la hoja con la barra oscura del visor'
+              ? 'Alinea las dos franjas negras de la hoja con las barras del visor'
               : fiducialCount > 0 && fiducialCount < 4
                 ? 'Faltan cuadros negros en las esquinas'
                 : 'Encuadra la hoja dentro del marco punteado';
