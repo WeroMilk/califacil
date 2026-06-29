@@ -42,7 +42,6 @@ import {
   isCalifacilExamSheetStrict,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
-  mapRoiQuadCornersToViewportPx,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
   MAX_WARP_ALIGNMENT_ERROR_PX,
@@ -73,7 +72,6 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { MobileScanViewfinderOverlay } from '@/components/mobile-scan-viewfinder-overlay';
-import type { MobileSheetCornerGuidePx } from '@/components/mobile-scan-viewfinder-overlay';
 import {
   type ExamFullscreenMode,
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -476,9 +474,6 @@ export default function CalificarPage() {
   const [mobileFiducialCorners, setMobileFiducialCorners] = useState<
     [boolean, boolean, boolean, boolean]
   >([false, false, false, false]);
-  const [mobileSheetCornerGuides, setMobileSheetCornerGuides] = useState<
-    MobileSheetCornerGuidePx[] | null
-  >(null);
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
@@ -1724,13 +1719,6 @@ export default function CalificarPage() {
             setMobileFiducialCount(fiducialCount);
             setMobileFiducialCorners(fiducialCorners);
             setMobileShadowWarning(shadowStrong);
-            if (quadValid && roiQuad && liveVideoLayout) {
-              setMobileSheetCornerGuides(
-                mapRoiQuadCornersToViewportPx(roiQuad, roiCapture, liveVideoLayout)
-              );
-            } else {
-              setMobileSheetCornerGuides(null);
-            }
 
             if (shadowStrong && flashSupported && !flashOn && !autotorchTriedRef.current) {
               shadowTorchTicksRef.current += 1;
@@ -3184,7 +3172,6 @@ export default function CalificarPage() {
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
                       guideRect={mobileGuideRectPx}
-                      sheetCornerGuides={mobileSheetCornerGuides}
                       fillRatio={mobileSheetFillRatio}
                       stableTicks={mobileStableTicks}
                       stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}

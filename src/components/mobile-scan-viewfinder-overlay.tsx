@@ -1,7 +1,11 @@
 'use client';
 
+import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { MOBILE_MIN_ROI_FILL_RATIO } from '@/lib/omrScan';
+import {
+  MOBILE_MIN_ROI_FILL_RATIO,
+  califacilStaticFiducialCornerGuidesInViewportPx,
+} from '@/lib/omrScan';
 
 import type { AnswerSheetTemplateGuide } from '@/lib/omrScan';
 import { MobileAnswerSheetBubbleGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
@@ -24,8 +28,6 @@ type Props = {
   examTitle?: string;
   sheetLabel?: string;
   guideRect?: MobileGuideRectPx | null;
-  /** Visores anclados a las esquinas reales de la hoja detectada. */
-  sheetCornerGuides?: MobileSheetCornerGuidePx[] | null;
   fillRatio?: number;
   stableTicks?: number;
   stableTicksRequired?: number;
@@ -54,7 +56,7 @@ function ZipgradeAlignCornerAt({
   return (
     <div
       className={cn(
-        'absolute z-20 rounded-lg border-[2.5px] transition-all duration-150',
+        'absolute z-20 rounded-lg border-[2.5px]',
         detected
           ? 'border-emerald-400 bg-white/50 shadow-[0_0_0_2px_rgba(52,211,153,0.35)]'
           : 'border-white/90 bg-white/40 shadow-[0_2px_12px_rgba(0,0,0,0.25)]'
@@ -95,7 +97,6 @@ export function MobileScanViewfinderOverlay({
   examTitle,
   sheetLabel,
   guideRect,
-  sheetCornerGuides,
   fillRatio = 0,
   stableTicks = 0,
   stableTicksRequired = 30,
@@ -111,7 +112,11 @@ export function MobileScanViewfinderOverlay({
     : 'max(0.65rem, env(safe-area-inset-top, 0px))';
 
   const fillLow = fillRatio > 0 && fillRatio < MOBILE_MIN_ROI_FILL_RATIO;
-  const useSheetCorners = sheetCornerGuides && sheetCornerGuides.length === 4;
+  const staticCornerGuides = useMemo(
+    () => (guideRect ? califacilStaticFiducialCornerGuidesInViewportPx(guideRect) : null),
+    [guideRect]
+  );
+  const useSheetCorners = staticCornerGuides && staticCornerGuides.length === 4;
 
   const secsUntilCapture =
     aligned && stableTicks < stableTicksRequired
@@ -130,10 +135,10 @@ export function MobileScanViewfinderOverlay({
           : shadowWarning
             ? 'Mejor luz o flash — sigue alineando'
             : useSheetCorners
-              ? 'Alinea los círculos naranjas con las respuestas correctas'
+              ? 'Coloca los cuadros negros en los visores y alinea los círculos naranjas'
               : fiducialCount > 0 && fiducialCount < 4
-                ? 'Coloca cada cuadro negro dentro de su visor'
-                : 'Encuadra la hoja y alinea los círculos naranjas';
+                ? 'Faltan cuadros negros en las esquinas'
+                : 'Encuadra la hoja dentro del marco punteado';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
@@ -163,7 +168,7 @@ export function MobileScanViewfinderOverlay({
       </div>
 
       {useSheetCorners
-        ? sheetCornerGuides.map((g, index) => (
+        ? staticCornerGuides.map((g, index) => (
             <ZipgradeAlignCornerAt
               key={index}
               left={g.left}

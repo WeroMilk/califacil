@@ -250,6 +250,31 @@ export function getObjectCoverVideoMapping(
   };
 }
 
+export type CalifacilSheetCornerGuidePx = {
+  left: number;
+  top: number;
+  size: number;
+};
+
+/** Visores de esquina fijos en el marco carta (no siguen la detección en vivo). */
+export function califacilStaticFiducialCornerGuidesInViewportPx(
+  guideRect: { left: number; top: number; width: number; height: number }
+): CalifacilSheetCornerGuidePx[] {
+  const size = Math.max(56, Math.min(88, Math.round(guideRect.width * 0.13)));
+  const half = size / 2;
+  const corners = [
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.tl,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.tr,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.bl,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.br,
+  ];
+  return corners.map((c) => ({
+    left: guideRect.left + c.x * guideRect.width - half,
+    top: guideRect.top + c.y * guideRect.height - half,
+    size,
+  }));
+}
+
 /** Marco guía hoja carta (píxeles) dentro del área de video en pantalla. */
 export function califacilViewfinderGuideInViewportPx(
   letterbox: CalifacilVideoLetterbox
