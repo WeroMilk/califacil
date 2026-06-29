@@ -29,6 +29,8 @@ type Props = {
   fillRatio?: number;
   stableTicks?: number;
   stableTicksRequired?: number;
+  /** Duración total de la espera antes de captura (para barra de progreso). */
+  alignHoldMs?: number;
   shadowWarning?: boolean;
   fiducialCount?: number;
   fiducialCorners?: [boolean, boolean, boolean, boolean];
@@ -61,15 +63,24 @@ function ZipgradeAlignCornerAt({
   );
 }
 
-function StableDots({ ticks, required }: { ticks: number; required: number }) {
+function StableDots({
+  ticks,
+  required,
+}: {
+  ticks: number;
+  required: number;
+}) {
+  const segmentCount = 5;
+  const progress = required > 0 ? Math.min(1, ticks / required) : 0;
+  const filled = Math.min(segmentCount, Math.ceil(progress * segmentCount));
   return (
     <div className="mt-2 flex items-center justify-center gap-1.5" aria-hidden>
-      {Array.from({ length: required }, (_, i) => (
+      {Array.from({ length: segmentCount }, (_, i) => (
         <span
           key={i}
           className={cn(
-            'h-1.5 w-4 rounded-full transition-colors duration-150',
-            i < ticks ? 'bg-emerald-400' : 'bg-white/35'
+            'h-1.5 w-5 rounded-full transition-colors duration-150',
+            i < filled ? 'bg-emerald-400' : 'bg-white/35'
           )}
         />
       ))}
@@ -85,7 +96,8 @@ export function MobileScanViewfinderOverlay({
   sheetCornerGuides,
   fillRatio = 0,
   stableTicks = 0,
-  stableTicksRequired = 2,
+  stableTicksRequired = 25,
+  alignHoldMs = 2500,
   shadowWarning = false,
   fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
@@ -98,11 +110,18 @@ export function MobileScanViewfinderOverlay({
   const fillLow = fillRatio > 0 && fillRatio < MOBILE_MIN_ROI_FILL_RATIO;
   const useSheetCorners = sheetCornerGuides && sheetCornerGuides.length === 4;
 
+  const secsUntilCapture =
+    aligned && stableTicks < stableTicksRequired
+      ? Math.max(1, Math.ceil(((stableTicksRequired - stableTicks) * alignHoldMs) / stableTicksRequired / 1000))
+      : null;
+
   const bannerLine =
     aligned && stableTicks >= stableTicksRequired
       ? 'Capturando…'
-      : aligned
-        ? 'Mantén la hoja quieta'
+      : aligned && secsUntilCapture !== null
+        ? `No muevas el teléfono — captura en ~${secsUntilCapture} s`
+        : aligned
+          ? 'Alinea los círculos y mantén la hoja quieta'
         : fillLow
           ? 'Acerca un poco el teléfono'
           : shadowWarning

@@ -171,9 +171,11 @@ const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas consecutivos con cuadrilátero estable en ROI antes de captura automática móvil. */
-const CORNER_ALIGN_STABLE_TICKS = 2;
+const CORNER_ALIGN_STABLE_TICKS = 25;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 75;
+const MOBILE_CORNER_LOOP_MS = 100;
+/** Tiempo mínimo de espera con hoja alineada antes de capturar (≈2,5 s). */
+const MOBILE_ALIGN_HOLD_MS = CORNER_ALIGN_STABLE_TICKS * MOBILE_CORNER_LOOP_MS;
 /** Tolerancia extra al capturar manualmente o con fallback de esquinas. */
 const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 14;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
@@ -1811,7 +1813,17 @@ export default function CalificarPage() {
             setMobileStableTicks(cornerStableTicksRef.current);
             setCornersAlignedView(true);
             if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
-              setLiveStatus('Mantén la hoja quieta…');
+              const secsLeft = Math.max(
+                1,
+                Math.ceil(
+                  ((CORNER_ALIGN_STABLE_TICKS - cornerStableTicksRef.current) *
+                    MOBILE_CORNER_LOOP_MS) /
+                    1000
+                )
+              );
+              setLiveStatus(
+                `Hoja alineada — puedes ajustar. Captura en ~${secsLeft} s si no mueves el teléfono.`
+              );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -3176,6 +3188,7 @@ export default function CalificarPage() {
                       fillRatio={mobileSheetFillRatio}
                       stableTicks={mobileStableTicks}
                       stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}
+                      alignHoldMs={MOBILE_ALIGN_HOLD_MS}
                       shadowWarning={mobileShadowWarning}
                       fiducialCount={mobileFiducialCount}
                       fiducialCorners={mobileFiducialCorners}
@@ -3213,7 +3226,16 @@ export default function CalificarPage() {
                   <p className="mb-1 text-center text-sm font-semibold text-white">
                     {cornersAlignedView && mobileStableTicks >= CORNER_ALIGN_STABLE_TICKS
                       ? 'Listo — capturando'
-                      : mobileSheetFillRatio > 0 && mobileSheetFillRatio < MOBILE_MIN_ROI_FILL_RATIO
+                      : cornersAlignedView && mobileStableTicks > 0
+                        ? `Alineado — captura en ~${Math.max(
+                            1,
+                            Math.ceil(
+                              ((CORNER_ALIGN_STABLE_TICKS - mobileStableTicks) *
+                                MOBILE_CORNER_LOOP_MS) /
+                                1000
+                            )
+                          )} s`
+                        : mobileSheetFillRatio > 0 && mobileSheetFillRatio < MOBILE_MIN_ROI_FILL_RATIO
                         ? 'Acerca un poco o usa captura manual'
                         : mobileShadowWarning && !flashOn
                           ? 'Mejor luz — sigue alineando'
