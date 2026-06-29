@@ -362,7 +362,6 @@ function califacilReviewOrangeFrameRect(
   answerSheetLayout = false
 ): { x: number; y: number; w: number; h: number } | null {
   const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
-  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
   if (useTemplate) {
     const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
     return {
@@ -372,6 +371,7 @@ function califacilReviewOrangeFrameRect(
       h: t.tableHeightRatio,
     };
   }
+  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
   return cellBounds ?? califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
 }
 

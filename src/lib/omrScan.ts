@@ -2731,7 +2731,7 @@ function resolveFixedTemplateCandidates(
   rowCount: number
 ): OmrFixedTemplate[] {
   if (opts?.answerSheetTemplateOnly) {
-    return buildAnswerSheetFixedTemplateCandidates(rowCount);
+    return [buildCalifacilAnswerSheetOmrTemplate(rowCount)];
   }
   const strictFixedTemplateMode =
     opts?.geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
@@ -3264,6 +3264,54 @@ export type AnswerSheetTemplateGuide = {
 };
 
 /**
+ * Cuadrícula OMR de hoja de respuestas alineada con el marco naranja (plantilla PDF base).
+ */
+export function buildAnswerSheetOmrGeometry(
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+
+  const tableLeft = width * template.tableLeftRatio;
+  const tableTop = height * template.tableTopRatio;
+  const tableW = width * template.tableWidthRatio;
+  const tableH = height * template.tableHeightRatio;
+  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
+  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
+  const rowH = dataHeight / rows;
+  const qNumW = tableW * template.qnumWidthRatio;
+  const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
+  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const cellW = bubbleAreaW / cols;
+
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const yRowTop = dataTop + row * rowH;
+    const yRowBot = dataTop + (row + 1) * rowH;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = bubbleAreaLeft + c * cellW;
+      const x1 = c === cols - 1 ? bubbleAreaLeft + bubbleAreaW : bubbleAreaLeft + (c + 1) * cellW;
+      rowRects.push({
+        x: x0 / width,
+        y: yRowTop / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (yRowBot - yRowTop) / height),
+      });
+    }
+    cells.push(rowRects);
+  }
+
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
+/**
  * Posiciones de burbujas y margen de tabla según la plantilla impresa (sin escanear imagen).
  * Sirve para superponer la guía de 120 círculos en el visor de cámara.
  */
@@ -3273,42 +3321,11 @@ export function buildAnswerSheetTemplateGuide(
   pageW = CALIFACIL_WARP_LETTER_WIDTH,
   pageH = CALIFACIL_WARP_LETTER_HEIGHT
 ): AnswerSheetTemplateGuide {
-  const rows = clampCalifacilOmrRowCount(rowCount);
-  const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-
-  const tableLeft = pageW * template.tableLeftRatio;
-  const tableTop = pageH * template.tableTopRatio;
-  const tableW = pageW * template.tableWidthRatio;
-  const tableH = pageH * template.tableHeightRatio;
-  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
-  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
-  const rowH = dataHeight / rows;
-  const qNumW = tableW * template.qnumWidthRatio;
-  const bubbleAreaLeft = tableLeft + qNumW;
-  const bubbleAreaW = tableW - qNumW;
-  const cellW = bubbleAreaW / cols;
-
-  const cells: OmrNormRect[][] = [];
-  for (let row = 0; row < rows; row++) {
-    const yRowTop = dataTop + row * rowH;
-    const rowRects: OmrNormRect[] = [];
-    for (let c = 0; c < cols; c++) {
-      const x0 = bubbleAreaLeft + c * cellW;
-      const padX = cellW * 0.14;
-      const padY = rowH * 0.12;
-      rowRects.push({
-        x: (x0 + padX) / pageW,
-        y: (yRowTop + padY) / pageH,
-        w: Math.max(0, (cellW - 2 * padX) / pageW),
-        h: Math.max(0, (rowH - 2 * padY) / pageH),
-      });
-    }
-    cells.push(rowRects);
-  }
+  const geometry = buildAnswerSheetOmrGeometry(rowCount, columns, pageW, pageH);
 
   return {
-    geometry: { imageWidth: pageW, imageHeight: pageH, cells },
+    geometry,
     tableBoundsNorm: {
       x: template.tableLeftRatio,
       y: template.tableTopRatio,
@@ -4095,11 +4112,9 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     maxSameColumnCount = Math.max(maxSameColumnCount, v);
   });
 
-  const geometry: CalifacilOmrScanGeometry = {
-    imageWidth: width,
-    imageHeight: height,
-    cells,
-  };
+  const geometry: CalifacilOmrScanGeometry = templateGridOnly
+    ? buildAnswerSheetOmrGeometry(rows, cols, width, height)
+    : { imageWidth: width, imageHeight: height, cells };
 
   return {
     picks: out,
@@ -4217,7 +4232,9 @@ export function scanCalifacilOmrSheet(
     Boolean(opts?.answerSheetTemplateOnly) ||
     (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
   const fixedTemplateShifts = strictFixedTemplateMode
-    ? ([-10, -6, -3, 0, 3, 6, 10] as const)
+    ? templateGridOnly
+      ? ([0] as const)
+      : ([-10, -6, -3, 0, 3, 6, 10] as const)
     : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
@@ -4419,7 +4436,9 @@ export function scanCalifacilOmrSheetWithMeta(
     Boolean(opts?.answerSheetTemplateOnly) ||
     (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
   const fixedTemplateShifts = strictFixedTemplateMode
-    ? ([-10, -6, -3, 0, 3, 6, 10] as const)
+    ? templateGridOnly
+      ? ([0] as const)
+      : ([-10, -6, -3, 0, 3, 6, 10] as const)
     : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
@@ -4506,29 +4525,24 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
 
-  if (templateGridOnly && best.geometry) {
-    const fixedTemplate =
-      bestFixedTemplate ?? buildAnswerSheetFixedTemplateCandidates(rowCount)[0];
-    const aligned = scanCalifacilOmrCanvasDetailedWithProfile(
-      canvas,
-      columns,
-      thresholds,
-      fullSheetProfile,
-      bestColShift,
-      fixedTemplate,
-      rowCount,
-      true
-    );
-    if (aligned.geometry) {
-      best = { ...best, geometry: aligned.geometry };
-    }
-  }
-
   /** La vista previa usa la foto enderezada (no la variante CLAHE del barrido OMR). */
   const reviewCanvas =
     templateGridOnly || opts?.preserveInputCanvas
       ? (prepareAnswerSheetDisplayCanvas(canvas) ?? canvas)
       : (bestReviewCanvas ?? canvas);
+
+  if (templateGridOnly) {
+    best = {
+      ...best,
+      geometry: buildAnswerSheetOmrGeometry(
+        rowCount,
+        columns,
+        reviewCanvas.width,
+        reviewCanvas.height
+      ),
+    };
+  }
+
   return {
     picks: best.picks,
     rows: best.rows,
