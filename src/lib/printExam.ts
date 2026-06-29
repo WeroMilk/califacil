@@ -902,7 +902,7 @@ function buildQuestionPageSection(
 
 /** Altura de fila OMR (pt) para que la tabla llene la hoja sin cortar filas. */
 function omrFillRowHeightPt(rowCount: number): number {
-  const sheetInnerPt = 775; // carta vertical menos márgenes @page (~11in − 6mm)
+  const sheetInnerPt = CALIFACIL_ANSWER_SHEET_PAGE.innerHeightPt - 17; // ~11in − 6mm márgenes @page
   const bodyInsetPt = 24; // cuadros de esquina + gap (×2)
   const chromeOutsideOmrPt = 54; // cabecera + meta del alumno
   const omrTitlePt = 10;
@@ -917,11 +917,25 @@ function omrFillRowHeightPt(rowCount: number): number {
 /** Mismas medidas que `.print-page--omr-answer-sheet` (carta vertical, márgenes @page). */
 export const CALIFACIL_ANSWER_SHEET_PAGE = {
   widthPt: 612,
-  innerHeightPt: 775,
+  /** Altura útil carta vertical (11 in @ 72 dpi). */
+  innerHeightPt: 792,
   bodyInsetPt: 12,
   chromeAboveOmrPt: 54,
   omrBorderPadTopPt: 3.5,
   omrTitlePt: 10,
+  qnumColFrac: 0.09,
+} as const;
+
+/**
+ * Plantilla OMR en canvas 850×1100 tras warp fiducial.
+ * Medida en `examen de prueba 4-2.pdf` (30 reactivos, hoja de respuestas en blanco).
+ */
+export const CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION = {
+  tableLeftRatio: 32 / 850,
+  tableTopRatio: 75 / 1100,
+  tableWidthRatio: 785 / 850,
+  tableHeightRatio: 995 / 1100,
+  titleStripRatioOfTable30: 49 / 995,
   qnumColFrac: 0.09,
 } as const;
 
@@ -941,23 +955,26 @@ export type CalifacilAnswerSheetOmrTemplate = {
 export function buildCalifacilAnswerSheetOmrTemplate(
   rowCount: number
 ): CalifacilAnswerSheetOmrTemplate {
-  const { widthPt, innerHeightPt, bodyInsetPt, chromeAboveOmrPt, omrBorderPadTopPt, omrTitlePt, qnumColFrac } =
-    CALIFACIL_ANSWER_SHEET_PAGE;
-  const rowPt = omrFillRowHeightPt(rowCount);
-  const theadPt = rowPt * 1.12;
+  const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(2, Math.round(rowCount)));
+  const { widthPt, innerHeightPt, qnumColFrac } = CALIFACIL_ANSWER_SHEET_PAGE;
+  const cal = CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION;
 
-  const tableLeft = bodyInsetPt;
-  const tableTop = bodyInsetPt + chromeAboveOmrPt;
-  const tableW = widthPt - 2 * bodyInsetPt;
-  const tableH = innerHeightPt - tableTop - bodyInsetPt;
-  const titleStripPt = omrBorderPadTopPt + omrTitlePt + theadPt;
+  const tableH = innerHeightPt * cal.tableHeightRatio;
+  const rowPt = omrFillRowHeightPt(rows);
+  const theadPt = rowPt * 1.12;
+  const titleStripPt =
+    CALIFACIL_ANSWER_SHEET_PAGE.omrBorderPadTopPt +
+    CALIFACIL_ANSWER_SHEET_PAGE.omrTitlePt +
+    theadPt;
+  const titleStripRatioOfTable =
+    rows === 30 ? cal.titleStripRatioOfTable30 : titleStripPt / tableH;
 
   return {
-    tableLeftRatio: tableLeft / widthPt,
-    tableTopRatio: tableTop / innerHeightPt,
-    tableWidthRatio: tableW / widthPt,
-    tableHeightRatio: tableH / innerHeightPt,
-    titleStripRatioOfTable: titleStripPt / tableH,
+    tableLeftRatio: cal.tableLeftRatio,
+    tableTopRatio: cal.tableTopRatio,
+    tableWidthRatio: cal.tableWidthRatio,
+    tableHeightRatio: cal.tableHeightRatio,
+    titleStripRatioOfTable,
     qnumWidthRatio: qnumColFrac,
   };
 }

@@ -3,7 +3,11 @@
  * Debe coincidir con el layout de `printExam.ts` (tabla N filas × columnas de burbujas).
  */
 
-import { CALIFACIL_VIEWFINDER_GUIDE, CALIFACIL_PRINT_MAX_QUESTIONS, buildCalifacilAnswerSheetOmrTemplate } from '@/lib/printExam';
+import {
+  buildCalifacilAnswerSheetOmrTemplate,
+  CALIFACIL_VIEWFINDER_GUIDE,
+  CALIFACIL_PRINT_MAX_QUESTIONS,
+} from '@/lib/printExam';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -1389,6 +1393,30 @@ export function estimateCanvasMeanLuminance(canvas: HTMLCanvasElement): number {
   return n > 0 ? sum / n : 0;
 }
 
+function validateCornerMarkerQuad(
+  quad: [Point, Point, Point, Point],
+  width: number,
+  height: number
+): [Point, Point, Point, Point] | null {
+  const [tl, tr, br, bl] = quad;
+  const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
+  const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
+  const area =
+    Math.abs(
+      tl.x * tr.y +
+        tr.x * br.y +
+        br.x * bl.y +
+        bl.x * tl.y -
+        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+    ) * 0.5;
+  const avgW = (topW + bottomW) * 0.5;
+  const avgH = (leftH + rightH) * 0.5;
+  if (area < width * height * 0.08 || avgW < width * 0.28 || avgH < height * 0.28) return null;
+  return quad;
+}
+
 /**
  * Localiza los cuatro cuadros negros de esquina (`.sheet-align-corner`) y devuelve el cuadrilátero
  * [TL, TR, BR, BL] para homografía — más fiable que heurísticas de papel/tinta en móvil.
@@ -1405,6 +1433,30 @@ function detectCalifacilQuadFromCornerMarkers(
   const d = id.data;
   const regionW = Math.max(8, Math.round(width * 0.1));
   const regionH = Math.max(8, Math.round(height * 0.1));
+
+  const tryPageCornerMarkers = (): [Point, Point, Point, Point] | null => {
+    const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
+    const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
+    const br = findCornerMarkerPoint(
+      d,
+      width,
+      height,
+      width - regionW,
+      height - regionH,
+      regionW,
+      regionH
+    );
+    const bl = findCornerMarkerPoint(d, width, height, 0, height - regionH, regionW, regionH);
+    if (!tl || !tr || !br || !bl) return null;
+    return validateCornerMarkerQuad([tl, tr, br, bl], width, height);
+  };
+
+  const aspect = width / Math.max(1, height);
+  const letterWarped = height >= 800 && aspect > 0.74 && aspect < 0.82;
+  if (letterWarped) {
+    const pageQuad = tryPageCornerMarkers();
+    if (pageQuad) return pageQuad;
+  }
 
   const norm = califacilViewfinderNormRect(width, height);
   if (norm) {
@@ -1425,51 +1477,12 @@ function detectCalifacilQuadFromCornerMarkers(
     );
     const bl = findCornerMarkerPoint(d, width, height, gx, gy + gh - regionH, regionW, regionH);
     if (tl && tr && br && bl) {
-      const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
-      const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
-      const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
-      const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-      const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
-      const area =
-        Math.abs(
-          tl.x * tr.y +
-            tr.x * br.y +
-            br.x * bl.y +
-            bl.x * tl.y -
-            (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
-        ) * 0.5;
-      const avgW = (topW + bottomW) * 0.5;
-      const avgH = (leftH + rightH) * 0.5;
-      if (area >= width * height * 0.08 && avgW >= width * 0.28 && avgH >= height * 0.28) {
-        return quad;
-      }
+      const quad = validateCornerMarkerQuad([tl, tr, br, bl], width, height);
+      if (quad) return quad;
     }
   }
 
-  const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
-  const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
-  const br = findCornerMarkerPoint(d, width, height, width - regionW, height - regionH, regionW, regionH);
-  const bl = findCornerMarkerPoint(d, width, height, 0, height - regionH, regionW, regionH);
-  if (!tl || !tr || !br || !bl) return null;
-
-  const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
-  const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
-  const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
-  const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
-  const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
-  const area =
-    Math.abs(
-      tl.x * tr.y +
-        tr.x * br.y +
-        br.x * bl.y +
-        bl.x * tl.y -
-        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
-    ) * 0.5;
-  const avgW = (topW + bottomW) * 0.5;
-  const avgH = (leftH + rightH) * 0.5;
-  if (area < width * height * 0.12) return null;
-  if (avgW < width * 0.35 || avgH < height * 0.35) return null;
-  return quad;
+  return tryPageCornerMarkers();
 }
 
 function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
@@ -2266,8 +2279,8 @@ function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_
   });
   return [
     base,
-    nudge(base, -0.003, -0.004, 0.006, 0.003, 0.003, 0.002),
-    nudge(base, 0.003, 0.004, -0.006, -0.003, -0.003, -0.002),
+    nudge(base, -0.002, -0.003, 0.004, 0.002, 0.002, 0.001),
+    nudge(base, 0.002, 0.003, -0.004, -0.002, -0.002, -0.001),
   ];
 }
 

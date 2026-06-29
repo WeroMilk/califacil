@@ -20,6 +20,7 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
+  buildCalifacilAnswerSheetOmrTemplate,
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
@@ -278,14 +279,29 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Marco naranja de referencia: coincide con la tabla detectada si hay geometría; si no, la guía del visor. */
+function isWarpedAnswerSheetGeometry(geometry: CalifacilOmrScanGeometry): boolean {
+  const W = geometry.imageWidth;
+  const H = geometry.imageHeight;
+  const aspect = W / Math.max(1, H);
+  return W >= 700 && W <= 960 && H >= 900 && H <= 1200 && aspect > 0.74 && aspect < 0.82;
+}
+
 function califacilReviewOrangeFrameRect(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
 ): { x: number; y: number; w: number; h: number } | null {
-  return (
-    califacilGeometryTableBounds(geometry, rowCount) ??
-    califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
-  );
+  const useAnswerSheetTemplate = isWarpedAnswerSheetGeometry(geometry);
+  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
+  if (useAnswerSheetTemplate) {
+    const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+    return {
+      x: t.tableLeftRatio,
+      y: t.tableTopRatio,
+      w: t.tableWidthRatio,
+      h: t.tableHeightRatio,
+    };
+  }
+  return cellBounds ?? califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
 }
 
 /** Imagen + overlay: mismo aspecto que `geometry` para que el SVG no se estire respecto al JPEG. */
