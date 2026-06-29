@@ -3,6 +3,9 @@
 import { cn } from '@/lib/utils';
 import { MOBILE_MIN_ROI_FILL_RATIO } from '@/lib/omrScan';
 
+import type { AnswerSheetTemplateGuide } from '@/lib/omrScan';
+import { MobileAnswerSheetBubbleGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
+
 export type MobileGuideRectPx = {
   left: number;
   top: number;
@@ -29,6 +32,8 @@ type Props = {
   shadowWarning?: boolean;
   fiducialCount?: number;
   fiducialCorners?: [boolean, boolean, boolean, boolean];
+  /** Guía de burbujas OMR (120 círculos + margen de tabla). */
+  templateGuide?: AnswerSheetTemplateGuide | null;
 };
 
 function ZipgradeAlignCornerAt({
@@ -84,6 +89,7 @@ export function MobileScanViewfinderOverlay({
   shadowWarning = false,
   fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
+  templateGuide,
 }: Props) {
   const bannerTop = guideRect
     ? Math.max(8, guideRect.top - 100)
@@ -101,13 +107,24 @@ export function MobileScanViewfinderOverlay({
           ? 'Acerca un poco el teléfono'
           : shadowWarning
             ? 'Mejor luz o flash — sigue alineando'
-            : fiducialCount > 0 && fiducialCount < 4
-              ? 'Coloca cada cuadro negro dentro de su visor'
-              : 'Alinea los cuadros negros con los visores blancos';
+            : useSheetCorners
+              ? 'Alinea los círculos impresos con la guía blanca'
+              : fiducialCount > 0 && fiducialCount < 4
+                ? 'Coloca cada cuadro negro dentro de su visor'
+                : 'Encuadra la hoja y alinea los círculos con la guía';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
       <div className="absolute inset-0 bg-black/32" aria-hidden />
+
+      {templateGuide ? (
+        <MobileAnswerSheetBubbleGuideOverlay
+          templateGuide={templateGuide}
+          guideRect={guideRect}
+          sheetCornerGuides={sheetCornerGuides}
+          aligned={aligned}
+        />
+      ) : null}
 
       <div
         className="absolute left-1/2 z-30 w-[min(92%,20rem)] -translate-x-1/2 rounded-lg border border-black/10 bg-white/94 px-3 py-2.5 text-center shadow-md backdrop-blur-sm"

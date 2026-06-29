@@ -56,6 +56,7 @@ import {
   probeCalifacilSheetQuality,
   scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
+  buildAnswerSheetTemplateGuide,
   warpAndValidateCalifacilSheet,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -579,6 +580,10 @@ export default function CalificarPage() {
   const totalSheets = sheets.length;
   const omrRowCount = questions.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
+  const answerSheetTemplateGuide = useMemo(
+    () => buildAnswerSheetTemplateGuide(currentChunk.length, omrCols),
+    [currentChunk.length, omrCols]
+  );
   const maxQuestions = 30;
   const expectedChunkPicks = useMemo(
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
@@ -3174,6 +3179,7 @@ export default function CalificarPage() {
                       shadowWarning={mobileShadowWarning}
                       fiducialCount={mobileFiducialCount}
                       fiducialCorners={mobileFiducialCorners}
+                      templateGuide={answerSheetTemplateGuide}
                     />
                   </div>
                   {scanBusy ? (

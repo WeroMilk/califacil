@@ -3166,6 +3166,86 @@ export const CALIFACIL_WARP_LETTER_HEIGHT = Math.round(
   CALIFACIL_WARP_LETTER_WIDTH * (11 / 8.5)
 );
 
+export type AnswerSheetTemplateGuide = {
+  geometry: CalifacilOmrScanGeometry;
+  /** Recuadro de la tabla OMR (incluye franja de título) en coords 0–1 de página carta. */
+  tableBoundsNorm: OmrNormRect;
+};
+
+/**
+ * Posiciones de burbujas y margen de tabla según la plantilla impresa (sin escanear imagen).
+ * Sirve para superponer la guía de 120 círculos en el visor de cámara.
+ */
+export function buildAnswerSheetTemplateGuide(
+  rowCount: number,
+  columns: number,
+  pageW = CALIFACIL_WARP_LETTER_WIDTH,
+  pageH = CALIFACIL_WARP_LETTER_HEIGHT
+): AnswerSheetTemplateGuide {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+
+  const tableLeft = pageW * template.tableLeftRatio;
+  const tableTop = pageH * template.tableTopRatio;
+  const tableW = pageW * template.tableWidthRatio;
+  const tableH = pageH * template.tableHeightRatio;
+  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
+  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
+  const rowH = dataHeight / rows;
+  const qNumW = tableW * template.qnumWidthRatio;
+  const bubbleAreaLeft = tableLeft + qNumW;
+  const bubbleAreaW = tableW - qNumW;
+  const cellW = bubbleAreaW / cols;
+
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const yRowTop = dataTop + row * rowH;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = bubbleAreaLeft + c * cellW;
+      const padX = cellW * 0.14;
+      const padY = rowH * 0.12;
+      rowRects.push({
+        x: (x0 + padX) / pageW,
+        y: (yRowTop + padY) / pageH,
+        w: Math.max(0, (cellW - 2 * padX) / pageW),
+        h: Math.max(0, (rowH - 2 * padY) / pageH),
+      });
+    }
+    cells.push(rowRects);
+  }
+
+  return {
+    geometry: { imageWidth: pageW, imageHeight: pageH, cells },
+    tableBoundsNorm: {
+      x: template.tableLeftRatio,
+      y: template.tableTopRatio,
+      w: template.tableWidthRatio,
+      h: template.tableHeightRatio,
+    },
+  };
+}
+
+type ViewportPoint = { x: number; y: number };
+
+/** Esquinas de hoja detectada → puntos en pantalla (centro de cada visor de esquina). */
+export function sheetCornerGuidesToViewportQuad(
+  guides: Array<{ left: number; top: number; size: number }>
+): { tl: ViewportPoint; tr: ViewportPoint; br: ViewportPoint; bl: ViewportPoint } | null {
+  if (guides.length !== 4) return null;
+  const center = (g: { left: number; top: number; size: number }) => ({
+    x: g.left + g.size / 2,
+    y: g.top + g.size / 2,
+  });
+  return {
+    tl: center(guides[0]!),
+    tr: center(guides[1]!),
+    bl: center(guides[2]!),
+    br: center(guides[3]!),
+  };
+}
+
 /** Endereza la hoja usando los cuatro marcadores negros de esquina. */
 export function warpCalifacilSheetFromCornerMarkers(
   canvas: HTMLCanvasElement
