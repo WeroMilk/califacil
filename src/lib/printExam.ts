@@ -1142,6 +1142,25 @@ export const CALIFACIL_RIGHT_ALIGN_STRIP_NORM = {
     CALIFACIL_WARP_PAGE.heightPx,
 } as const;
 
+/**
+ * Marco de alineación móvil: ancho de hoja carta × alto de la franja negra derecha.
+ * La franja define el largo útil de la hoja de respuestas.
+ */
+export const CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM = {
+  x: 0,
+  y: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.top,
+  w: 1,
+  h: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.height,
+} as const;
+
+/** Relación ancho÷alto del marco de alineación (franja negra = alto de referencia). */
+export function califacilAnswerSheetAlignFrameAspect(): number {
+  const pageW = CALIFACIL_WARP_PAGE.widthPx;
+  const pageH = CALIFACIL_WARP_PAGE.heightPx;
+  const frameH = CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM.h * pageH;
+  return pageW / Math.max(1, frameH);
+}
+
 export type CalifacilMarkerAnchoredTemplate = CalifacilAnswerSheetOmrTemplate & {
   /** Rectángulo interior definido por los centros de los 4 fiduciales (coords. 0–1 de página). */
   markerQuad: { left: number; top: number; width: number; height: number };

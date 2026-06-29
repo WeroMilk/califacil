@@ -28,7 +28,7 @@ import {
   autoOrientCalifacilSheet,
   califacilGeometryTableBounds,
   califacilImageToJpegDataUrl,
-  califacilViewfinderGuideInViewportPx,
+  califacilMobileAnswerSheetGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
   detectAnswerSheetFiducialsInRoi,
@@ -55,7 +55,6 @@ import {
   probeCalifacilSheetQuality,
   scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
-  buildAnswerSheetTemplateGuide,
   warpAndValidateCalifacilSheet,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -465,7 +464,7 @@ export default function CalificarPage() {
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
   const mobileGuideRectPx = useMemo(() => {
     if (!liveVideoLayout) return null;
-    return califacilViewfinderGuideInViewportPx(liveVideoLayout);
+    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
   }, [liveVideoLayout]);
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
@@ -577,10 +576,6 @@ export default function CalificarPage() {
   const totalSheets = sheets.length;
   const omrRowCount = questions.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
-  const answerSheetTemplateGuide = useMemo(
-    () => buildAnswerSheetTemplateGuide(currentChunk.length, omrCols),
-    [currentChunk.length, omrCols]
-  );
   const maxQuestions = 30;
   const expectedChunkPicks = useMemo(
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
@@ -3179,8 +3174,6 @@ export default function CalificarPage() {
                       shadowWarning={mobileShadowWarning}
                       fiducialCount={mobileFiducialCount}
                       fiducialCorners={mobileFiducialCorners}
-                      templateGuide={answerSheetTemplateGuide}
-                      expectedPicks={expectedChunkPicks}
                     />
                   </div>
                   {scanBusy ? (
@@ -3228,10 +3221,10 @@ export default function CalificarPage() {
                         : mobileShadowWarning && !flashOn
                           ? 'Mejor luz — sigue alineando'
                           : mobileFiducialCount > 0 && mobileFiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
-                            ? 'Alinea los visores con los cuadros negros'
+                            ? 'Coloca los cuadros negros en las esquinas'
                             : cornersAlignedView
                               ? 'Mantén la hoja quieta'
-                              : 'Buscando hoja…'}
+                              : 'Alinea la franja negra con la barra del visor'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                   <p className="mt-1 text-center text-[10px] text-white/70">

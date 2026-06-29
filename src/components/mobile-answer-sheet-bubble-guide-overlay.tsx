@@ -2,70 +2,44 @@
 
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import type { AnswerSheetTemplateGuide } from '@/lib/omrScan';
+import {
+  CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
+  CALIFACIL_RIGHT_ALIGN_STRIP_NORM,
+} from '@/lib/printExam';
+import { mapPageNormToAlignGuideViewport } from '@/lib/omrScan';
 import type { MobileGuideRectPx } from '@/components/mobile-scan-viewfinder-overlay';
 
-type ViewportPoint = { x: number; y: number };
-
 type Props = {
-  templateGuide: AnswerSheetTemplateGuide;
-  guideRect?: MobileGuideRectPx | null;
-  /** Índice de columna correcta por fila (0 = A). */
-  expectedPicks?: (number | null)[];
+  guideRect: MobileGuideRectPx;
   aligned?: boolean;
 };
 
-function mapPageNormToGuideViewport(
-  nx: number,
-  ny: number,
-  guideRect: MobileGuideRectPx
-): ViewportPoint {
-  return {
-    x: guideRect.left + nx * guideRect.width,
-    y: guideRect.top + ny * guideRect.height,
-  };
-}
-
 /**
- * Guía fija: margen de hoja carta + un círculo por fila en la respuesta correcta.
+ * Guía fija: marco según franja negra derecha + barra negra de referencia para alinear.
  */
-export function MobileAnswerSheetBubbleGuideOverlay({
-  templateGuide,
+export function MobileAnswerSheetAlignGuideOverlay({
   guideRect,
-  expectedPicks = [],
   aligned = false,
 }: Props) {
-  const bubbles = useMemo(() => {
-    if (!guideRect) return [] as Array<{ cx: number; cy: number; r: number }>;
+  const stripRect = useMemo(() => {
+    const frame = CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM;
+    const strip = CALIFACIL_RIGHT_ALIGN_STRIP_NORM;
+    const tl = mapPageNormToAlignGuideViewport(strip.left, strip.top, guideRect, frame);
+    const br = mapPageNormToAlignGuideViewport(
+      strip.left + strip.width,
+      strip.top + strip.height,
+      guideRect,
+      frame
+    );
+    return {
+      x: tl.x,
+      y: tl.y,
+      width: Math.max(4, br.x - tl.x),
+      height: Math.max(4, br.y - tl.y),
+    };
+  }, [guideRect]);
 
-    const map = (nx: number, ny: number) => mapPageNormToGuideViewport(nx, ny, guideRect);
-
-    const bubbleList: Array<{ cx: number; cy: number; r: number }> = [];
-    const rows = templateGuide.geometry.cells;
-    for (let row = 0; row < rows.length; row++) {
-      const col = expectedPicks[row];
-      if (col === null || col === undefined || col < 0) continue;
-      const cell = rows[row]?.[col];
-      if (!cell) continue;
-      const cxNorm = cell.x + cell.w / 2;
-      const cyNorm = cell.y + cell.h / 2;
-      const center = map(cxNorm, cyNorm);
-      const right = map(cell.x + cell.w, cyNorm);
-      const bottom = map(cxNorm, cell.y + cell.h);
-      const r = Math.max(
-        2,
-        Math.min(Math.abs(right.x - center.x), Math.abs(bottom.y - center.y)) * 0.46
-      );
-      bubbleList.push({ cx: center.x, cy: center.y, r });
-    }
-
-    return bubbleList;
-  }, [templateGuide, guideRect, expectedPicks]);
-
-  if (!guideRect) return null;
-
-  const stroke = aligned ? 'rgba(52,211,153,0.9)' : 'rgba(251,146,60,0.88)';
-  const tableStroke = aligned ? 'rgba(52,211,153,0.75)' : 'rgba(255,255,255,0.45)';
+  const frameStroke = aligned ? 'rgba(52,211,153,0.9)' : 'rgba(255,255,255,0.55)';
 
   return (
     <svg
@@ -78,23 +52,21 @@ export function MobileAnswerSheetBubbleGuideOverlay({
         width={guideRect.width}
         height={guideRect.height}
         fill="none"
-        stroke={tableStroke}
+        stroke={frameStroke}
         strokeWidth={2}
         strokeDasharray="10 6"
         vectorEffect="non-scaling-stroke"
       />
-      {bubbles.map((b, i) => (
-        <circle
-          key={i}
-          cx={b.cx}
-          cy={b.cy}
-          r={b.r}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={aligned ? 2 : 1.25}
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
+      <rect
+        x={stripRect.x}
+        y={stripRect.y}
+        width={stripRect.width}
+        height={stripRect.height}
+        fill={aligned ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.38)'}
+        stroke={aligned ? 'rgba(52,211,153,0.95)' : 'rgba(255,255,255,0.7)'}
+        strokeWidth={aligned ? 2 : 1.5}
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 }

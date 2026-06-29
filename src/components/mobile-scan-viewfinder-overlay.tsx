@@ -6,9 +6,7 @@ import {
   MOBILE_MIN_ROI_FILL_RATIO,
   califacilStaticFiducialCornerGuidesInViewportPx,
 } from '@/lib/omrScan';
-
-import type { AnswerSheetTemplateGuide } from '@/lib/omrScan';
-import { MobileAnswerSheetBubbleGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
+import { MobileAnswerSheetAlignGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
 
 export type MobileGuideRectPx = {
   left: number;
@@ -36,10 +34,6 @@ type Props = {
   shadowWarning?: boolean;
   fiducialCount?: number;
   fiducialCorners?: [boolean, boolean, boolean, boolean];
-  /** Guía de burbujas OMR (respuestas correctas + margen de tabla). */
-  templateGuide?: AnswerSheetTemplateGuide | null;
-  /** Índice de columna correcta por fila para la guía (0 = A). */
-  expectedPicks?: (number | null)[];
 };
 
 function ZipgradeAlignCornerAt({
@@ -104,8 +98,6 @@ export function MobileScanViewfinderOverlay({
   shadowWarning = false,
   fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
-  templateGuide,
-  expectedPicks,
 }: Props) {
   const bannerTop = guideRect
     ? Math.max(8, guideRect.top - 100)
@@ -135,7 +127,7 @@ export function MobileScanViewfinderOverlay({
           : shadowWarning
             ? 'Mejor luz o flash — sigue alineando'
             : useSheetCorners
-              ? 'Coloca los cuadros negros en los visores y alinea los círculos naranjas'
+              ? 'Alinea la franja negra de la hoja con la barra oscura del visor'
               : fiducialCount > 0 && fiducialCount < 4
                 ? 'Faltan cuadros negros en las esquinas'
                 : 'Encuadra la hoja dentro del marco punteado';
@@ -144,13 +136,8 @@ export function MobileScanViewfinderOverlay({
     <div className="pointer-events-none absolute inset-0 z-10">
       <div className="absolute inset-0 bg-black/32" aria-hidden />
 
-      {templateGuide ? (
-        <MobileAnswerSheetBubbleGuideOverlay
-          templateGuide={templateGuide}
-          guideRect={guideRect}
-          expectedPicks={expectedPicks}
-          aligned={aligned}
-        />
+      {guideRect ? (
+        <MobileAnswerSheetAlignGuideOverlay guideRect={guideRect} aligned={aligned} />
       ) : null}
 
       <div
@@ -179,7 +166,7 @@ export function MobileScanViewfinderOverlay({
           ))
         : null}
 
-      {guideRect && !templateGuide && !useSheetCorners ? (
+      {guideRect && !useSheetCorners ? (
         <div
           className="absolute z-10 border border-dashed border-white/35"
           style={{

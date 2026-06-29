@@ -9,6 +9,8 @@ import {
   CALIFACIL_FIDUCIAL_CENTERS_NORM,
   CALIFACIL_VIEWFINDER_GUIDE,
   CALIFACIL_WARP_PAGE_FRAME_NORM,
+  CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
+  califacilAnswerSheetAlignFrameAspect,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
@@ -224,6 +226,32 @@ export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect |
   return { x: left / W, y: top / H, w: rw / W, h: rh / H };
 }
 
+/** Rectángulo guía hoja de respuestas (proporción ancho carta × alto franja negra). */
+export function califacilAnswerSheetAlignNormRect(W: number, H: number): OmrNormRect | null {
+  if (W < 80 || H < 80) return null;
+  const { widthFrac, centerXFrac, centerYFrac, maxHeightFrac } = CALIFACIL_VIEWFINDER_GUIDE;
+  const ar = califacilAnswerSheetAlignFrameAspect();
+  const maxW = Math.min(W * widthFrac, W - 2);
+  const maxH = H * (maxHeightFrac ?? 0.98);
+  let rectW = maxW;
+  let rectH = rectW / ar;
+  if (rectH > maxH) {
+    rectH = maxH;
+    rectW = rectH * ar;
+  }
+  if (rectW < 80 || rectH < 80) return null;
+  const cx = W * centerXFrac;
+  const cy = H * centerYFrac;
+  let left = Math.round(cx - rectW / 2);
+  let top = Math.round(cy - rectH / 2);
+  const rw = Math.round(rectW);
+  const rh = Math.round(rectH);
+  left = Math.max(0, Math.min(left, W - rw));
+  top = Math.max(0, Math.min(top, H - rh));
+  if (rw < 100 || rh < 48 || left + rw > W || top + rh > H) return null;
+  return { x: left / W, y: top / H, w: rw / W, h: rh / H };
+}
+
 export type CalifacilVideoLetterbox = {
   offsetX: number;
   offsetY: number;
@@ -250,17 +278,50 @@ export function getObjectCoverVideoMapping(
   };
 }
 
+/** Marco guía hoja de respuestas (franja negra) en píxeles dentro del video en pantalla. */
+export function califacilMobileAnswerSheetGuideInViewportPx(
+  letterbox: CalifacilVideoLetterbox
+): { left: number; top: number; width: number; height: number } | null {
+  const norm = califacilAnswerSheetAlignNormRect(letterbox.frameW, letterbox.frameH);
+  if (!norm) return null;
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    letterbox.frameW,
+    letterbox.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  return {
+    left: letterbox.offsetX + norm.x * letterbox.frameW * scale - cropX,
+    top: letterbox.offsetY + norm.y * letterbox.frameH * scale - cropY,
+    width: norm.w * letterbox.frameW * scale,
+    height: norm.h * letterbox.frameH * scale,
+  };
+}
+
+/** Mapea coords. 0–1 de página carta al marco de alineación en pantalla. */
+export function mapPageNormToAlignGuideViewport(
+  nx: number,
+  ny: number,
+  guideRect: { left: number; top: number; width: number; height: number },
+  frame = CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM
+): { x: number; y: number } {
+  return {
+    x: guideRect.left + ((nx - frame.x) / frame.w) * guideRect.width,
+    y: guideRect.top + ((ny - frame.y) / frame.h) * guideRect.height,
+  };
+}
+
 export type CalifacilSheetCornerGuidePx = {
   left: number;
   top: number;
   size: number;
 };
 
-/** Visores de esquina fijos en el marco carta (no siguen la detección en vivo). */
+/** Visores de esquina fijos en el marco de alineación (no siguen la detección en vivo). */
 export function califacilStaticFiducialCornerGuidesInViewportPx(
   guideRect: { left: number; top: number; width: number; height: number }
 ): CalifacilSheetCornerGuidePx[] {
-  const size = Math.max(56, Math.min(88, Math.round(guideRect.width * 0.13)));
+  const size = Math.max(52, Math.min(80, Math.round(guideRect.width * 0.12)));
   const half = size / 2;
   const corners = [
     CALIFACIL_FIDUCIAL_CENTERS_NORM.tl,
@@ -268,11 +329,10 @@ export function califacilStaticFiducialCornerGuidesInViewportPx(
     CALIFACIL_FIDUCIAL_CENTERS_NORM.bl,
     CALIFACIL_FIDUCIAL_CENTERS_NORM.br,
   ];
-  return corners.map((c) => ({
-    left: guideRect.left + c.x * guideRect.width - half,
-    top: guideRect.top + c.y * guideRect.height - half,
-    size,
-  }));
+  return corners.map((c) => {
+    const p = mapPageNormToAlignGuideViewport(c.x, c.y, guideRect);
+    return { left: p.x - half, top: p.y - half, size };
+  });
 }
 
 /** Marco guía hoja carta (píxeles) dentro del área de video en pantalla. */
@@ -1760,7 +1820,7 @@ export function captureVideoGuideRoiFrame(
   const fh = video.videoHeight;
   if (fw < 40 || fh < 40) return null;
 
-  const norm = califacilViewfinderNormRect(fw, fh);
+  const norm = califacilAnswerSheetAlignNormRect(fw, fh);
   if (!norm) return null;
 
   const sx = norm.x * fw;
