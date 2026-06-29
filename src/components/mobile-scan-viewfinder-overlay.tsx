@@ -140,7 +140,6 @@ export function MobileScanViewfinderOverlay({
         <MobileAnswerSheetBubbleGuideOverlay
           templateGuide={templateGuide}
           guideRect={guideRect}
-          sheetCornerGuides={sheetCornerGuides}
           aligned={aligned}
         />
       ) : null}
@@ -171,7 +170,7 @@ export function MobileScanViewfinderOverlay({
           ))
         : null}
 
-      {guideRect && !useSheetCorners ? (
+      {guideRect && !templateGuide && !useSheetCorners ? (
         <div
           className="absolute z-10 border border-dashed border-white/35"
           style={{
