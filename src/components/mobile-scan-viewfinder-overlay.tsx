@@ -10,6 +10,8 @@ export type MobileGuideRectPx = {
   height: number;
 };
 
+type CornerId = 'tl' | 'tr' | 'bl' | 'br';
+
 type Props = {
   aligned: boolean;
   examTitle?: string;
@@ -25,33 +27,64 @@ type Props = {
   shadowWarning?: boolean;
   /** Cuadros negros de esquina visibles (0–4). */
   fiducialCount?: number;
+  /** Fiduciales detectados por esquina [TL, TR, BL, BR]. */
+  fiducialCorners?: [boolean, boolean, boolean, boolean];
 };
 
-function CornerBracket({
-  tone,
-  className,
-}: {
-  tone: 'idle' | 'warn' | 'ready';
-  className: string;
-}) {
-  return (
-    <span
-      className={cn(
-        'absolute h-8 w-8 border-[3px] transition-colors duration-150',
-        tone === 'ready' && 'border-emerald-400',
-        tone === 'warn' && 'border-amber-400',
-        tone === 'idle' && 'border-white',
-        className
-      )}
-      aria-hidden
-    />
-  );
+const CORNER_ORDER: CornerId[] = ['tl', 'tr', 'bl', 'br'];
+
+function zipgradeCornerSize(guide: MobileGuideRectPx): number {
+  const base = Math.min(guide.width, guide.height) * 0.28;
+  return Math.round(Math.max(84, Math.min(base, 152)));
 }
 
-function FiducialHint({ className }: { className: string }) {
+function cornerPosition(
+  guide: MobileGuideRectPx,
+  corner: CornerId,
+  size: number
+): { left: number; top: number } {
+  switch (corner) {
+    case 'tl':
+      return { left: guide.left, top: guide.top };
+    case 'tr':
+      return { left: guide.left + guide.width - size, top: guide.top };
+    case 'bl':
+      return { left: guide.left, top: guide.top + guide.height - size };
+    case 'br':
+      return {
+        left: guide.left + guide.width - size,
+        top: guide.top + guide.height - size,
+      };
+  }
+}
+
+function ZipgradeAlignCorner({
+  corner,
+  guideRect,
+  size,
+  detected,
+}: {
+  corner: CornerId;
+  guideRect: MobileGuideRectPx;
+  size: number;
+  detected: boolean;
+}) {
+  const { left, top } = cornerPosition(guideRect, corner, size);
+
   return (
-    <span
-      className={cn('absolute h-3 w-3 rounded-[1px] border border-white/50 bg-black/80', className)}
+    <div
+      className={cn(
+        'absolute z-20 rounded-lg border-[2.5px] transition-all duration-200',
+        detected
+          ? 'border-emerald-400 bg-white/50 shadow-[0_0_0_2px_rgba(52,211,153,0.35)]'
+          : 'border-gray-700/75 bg-white/38 shadow-[0_2px_12px_rgba(0,0,0,0.25)]'
+      )}
+      style={{
+        left,
+        top,
+        width: size,
+        height: size,
+      }}
       aria-hidden
     />
   );
@@ -83,21 +116,15 @@ export function MobileScanViewfinderOverlay({
   stableTicksRequired = 3,
   shadowWarning = false,
   fiducialCount = 0,
+  fiducialCorners = [false, false, false, false],
 }: Props) {
   const bannerTop = guideRect
-    ? Math.max(8, guideRect.top - 96)
+    ? Math.max(8, guideRect.top - 100)
     : 'max(0.65rem, env(safe-area-inset-top, 0px))';
 
   const fillLow = fillRatio > 0 && fillRatio < MOBILE_MIN_ROI_FILL_RATIO;
   const fillVeryLow = fillRatio > 0 && fillRatio < 0.3;
-  const fiducialsOk = fiducialCount >= 3;
-
-  const tone: 'idle' | 'warn' | 'ready' =
-    aligned && !fillLow && fiducialsOk && !shadowWarning
-      ? 'ready'
-      : fillVeryLow || shadowWarning
-        ? 'warn'
-        : 'idle';
+  const cornerSize = guideRect ? zipgradeCornerSize(guideRect) : 96;
 
   const bannerLine =
     aligned && stableTicks >= stableTicksRequired
@@ -105,26 +132,21 @@ export function MobileScanViewfinderOverlay({
       : aligned
         ? 'Mantén la hoja quieta'
         : fillVeryLow
-          ? 'Acerca el teléfono — la hoja debe llenar el marco'
+          ? 'Acerca el teléfono para que la hoja llene la pantalla'
           : fillLow
-            ? 'Un poco más cerca — llena el rectángulo con la hoja'
+            ? 'Un poco más cerca — los visores deben cubrir la hoja'
             : shadowWarning
               ? 'Reduce la sombra o activa el flash'
-              : fiducialCount > 0 && fiducialCount < 3
-                ? 'Alinea los 4 cuadros negros de las esquinas'
-                : 'Encuadra la hoja dentro del rectángulo';
-
-  const borderColor =
-    tone === 'ready'
-      ? 'rgba(52, 211, 153, 0.95)'
-      : tone === 'warn'
-        ? 'rgba(251, 191, 36, 0.95)'
-        : 'rgba(255, 255, 255, 0.92)';
+              : fiducialCount > 0 && fiducialCount < 4
+                ? 'Centra los cuadros negros dentro de los visores blancos'
+                : 'Alinea los cuadros negros de la hoja con los visores blancos';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
+      <div className="absolute inset-0 bg-black/38" aria-hidden />
+
       <div
-        className="absolute left-1/2 z-20 w-[min(92%,20rem)] -translate-x-1/2 rounded-lg border border-black/10 bg-white/94 px-3 py-2.5 text-center shadow-md backdrop-blur-sm"
+        className="absolute left-1/2 z-30 w-[min(92%,20rem)] -translate-x-1/2 rounded-lg border border-black/10 bg-white/94 px-3 py-2.5 text-center shadow-md backdrop-blur-sm"
         style={{ top: typeof bannerTop === 'number' ? bannerTop : `calc(${bannerTop} + 4.25rem)` }}
       >
         {examTitle ? (
@@ -138,32 +160,28 @@ export function MobileScanViewfinderOverlay({
       </div>
 
       {guideRect ? (
-        <div
-          className="absolute z-10 rounded-sm transition-colors duration-150"
-          style={{
-            left: guideRect.left,
-            top: guideRect.top,
-            width: guideRect.width,
-            height: guideRect.height,
-            border: `2px dashed ${borderColor}`,
-            boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.58)',
-            backgroundColor:
-              tone === 'ready'
-                ? 'rgba(52, 211, 153, 0.08)'
-                : tone === 'warn'
-                  ? 'rgba(251, 191, 36, 0.06)'
-                  : 'rgba(255, 255, 255, 0.04)',
-          }}
-        >
-          <CornerBracket tone={tone} className="left-0 top-0 border-b-0 border-r-0" />
-          <CornerBracket tone={tone} className="right-0 top-0 border-b-0 border-l-0" />
-          <CornerBracket tone={tone} className="bottom-0 left-0 border-r-0 border-t-0" />
-          <CornerBracket tone={tone} className="bottom-0 right-0 border-l-0 border-t-0" />
-          <FiducialHint className="left-1 top-1" />
-          <FiducialHint className="right-1 top-1" />
-          <FiducialHint className="bottom-1 left-1" />
-          <FiducialHint className="bottom-1 right-1" />
-        </div>
+        <>
+          {CORNER_ORDER.map((corner, index) => (
+            <ZipgradeAlignCorner
+              key={corner}
+              corner={corner}
+              guideRect={guideRect}
+              size={cornerSize}
+              detected={fiducialCorners[index] ?? false}
+            />
+          ))}
+
+          <div
+            className="absolute z-10 border border-white/20"
+            style={{
+              left: guideRect.left,
+              top: guideRect.top,
+              width: guideRect.width,
+              height: guideRect.height,
+            }}
+            aria-hidden
+          />
+        </>
       ) : null}
     </div>
   );

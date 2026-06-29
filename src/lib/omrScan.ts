@@ -1903,13 +1903,15 @@ export function estimateCanvasShadowAsymmetry(canvas: HTMLCanvasElement): number
   return Math.abs(left - right) / Math.max(0.18, (left + right) * 0.5);
 }
 
-/** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */
-export function countAnswerSheetFiducialsInRoi(canvas: HTMLCanvasElement): number {
+/** Estado por esquina [TL, TR, BL, BR] de fiduciales negros visibles en el ROI. */
+export function detectAnswerSheetFiducialsInRoi(
+  canvas: HTMLCanvasElement
+): [boolean, boolean, boolean, boolean] {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return 0;
+  if (!ctx) return [false, false, false, false];
   const W = canvas.width;
   const H = canvas.height;
-  if (W < 80 || H < 80) return 0;
+  if (W < 80 || H < 80) return [false, false, false, false];
   const patchW = Math.max(8, Math.round(W * 0.085));
   const patchH = Math.max(8, Math.round(H * 0.085));
   const inset = Math.max(4, Math.round(W * 0.022));
@@ -1919,7 +1921,26 @@ export function countAnswerSheetFiducialsInRoi(canvas: HTMLCanvasElement): numbe
     { x: inset, y: H - patchH - inset },
     { x: W - patchW - inset, y: H - patchH - inset },
   ];
-  return countDarkCornerPatches(ctx, corners, patchW, patchH);
+  const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = corners[i]!;
+    const px = Math.max(0, Math.round(x));
+    const py = Math.max(0, Math.round(y));
+    const id = ctx.getImageData(px, py, patchW, patchH);
+    let darkCount = 0;
+    const total = patchW * patchH;
+    for (let j = 0; j < id.data.length; j += 4) {
+      const lum = id.data[j]! * 0.299 + id.data[j + 1]! * 0.587 + id.data[j + 2]! * 0.114;
+      if (lum < 95) darkCount++;
+    }
+    detected[i] = darkCount / total >= 0.07;
+  }
+  return detected;
+}
+
+/** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */
+export function countAnswerSheetFiducialsInRoi(canvas: HTMLCanvasElement): number {
+  return detectAnswerSheetFiducialsInRoi(canvas).filter(Boolean).length;
 }
 
 /** CLAHE + gamma para fotos de cámara con sombras antes del escaneo OMR. */

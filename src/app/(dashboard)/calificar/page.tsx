@@ -31,7 +31,7 @@ import {
   califacilViewfinderGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
-  countAnswerSheetFiducialsInRoi,
+  detectAnswerSheetFiducialsInRoi,
   estimateCanvasShadowAsymmetry,
   captureVideoGuideRoiFrame,
   detectLargestQuadInRoiCanvas,
@@ -409,6 +409,9 @@ export default function CalificarPage() {
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [mobileSheetFillRatio, setMobileSheetFillRatio] = useState(0);
   const [mobileFiducialCount, setMobileFiducialCount] = useState(0);
+  const [mobileFiducialCorners, setMobileFiducialCorners] = useState<
+    [boolean, boolean, boolean, boolean]
+  >([false, false, false, false]);
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
@@ -645,11 +648,12 @@ export default function CalificarPage() {
     setCornersAlignedView(false);
     setMobileSheetFillRatio(0);
     setMobileFiducialCount(0);
+    setMobileFiducialCorners([false, false, false, false]);
     setMobileShadowWarning(false);
     setMobileStableTicks(0);
     setLiveStatus(
       isMobile
-        ? 'Alinea los 4 cuadros negros de esquina con los visores. La captura es automática al detectarlas.'
+        ? 'Coloca los cuadros negros de la hoja dentro de los visores blancos. La captura es automática.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -1597,6 +1601,7 @@ export default function CalificarPage() {
               setCornersAlignedView(false);
               setMobileSheetFillRatio(0);
               setMobileFiducialCount(0);
+              setMobileFiducialCorners([false, false, false, false]);
               setMobileShadowWarning(false);
               setMobileStableTicks(0);
               setLiveScanGeometry(null);
@@ -1617,12 +1622,14 @@ export default function CalificarPage() {
             const quadValid = roiQuad !== null && isValidMobileRoiQuad(roiQuad, roiW, roiH);
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
-            const fiducialCount = countAnswerSheetFiducialsInRoi(roiCanvas);
+            const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas);
+            const fiducialCount = fiducialCorners.filter(Boolean).length;
             const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
             const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
 
             setMobileSheetFillRatio(fillRatio);
             setMobileFiducialCount(fiducialCount);
+            setMobileFiducialCorners(fiducialCorners);
             setMobileShadowWarning(shadowStrong);
 
             if (shadowStrong && flashSupported && !flashOn && !autotorchTriedRef.current) {
@@ -1682,7 +1689,7 @@ export default function CalificarPage() {
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
               setCornersAlignedView(false);
-              setLiveStatus('Alinea los 4 cuadros negros de las esquinas con el marco.');
+              setLiveStatus('Centra los cuadros negros dentro de los visores blancos.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2965,6 +2972,7 @@ export default function CalificarPage() {
                       stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}
                       shadowWarning={mobileShadowWarning}
                       fiducialCount={mobileFiducialCount}
+                      fiducialCorners={mobileFiducialCorners}
                     />
                   </div>
                   {scanBusy ? (
@@ -3002,6 +3010,8 @@ export default function CalificarPage() {
                         ? 'Acerca el teléfono'
                         : mobileShadowWarning && !flashOn
                           ? 'Reduce la sombra'
+                          : mobileFiducialCount > 0 && mobileFiducialCount < 4
+                          ? 'Alinea los visores blancos'
                           : cornersAlignedView
                             ? 'Mantén la hoja quieta'
                             : 'Buscando hoja…'}
