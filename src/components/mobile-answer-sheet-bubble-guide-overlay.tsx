@@ -10,6 +10,8 @@ type ViewportPoint = { x: number; y: number };
 type Props = {
   templateGuide: AnswerSheetTemplateGuide;
   guideRect?: MobileGuideRectPx | null;
+  /** Índice de columna correcta por fila (0 = A). */
+  expectedPicks?: (number | null)[];
   aligned?: boolean;
 };
 
@@ -34,11 +36,12 @@ function normRectCorners(rect: { x: number; y: number; w: number; h: number }) {
 }
 
 /**
- * Guía fija con margen de tabla y todos los círculos OMR (marco carta estático).
+ * Guía fija: margen de tabla + un círculo por fila en la respuesta correcta (marco carta estático).
  */
 export function MobileAnswerSheetBubbleGuideOverlay({
   templateGuide,
   guideRect,
+  expectedPicks = [],
   aligned = false,
 }: Props) {
   const { bubbles, tablePolygon } = useMemo(() => {
@@ -47,29 +50,32 @@ export function MobileAnswerSheetBubbleGuideOverlay({
     const map = (nx: number, ny: number) => mapPageNormToGuideViewport(nx, ny, guideRect);
 
     const bubbleList: Array<{ cx: number; cy: number; r: number }> = [];
-    for (const row of templateGuide.geometry.cells) {
-      for (const cell of row) {
-        const cxNorm = cell.x + cell.w / 2;
-        const cyNorm = cell.y + cell.h / 2;
-        const center = map(cxNorm, cyNorm);
-        const right = map(cell.x + cell.w, cyNorm);
-        const bottom = map(cxNorm, cell.y + cell.h);
-        const r = Math.max(
-          2,
-          Math.min(Math.abs(right.x - center.x), Math.abs(bottom.y - center.y)) * 0.46
-        );
-        bubbleList.push({ cx: center.x, cy: center.y, r });
-      }
+    const rows = templateGuide.geometry.cells;
+    for (let row = 0; row < rows.length; row++) {
+      const col = expectedPicks[row];
+      if (col === null || col === undefined || col < 0) continue;
+      const cell = rows[row]?.[col];
+      if (!cell) continue;
+      const cxNorm = cell.x + cell.w / 2;
+      const cyNorm = cell.y + cell.h / 2;
+      const center = map(cxNorm, cyNorm);
+      const right = map(cell.x + cell.w, cyNorm);
+      const bottom = map(cxNorm, cell.y + cell.h);
+      const r = Math.max(
+        2,
+        Math.min(Math.abs(right.x - center.x), Math.abs(bottom.y - center.y)) * 0.46
+      );
+      bubbleList.push({ cx: center.x, cy: center.y, r });
     }
 
     const tablePts = normRectCorners(templateGuide.tableBoundsNorm).map((c) => map(c.u, c.v));
 
     return { bubbles: bubbleList, tablePolygon: tablePts };
-  }, [templateGuide, guideRect]);
+  }, [templateGuide, guideRect, expectedPicks]);
 
   if (!guideRect || bubbles.length === 0) return null;
 
-  const stroke = aligned ? 'rgba(52,211,153,0.9)' : 'rgba(255,255,255,0.62)';
+  const stroke = aligned ? 'rgba(52,211,153,0.9)' : 'rgba(251,146,60,0.88)';
   const tableStroke = aligned ? 'rgba(52,211,153,0.75)' : 'rgba(255,255,255,0.45)';
 
   return (

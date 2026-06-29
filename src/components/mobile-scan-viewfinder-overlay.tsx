@@ -34,8 +34,10 @@ type Props = {
   shadowWarning?: boolean;
   fiducialCount?: number;
   fiducialCorners?: [boolean, boolean, boolean, boolean];
-  /** Guía de burbujas OMR (120 círculos + margen de tabla). */
+  /** Guía de burbujas OMR (respuestas correctas + margen de tabla). */
   templateGuide?: AnswerSheetTemplateGuide | null;
+  /** Índice de columna correcta por fila para la guía (0 = A). */
+  expectedPicks?: (number | null)[];
 };
 
 function ZipgradeAlignCornerAt({
@@ -102,6 +104,7 @@ export function MobileScanViewfinderOverlay({
   fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
   templateGuide,
+  expectedPicks,
 }: Props) {
   const bannerTop = guideRect
     ? Math.max(8, guideRect.top - 100)
@@ -127,10 +130,10 @@ export function MobileScanViewfinderOverlay({
           : shadowWarning
             ? 'Mejor luz o flash — sigue alineando'
             : useSheetCorners
-              ? 'Alinea los círculos impresos con la guía blanca'
+              ? 'Alinea los círculos naranjas con las respuestas correctas'
               : fiducialCount > 0 && fiducialCount < 4
                 ? 'Coloca cada cuadro negro dentro de su visor'
-                : 'Encuadra la hoja y alinea los círculos con la guía';
+                : 'Encuadra la hoja y alinea los círculos naranjas';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
@@ -140,6 +143,7 @@ export function MobileScanViewfinderOverlay({
         <MobileAnswerSheetBubbleGuideOverlay
           templateGuide={templateGuide}
           guideRect={guideRect}
+          expectedPicks={expectedPicks}
           aligned={aligned}
         />
       ) : null}

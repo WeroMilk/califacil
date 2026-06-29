@@ -3193,6 +3193,7 @@ export default function CalificarPage() {
                       fiducialCount={mobileFiducialCount}
                       fiducialCorners={mobileFiducialCorners}
                       templateGuide={answerSheetTemplateGuide}
+                      expectedPicks={expectedChunkPicks}
                     />
                   </div>
                   {scanBusy ? (
