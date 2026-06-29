@@ -111,6 +111,8 @@ type MobileSheetSnapshot = {
   geometry: CalifacilOmrScanGeometry;
   questionIds: string[];
   selectionsByQuestionId: Record<string, string>;
+  /** Hoja de respuestas enderezada por fiduciales (plantilla calibrada). */
+  answerSheetLayout?: boolean;
 };
 
 async function cloneObjectUrl(url: string): Promise<string | null> {
@@ -279,20 +281,19 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Marco naranja de referencia: coincide con la tabla detectada si hay geometría; si no, la guía del visor. */
-function isWarpedAnswerSheetGeometry(geometry: CalifacilOmrScanGeometry): boolean {
-  const W = geometry.imageWidth;
-  const H = geometry.imageHeight;
-  const aspect = W / Math.max(1, H);
-  return W >= 700 && W <= 960 && H >= 900 && H <= 1200 && aspect > 0.74 && aspect < 0.82;
+function isLetterPageGeometry(geometry: CalifacilOmrScanGeometry): boolean {
+  const aspect = geometry.imageWidth / Math.max(1, geometry.imageHeight);
+  return aspect > 0.72 && aspect < 0.84;
 }
 
 function califacilReviewOrangeFrameRect(
   geometry: CalifacilOmrScanGeometry,
-  rowCount: number
+  rowCount: number,
+  answerSheetLayout = false
 ): { x: number; y: number; w: number; h: number } | null {
-  const useAnswerSheetTemplate = isWarpedAnswerSheetGeometry(geometry);
+  const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
   const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
-  if (useAnswerSheetTemplate) {
+  if (useTemplate) {
     const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
     return {
       x: t.tableLeftRatio,
@@ -1124,6 +1125,7 @@ export default function CalificarPage() {
               geometry: geom,
               questionIds: chunk.map((q) => q.id),
               selectionsByQuestionId: { ...fullChunkDraft },
+              answerSheetLayout: true,
             },
           ]);
         }
@@ -3122,7 +3124,11 @@ export default function CalificarPage() {
               </TabsList>
               {mobileSheetSnapshots.map((snap, tabIdx) => {
                 const chunk = sheets[snap.sheetIndex] ?? [];
-                const orangeFrameRect = califacilReviewOrangeFrameRect(snap.geometry, chunk.length);
+                const orangeFrameRect = califacilReviewOrangeFrameRect(
+                  snap.geometry,
+                  chunk.length,
+                  snap.answerSheetLayout
+                );
                 let rCorrect = 0;
                 for (const q of chunk) {
                   const draftText = mobileResultsDraft[q.id]?.trim() ?? '';

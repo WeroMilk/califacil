@@ -2931,7 +2931,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   profile: OmrGeometryProfile,
   columnShiftPx = 0,
   fixedTemplate?: OmrFixedTemplate,
-  rowCount = CALIFACIL_OMR_DEFAULT_ROWS
+  rowCount = CALIFACIL_OMR_DEFAULT_ROWS,
+  templateGridOnly = false
 ): ScanDetailedResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
@@ -2991,17 +2992,19 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     );
   }
   // Refinamiento de filas por líneas horizontales impresas.
-  // En modo plantilla fija se acepta solo si se mantiene cercano al template para evitar saltos.
-  let lineYs = refineOmrRowBoundariesFromTableLines(
-    data,
-    width,
-    height,
-    bubbleAreaLeft,
-    dataTop,
-    dataHeight,
-    rows
-  );
-  if (lineYs && fixedTemplate) {
+  // En hoja de respuestas calibrada, la cuadrícula de plantilla evita falsos positivos por moiré.
+  let lineYs = templateGridOnly
+    ? null
+    : refineOmrRowBoundariesFromTableLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        dataTop,
+        dataHeight,
+        rows
+      );
+  if (lineYs && fixedTemplate && !templateGridOnly) {
     let rowAligned = true;
     let avgDev = 0;
     for (let i = 0; i < rows + 1; i++) {
@@ -3027,22 +3030,24 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     }
   }
 
-  const inferredColEdgesLocal = inferColumnEdgesFromVerticalLines(
-    data,
-    width,
-    height,
-    bubbleAreaLeft,
-    bubbleAreaW,
-    cols,
-    dataTop,
-    rowH
-  );
+  const inferredColEdgesLocal = templateGridOnly
+    ? null
+    : inferColumnEdgesFromVerticalLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        bubbleAreaW,
+        cols,
+        dataTop,
+        rowH
+      );
   const inferredColEdgesGlobal =
-    !fixedTemplate && profile.bottomBandRatio < 0.95
-      ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
-      : null;
+    templateGridOnly || fixedTemplate || profile.bottomBandRatio >= 0.95
+      ? null
+      : inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH);
   let inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
-  if (inferredColEdges && fixedTemplate) {
+  if (inferredColEdges && fixedTemplate && !templateGridOnly) {
     const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
     let maxEdgeDev = 0;
     for (let i = 0; i <= cols; i++) {
@@ -3495,6 +3500,7 @@ export function scanCalifacilOmrSheet(
     minSolidCenterDarkness: CALIFACIL_OMR_SCAN.minSolidCenterDarkness,
     ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
   };
+  const templateGridOnly = Boolean(opts?.answerSheetTemplateOnly);
 
   const fullSheetProfile: OmrGeometryProfile = {
     bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
@@ -3567,13 +3573,16 @@ export function scanCalifacilOmrSheet(
             fullSheetProfile,
             colShift,
             fixedTemplate,
-            rowCount
+            rowCount,
+            templateGridOnly
           );
-          const fixedBonus = detail.hasDetectedRowLines
-            ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
-            : opts?.answerSheetTemplateOnly
-              ? -340
-              : 40;
+          const fixedBonus = templateGridOnly
+            ? 480
+            : detail.hasDetectedRowLines
+              ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
+              : opts?.answerSheetTemplateOnly
+                ? -340
+                : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
           if (detailScore > bestSweepScore) {
             best = detail;
@@ -3649,7 +3658,10 @@ export function scanCalifacilOmrSheetWithMeta(
       reviewSourceCanvas: null,
     };
   }
-  let canvas = drawSourceToCanvas(source);
+  let canvas =
+    opts?.preserveInputCanvas && source instanceof HTMLCanvasElement
+      ? source
+      : drawSourceToCanvas(source);
   if (!canvas) {
     return {
       picks: Array(rowCount).fill(null),
@@ -3665,14 +3677,24 @@ export function scanCalifacilOmrSheetWithMeta(
     if (cropped) canvas = cropped;
   }
 
-  const thresholds: ScanThresholds = {
-    minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
-    minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
-    minBestVsSecondRatio: CALIFACIL_OMR_SCAN.minBestVsSecondRatio,
-    minCenterVsRingDelta: CALIFACIL_OMR_SCAN.minCenterVsRingDelta,
-    minSolidCenterDarkness: CALIFACIL_OMR_SCAN.minSolidCenterDarkness,
-    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
-  };
+  const templateGridOnly = Boolean(opts?.answerSheetTemplateOnly);
+  const thresholds: ScanThresholds = templateGridOnly
+    ? {
+        minMarkDarkness: 0.072,
+        minBestVsSecondGap: 0.038,
+        minBestVsSecondRatio: 1.35,
+        minCenterVsRingDelta: 0.04,
+        minSolidCenterDarkness: 0.24,
+        ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+      }
+    : {
+        minMarkDarkness: CALIFACIL_OMR_SCAN.minMarkDarkness,
+        minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
+        minBestVsSecondRatio: CALIFACIL_OMR_SCAN.minBestVsSecondRatio,
+        minCenterVsRingDelta: CALIFACIL_OMR_SCAN.minCenterVsRingDelta,
+        minSolidCenterDarkness: CALIFACIL_OMR_SCAN.minSolidCenterDarkness,
+        ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+      };
 
   const fullSheetProfile: OmrGeometryProfile = {
     bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
@@ -3687,7 +3709,9 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
-    ? buildPreservedInputVariants(canvas)
+    ? templateGridOnly
+      ? [{ canvas, preferFullSheetFirst: true }]
+      : buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: rowCount }, () => ({
@@ -3747,13 +3771,16 @@ export function scanCalifacilOmrSheetWithMeta(
             fullSheetProfile,
             colShift,
             fixedTemplate,
-            rowCount
+            rowCount,
+            templateGridOnly
           );
-          const fixedBonus = detail.hasDetectedRowLines
-            ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
-            : opts?.answerSheetTemplateOnly
-              ? -340
-              : 40;
+          const fixedBonus = templateGridOnly
+            ? 480
+            : detail.hasDetectedRowLines
+              ? 260 + (opts?.answerSheetTemplateOnly ? 140 : 0)
+              : opts?.answerSheetTemplateOnly
+                ? -340
+                : 40;
           const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
           if (detailScore > bestSweepScore) {
             best = detail;
