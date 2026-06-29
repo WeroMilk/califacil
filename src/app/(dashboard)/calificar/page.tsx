@@ -127,6 +127,8 @@ type MobileSheetSnapshot = {
   geometry: CalifacilOmrScanGeometry;
   questionIds: string[];
   selectionsByQuestionId: Record<string, string>;
+  /** Índice de columna OMR leído por fila (0 = A), alineado con la plantilla naranja. */
+  columnPicks: (number | null)[];
   /** Hoja de respuestas enderezada por fiduciales (plantilla calibrada). */
   answerSheetLayout?: boolean;
   /** Métricas de alineación homografía (depuración / validación). */
@@ -448,6 +450,7 @@ export default function CalificarPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
+  const [reviewOmrPicks, setReviewOmrPicks] = useState<(number | null)[]>([]);
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -1227,6 +1230,7 @@ export default function CalificarPage() {
               geometry: geom,
               questionIds: chunk.map((q) => q.id),
               selectionsByQuestionId: { ...fullChunkDraft },
+              columnPicks: picksInChunk,
               answerSheetLayout: true,
               warpAlignment: OMR_DEBUG_ENABLED ? warpAlignment : undefined,
             },
@@ -1260,6 +1264,7 @@ export default function CalificarPage() {
 
         await setPreviewFromSource(meta.reviewSourceCanvas ?? activeScanSource, fallbackFile);
         setReviewOmrGeometry(meta.geometry);
+        setReviewOmrPicks(raw.slice(0, chunk.length));
         setPhase('revisar_hoja');
         setLiveStatus(
           mapped.unresolvedCount > 0
@@ -1434,6 +1439,7 @@ export default function CalificarPage() {
       return null;
     });
     setReviewOmrGeometry(null);
+    setReviewOmrPicks([]);
     setSelectedStudentId('');
   }, [stopLiveCamera, isMobile, clearMobileSnapshots]);
 
@@ -1478,6 +1484,7 @@ export default function CalificarPage() {
         return null;
       });
       setReviewOmrGeometry(null);
+      setReviewOmrPicks([]);
       return;
     }
     flushSync(() => {
@@ -1495,6 +1502,7 @@ export default function CalificarPage() {
         return null;
       });
       setReviewOmrGeometry(null);
+      setReviewOmrPicks([]);
     });
   };
 
@@ -2225,6 +2233,7 @@ export default function CalificarPage() {
         return next;
       });
       setReviewOmrGeometry(null);
+      setReviewOmrPicks([]);
       setReviewQualityHint(null);
       setDraftSelections({});
       setPreviewUrl((u) => {
@@ -2333,6 +2342,7 @@ export default function CalificarPage() {
           geometry: geom,
           questionIds: chunk.map((q) => q.id),
           selectionsByQuestionId: selections,
+          columnPicks: reviewOmrPicks.slice(0, chunk.length),
         },
       ]);
     };
@@ -2342,6 +2352,7 @@ export default function CalificarPage() {
     if (!isLast) {
       setSheetIndex((s) => s + 1);
       setReviewOmrGeometry(null);
+      setReviewOmrPicks([]);
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
         return null;
@@ -2458,6 +2469,7 @@ export default function CalificarPage() {
       setLiveResolvedCount(0);
       liveLockedAnswersRef.current = {};
       setReviewOmrGeometry(null);
+      setReviewOmrPicks([]);
       setReviewQualityHint(null);
     },
     [
@@ -2654,6 +2666,7 @@ export default function CalificarPage() {
     strictValidationTicksRef.current = 0;
     lastQualityProbeRef.current = null;
     setReviewOmrGeometry(null);
+    setReviewOmrPicks([]);
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
       return null;
@@ -3410,6 +3423,7 @@ export default function CalificarPage() {
                       }
                       setPhase('capturar');
                       setReviewOmrGeometry(null);
+                      setReviewOmrPicks([]);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
                         return null;
@@ -3477,7 +3491,10 @@ export default function CalificarPage() {
                 const rTotal = chunk.length;
                 const rPct = rTotal > 0 ? calculatePercentage(rCorrect, rTotal) : 0;
                 const tabExpectedPicks = draftSelectionsToColumnPicks(chunk, examVirtualKeyByQuestionId);
-                const tabPicks = draftSelectionsToColumnPicks(chunk, mobileResultsDraft);
+                const tabPicks =
+                  snap.columnPicks.length > 0
+                    ? snap.columnPicks
+                    : draftSelectionsToColumnPicks(chunk, mobileResultsDraft);
                 return (
                   <TabsContent key={`rs-content-${tabIdx}`} value={String(tabIdx)} className="mt-4 space-y-4">
                     <CalifacilReviewImageStack

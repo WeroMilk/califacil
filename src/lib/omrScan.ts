@@ -3553,6 +3553,143 @@ function pickAnswerSheetRowAbsolute(params: {
   return { pick: null, ambiguous, confidence: 0 };
 }
 
+/**
+ * Lee marcas solo dentro de las celdas de la plantilla (mismo marco que el overlay naranja).
+ * Evita falsos positivos en la franja negra derecha o fuera de la tabla.
+ */
+function readAnswerSheetPicksFromTemplateGeometry(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry,
+  thresholds: ScanThresholds,
+  rowCount: number,
+  columns: number
+): Pick<
+  ScanDetailedResult,
+  'picks' | 'rows' | 'resolvedCount' | 'confidenceSum' | 'maxSameColumnCount'
+> {
+  const rows = Math.min(clampCalifacilOmrRowCount(rowCount), geometry.cells.length);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const out: (number | null)[] = Array(rows).fill(null);
+  const rowMetas: OmrScanRowDetail[] = [];
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    for (let i = 0; i < rows; i++) {
+      rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
+    }
+    return {
+      picks: out,
+      rows: rowMetas,
+      resolvedCount: 0,
+      confidenceSum: 0,
+      maxSameColumnCount: 0,
+    };
+  }
+
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const W = Math.max(1, geometry.imageWidth);
+  const H = Math.max(1, geometry.imageHeight);
+  const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
+
+  let resolvedCount = 0;
+  let confidenceSum = 0;
+
+  for (let row = 0; row < rows; row++) {
+    const rowCells = geometry.cells[row];
+    if (!rowCells?.length) {
+      rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
+      continue;
+    }
+
+    let rowX0 = W;
+    let rowX1 = 0;
+    let rowY0 = H;
+    let rowY1 = 0;
+    for (let c = 0; c < cols; c++) {
+      const cell = rowCells[c];
+      if (!cell) continue;
+      rowX0 = Math.min(rowX0, cell.x * W);
+      rowX1 = Math.max(rowX1, (cell.x + cell.w) * W);
+      rowY0 = Math.min(rowY0, cell.y * H);
+      rowY1 = Math.max(rowY1, (cell.y + cell.h) * H);
+    }
+    const { hist, total } = buildRowGrayHistogram(
+      data,
+      width,
+      height,
+      Math.max(0, Math.floor(rowX0)),
+      Math.min(width - 1, Math.ceil(rowX1)),
+      Math.max(0, Math.floor(rowY0)),
+      Math.min(height - 1, Math.ceil(rowY1)),
+      2
+    );
+    const otsuT = otsuThreshold256(hist, Math.max(1, total));
+
+    const fills: number[] = [];
+    const scores: number[] = [];
+    const inkFracs: number[] = [];
+
+    for (let c = 0; c < cols; c++) {
+      const cell = rowCells[c];
+      if (!cell) {
+        fills.push(0);
+        scores.push(0);
+        inkFracs.push(0);
+        continue;
+      }
+      const cellW = Math.max(1, cell.w * W);
+      const cellH = Math.max(1, cell.h * H);
+      const marginX = c === cols - 1 ? 0.24 : 0.16;
+      const marginY = 0.14;
+      const xa = cell.x * W + cellW * marginX;
+      const xb = cell.x * W + cellW * (1 - marginX);
+      const ya = cell.y * H + cellH * marginY;
+      const yb = cell.y * H + cellH * (1 - marginY);
+      const cx = cell.x * W + cellW * 0.5;
+      const cy = cell.y * H + cellH * 0.5;
+      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.2);
+
+      const fillDark = sampleRectMeanDarkness(data, width, height, xa, ya, xb, yb);
+      const ringDark = sampleAnnulusDarkness(
+        data,
+        width,
+        height,
+        cx,
+        cy,
+        Math.max(1, Math.round(radiusPx * 0.62)),
+        Math.max(2, Math.round(radiusPx))
+      );
+      fills.push(fillDark);
+      scores.push(fillDark - ringDark * rw);
+      inkFracs.push(
+        sampleRectInkFractionAtThreshold(data, width, height, xa, ya, xb, yb, otsuT, 2)
+      );
+    }
+
+    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+    out[row] = abs.pick;
+    rowMetas.push({
+      pick: abs.pick,
+      ambiguous: abs.ambiguous,
+      inkFractions: [...inkFracs],
+    });
+    if (abs.pick !== null) {
+      resolvedCount++;
+      confidenceSum += abs.confidence;
+    }
+  }
+
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of out) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  return { picks: out, rows: rowMetas, resolvedCount, confidenceSum, maxSameColumnCount };
+}
+
 function scanCalifacilOmrCanvasDetailedWithProfile(
   canvas: HTMLCanvasElement,
   columns: number,
@@ -4532,14 +4669,27 @@ export function scanCalifacilOmrSheetWithMeta(
       : (bestReviewCanvas ?? canvas);
 
   if (templateGridOnly) {
+    const geometry = buildAnswerSheetOmrGeometry(
+      rowCount,
+      columns,
+      reviewCanvas.width,
+      reviewCanvas.height
+    );
+    const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+      reviewCanvas,
+      geometry,
+      thresholds,
+      rowCount,
+      columns
+    );
     best = {
       ...best,
-      geometry: buildAnswerSheetOmrGeometry(
-        rowCount,
-        columns,
-        reviewCanvas.width,
-        reviewCanvas.height
-      ),
+      picks: templateRead.picks,
+      rows: templateRead.rows,
+      resolvedCount: templateRead.resolvedCount,
+      confidenceSum: templateRead.confidenceSum,
+      maxSameColumnCount: templateRead.maxSameColumnCount,
+      geometry,
     };
   }
 
