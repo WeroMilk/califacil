@@ -106,10 +106,22 @@ export function CalifacilOmrReviewOverlay({
                 const pxCell = toPxCell(row, col);
                 if (!pxCell) return null;
                 const isPicked = pick !== null && pick === col;
+                const isUnread = pick === null && hasExpected;
                 let stroke = 'rgba(59,130,246,0.35)';
                 let strokeW = Math.max(1, Math.round(W * 0.002));
+                let strokeDasharray: string | undefined;
 
-                if (isPicked) {
+                if (isUnread) {
+                  if (col === expectedPick) {
+                    stroke = 'rgba(220,38,38,0.8)';
+                    strokeW = Math.max(2, Math.round(W * 0.005));
+                    strokeDasharray = '5 3';
+                  } else {
+                    stroke = 'rgba(234,179,8,0.65)';
+                    strokeW = Math.max(1.5, Math.round(W * 0.0035));
+                    strokeDasharray = '4 3';
+                  }
+                } else if (isPicked) {
                   if (hasExpected) {
                     stroke =
                       pick === expectedPick
@@ -132,6 +144,7 @@ export function CalifacilOmrReviewOverlay({
                     fill="none"
                     stroke={stroke}
                     strokeWidth={strokeW}
+                    strokeDasharray={strokeDasharray}
                     vectorEffect="non-scaling-stroke"
                   />
                 );

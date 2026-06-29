@@ -1043,8 +1043,8 @@ function ptToWarpPx(pt: number): number {
  * Plantilla OMR en canvas 850×1100 tras warp fiducial.
  * Calculada desde el layout impreso de la hoja de respuestas (página 2).
  */
-/** Ajuste empírico: las filas de lectura quedan ~1.5% más arriba (warp vs. impreso). */
-const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0.018;
+/** Ajuste empírico: compensa warp vs. impreso (valores altos suben la cuadrícula). */
+const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0.006;
 
 function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
   const pageW = CALIFACIL_WARP_PAGE.widthPx;

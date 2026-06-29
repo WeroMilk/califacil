@@ -66,12 +66,12 @@ export const CALIFACIL_OMR_SCAN = {
 
 /** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
-  minInkFraction: 0.32,
-  minInkGap: 0.12,
-  minFillDarkness: 0.16,
-  minScoreAbsolute: 0.045,
-  minScoreGap: 0.025,
-  blankMaxInk: 0.085,
+  minInkFraction: 0.24,
+  minInkGap: 0.075,
+  minFillDarkness: 0.12,
+  minScoreAbsolute: 0.032,
+  minScoreGap: 0.018,
+  blankMaxInk: 0.07,
 } as const;
 
 /**
@@ -2593,6 +2593,8 @@ function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_
     nudge(base, 0.004, 0.01, -0.006, -0.004, -0.004, 0),
     nudge(base, 0, -0.014, 0, 0.003, 0.006, 0),
     nudge(base, 0, 0.014, 0, -0.003, -0.006, 0),
+    nudge(base, 0, 0.008, 0, 0, 0.01, 0),
+    nudge(base, 0, 0.012, 0, 0, 0.014, 0),
     nudge(base, -0.006, 0, 0.012, 0, 0, 0.002),
     nudge(base, 0.006, 0, -0.012, 0, 0, -0.002),
   ];
@@ -3318,6 +3320,50 @@ function scanCalifacilOmrCanvasDetailed(
   );
 }
 
+function sampleAnswerSheetRowAtCy(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  columnEdges: number[],
+  cols: number,
+  cy: number,
+  radiusPx: number,
+  diskRInk: number,
+  otsuT: number,
+  thresholds: ScanThresholds
+): { fills: number[]; scores: number[]; inkFracs: number[] } {
+  const fills: number[] = [];
+  const scores: number[] = [];
+  const inkFracs: number[] = [];
+  const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
+  for (let c = 0; c < cols; c++) {
+    const cx = (columnEdges[c]! + columnEdges[c + 1]!) * 0.5;
+    const fillDark = sampleDiskDarkness(
+      data,
+      width,
+      height,
+      cx,
+      cy,
+      Math.max(2, Math.round(radiusPx * 0.5))
+    );
+    const ringDark = sampleAnnulusDarkness(
+      data,
+      width,
+      height,
+      cx,
+      cy,
+      Math.max(1, Math.round(radiusPx * 0.62)),
+      Math.max(2, Math.round(radiusPx))
+    );
+    fills.push(fillDark);
+    scores.push(fillDark - ringDark * rw);
+    inkFracs.push(
+      sampleDiskInkFractionAtThreshold(data, width, height, cx, cy, diskRInk, otsuT)
+    );
+  }
+  return { fills, scores, inkFracs };
+}
+
 function pickAnswerSheetRowAbsolute(params: {
   inkFracs: number[];
   fills: number[];
@@ -3363,19 +3409,41 @@ function pickAnswerSheetRowAbsolute(params: {
     scoreVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreAbsolute &&
     scoreGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreGap;
 
-  if (!inkOk || !scoreOk || inkBest !== scoreBest) {
-    const ambiguous =
-      maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.4 &&
-      (inkOk || scoreOk) &&
-      inkBest !== scoreBest;
-    return { pick: null, ambiguous, confidence: 0 };
+  if (inkOk && scoreOk && inkBest === scoreBest) {
+    return {
+      pick: inkBest,
+      ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
+      confidence: inkVal + scoreGap,
+    };
   }
 
-  return {
-    pick: inkBest,
-    ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
-    confidence: inkVal + scoreGap,
-  };
+  /** Tinta clara aunque el anillo falle (sombra / desalineación leve). */
+  if (inkOk && inkVal >= 0.28 && inkGap >= 0.06) {
+    return {
+      pick: inkBest,
+      ambiguous: !scoreOk || inkBest !== scoreBest,
+      confidence: inkVal + inkGap * 0.5,
+    };
+  }
+
+  /** Centro oscuro sin Otsu fuerte — típico en filas superiores mal alineadas. */
+  if (scoreOk && fillBest >= 0.14 && scoreGap >= 0.014) {
+    return {
+      pick: scoreBest,
+      ambiguous: !inkOk || inkBest !== scoreBest,
+      confidence: fillBest + scoreGap,
+    };
+  }
+
+  if (!inkOk && !scoreOk) {
+    return { pick: null, ambiguous: false, confidence: 0 };
+  }
+
+  const ambiguous =
+    maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
+    (inkOk || scoreOk) &&
+    inkBest !== scoreBest;
+  return { pick: null, ambiguous, confidence: 0 };
 }
 
 function scanCalifacilOmrCanvasDetailedWithProfile(
@@ -3761,7 +3829,38 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     let ambiguous = false;
 
     if (templateGridOnly) {
-      const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+      let abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+      if (abs.pick === null) {
+        for (const dy of [4, 3, 2, -2, -3, -4, 5, -5, 6, -6, 8, -8]) {
+          const retryCy = Math.max(
+            yRowTop + 2,
+            Math.min(yRowBot - 2, Math.round(cy + dy))
+          );
+          if (retryCy === Math.round(cy)) continue;
+          const retry = sampleAnswerSheetRowAtCy(
+            data,
+            width,
+            height,
+            columnEdges,
+            cols,
+            retryCy,
+            radiusPx,
+            diskRInk,
+            otsuT,
+            thresholds
+          );
+          const retryAbs = pickAnswerSheetRowAbsolute({
+            inkFracs: retry.inkFracs,
+            fills: retry.fills,
+            scores: retry.scores,
+            cols,
+          });
+          if (retryAbs.pick !== null) {
+            abs = retryAbs;
+            break;
+          }
+        }
+      }
       pick = abs.pick;
       ambiguous = abs.ambiguous;
       if (pick !== null) {
