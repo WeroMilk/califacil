@@ -1950,6 +1950,27 @@ export function prepareAnswerSheetCaptureCanvas(
   return applyOmrcheckerStylePreprocess(canvas);
 }
 
+/**
+ * Vista previa legible para el usuario: conserva color y luz natural.
+ * El preprocesado OMR (CLAHE) se usa solo internamente para leer casillas.
+ */
+export function prepareAnswerSheetDisplayCanvas(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.filter = 'contrast(1.08) brightness(1.06) saturate(0.95)';
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  ctx.filter = 'none';
+  return out;
+}
+
 function buildAnswerSheetCaptureVariants(
   canvas: HTMLCanvasElement
 ): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
@@ -3838,6 +3859,8 @@ export function scanCalifacilOmrSheetWithMeta(
   let bestSweepScore = Number.NEGATIVE_INFINITY;
   /** Canvas de la variante que produjo `best`; debe ser la misma imagen que la vista previa con overlay. */
   let bestReviewCanvas: HTMLCanvasElement | null = null;
+  let bestColShift = 0;
+  let bestFixedTemplate: OmrFixedTemplate | undefined;
 
   const qnumSweep =
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
@@ -3886,10 +3909,15 @@ export function scanCalifacilOmrSheetWithMeta(
               : opts?.answerSheetTemplateOnly
                 ? -340
                 : 40;
-          const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
+          const detailScore =
+            omrSweepCandidateScore(detail) +
+            fixedBonus +
+            (templateGridOnly && c === canvas ? 220 : 0);
           if (detailScore > bestSweepScore) {
             best = detail;
             bestReviewCanvas = c;
+            bestColShift = colShift;
+            bestFixedTemplate = fixedTemplate;
             bestSweepScore = detailScore;
           }
         }
@@ -3940,8 +3968,30 @@ export function scanCalifacilOmrSheetWithMeta(
   }
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
-  /** Misma variante de píxeles que eligió la geometría (evita desajuste visual en revisión). */
-  const reviewCanvas = opts?.preserveInputCanvas ? (bestReviewCanvas ?? canvas) : bestReviewCanvas;
+
+  if (templateGridOnly && best.geometry) {
+    const fixedTemplate =
+      bestFixedTemplate ?? buildAnswerSheetFixedTemplateCandidates(rowCount)[0];
+    const aligned = scanCalifacilOmrCanvasDetailedWithProfile(
+      canvas,
+      columns,
+      thresholds,
+      fullSheetProfile,
+      bestColShift,
+      fixedTemplate,
+      rowCount,
+      true
+    );
+    if (aligned.geometry) {
+      best = { ...best, geometry: aligned.geometry };
+    }
+  }
+
+  /** La vista previa usa la foto enderezada (no la variante CLAHE del barrido OMR). */
+  const reviewCanvas =
+    templateGridOnly || opts?.preserveInputCanvas
+      ? (prepareAnswerSheetDisplayCanvas(canvas) ?? canvas)
+      : (bestReviewCanvas ?? canvas);
   return {
     picks: best.picks,
     rows: best.rows,

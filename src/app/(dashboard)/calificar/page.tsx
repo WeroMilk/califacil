@@ -47,6 +47,7 @@ import {
   MOBILE_MIN_ROI_FILL_RATIO,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
+  prepareAnswerSheetDisplayCanvas,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   scanCalifacilOmrSheetWithMeta,
@@ -1126,11 +1127,15 @@ export default function CalificarPage() {
 
       if (isMobileCamera) {
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
-        const snapSource = meta.reviewSourceCanvas ?? activeScanSource;
+        const snapSource =
+          meta.reviewSourceCanvas ??
+          (activeScanSource instanceof HTMLCanvasElement
+            ? (prepareAnswerSheetDisplayCanvas(activeScanSource) ?? activeScanSource)
+            : activeScanSource);
         let snapUrl: string | null = null;
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
+            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
         }
