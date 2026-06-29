@@ -17,12 +17,12 @@ export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 2.92;
  */
 export const CALIFACIL_VIEWFINDER_GUIDE = {
   /** Fracción del ancho del fotograma para el rectángulo guía */
-  widthFrac: 0.98,
+  widthFrac: 0.88,
   /** Fracción máxima de alto del fotograma (carta vertical). */
-  maxHeightFrac: 0.99,
+  maxHeightFrac: 0.92,
   centerXFrac: 0.5,
   /** Ligeramente arriba del centro para dejar espacio al botón de captura. */
-  centerYFrac: 0.46,
+  centerYFrac: 0.47,
   /** Relación ancho÷alto del papel (carta vertical). */
   aspectRatio: 8.5 / 11,
 } as const;
