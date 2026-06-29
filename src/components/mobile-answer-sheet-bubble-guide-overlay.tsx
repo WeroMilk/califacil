@@ -26,17 +26,8 @@ function mapPageNormToGuideViewport(
   };
 }
 
-function normRectCorners(rect: { x: number; y: number; w: number; h: number }) {
-  return [
-    { u: rect.x, v: rect.y },
-    { u: rect.x + rect.w, v: rect.y },
-    { u: rect.x + rect.w, v: rect.y + rect.h },
-    { u: rect.x, v: rect.y + rect.h },
-  ];
-}
-
 /**
- * Guía fija: margen de tabla + un círculo por fila en la respuesta correcta (marco carta estático).
+ * Guía fija: margen de hoja carta + un círculo por fila en la respuesta correcta.
  */
 export function MobileAnswerSheetBubbleGuideOverlay({
   templateGuide,
@@ -44,8 +35,8 @@ export function MobileAnswerSheetBubbleGuideOverlay({
   expectedPicks = [],
   aligned = false,
 }: Props) {
-  const { bubbles, tablePolygon } = useMemo(() => {
-    if (!guideRect) return { bubbles: [], tablePolygon: [] as ViewportPoint[] };
+  const bubbles = useMemo(() => {
+    if (!guideRect) return [] as Array<{ cx: number; cy: number; r: number }>;
 
     const map = (nx: number, ny: number) => mapPageNormToGuideViewport(nx, ny, guideRect);
 
@@ -68,12 +59,10 @@ export function MobileAnswerSheetBubbleGuideOverlay({
       bubbleList.push({ cx: center.x, cy: center.y, r });
     }
 
-    const tablePts = normRectCorners(templateGuide.tableBoundsNorm).map((c) => map(c.u, c.v));
-
-    return { bubbles: bubbleList, tablePolygon: tablePts };
+    return bubbleList;
   }, [templateGuide, guideRect, expectedPicks]);
 
-  if (!guideRect || bubbles.length === 0) return null;
+  if (!guideRect) return null;
 
   const stroke = aligned ? 'rgba(52,211,153,0.9)' : 'rgba(251,146,60,0.88)';
   const tableStroke = aligned ? 'rgba(52,211,153,0.75)' : 'rgba(255,255,255,0.45)';
@@ -89,21 +78,11 @@ export function MobileAnswerSheetBubbleGuideOverlay({
         width={guideRect.width}
         height={guideRect.height}
         fill="none"
-        stroke="rgba(255,255,255,0.28)"
-        strokeWidth={1}
-        strokeDasharray="8 5"
+        stroke={tableStroke}
+        strokeWidth={2}
+        strokeDasharray="10 6"
         vectorEffect="non-scaling-stroke"
       />
-      {tablePolygon.length === 4 ? (
-        <polygon
-          points={tablePolygon.map((p) => `${p.x},${p.y}`).join(' ')}
-          fill="none"
-          stroke={tableStroke}
-          strokeWidth={1.5}
-          strokeDasharray="6 4"
-          vectorEffect="non-scaling-stroke"
-        />
-      ) : null}
       {bubbles.map((b, i) => (
         <circle
           key={i}

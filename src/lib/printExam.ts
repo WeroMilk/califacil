@@ -17,11 +17,22 @@ export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 2.92;
  */
 export const CALIFACIL_VIEWFINDER_GUIDE = {
   /** Fracción del ancho del fotograma para el rectángulo guía */
-  widthFrac: 0.92,
+  widthFrac: 0.98,
+  /** Fracción máxima de alto del fotograma (carta vertical). */
+  maxHeightFrac: 0.99,
   centerXFrac: 0.5,
-  centerYFrac: 0.5,
+  /** Ligeramente arriba del centro para dejar espacio al botón de captura. */
+  centerYFrac: 0.46,
   /** Relación ancho÷alto del papel (carta vertical). */
   aspectRatio: 8.5 / 11,
+} as const;
+
+/** Marco de página completa en canvas warp (incluye fiduciales de esquina). */
+export const CALIFACIL_WARP_PAGE_FRAME_NORM = {
+  x: 0,
+  y: 0,
+  w: 1,
+  h: 1,
 } as const;
 
 /** Layout exclusivo de la hoja de respuestas dedicada (página 2 del PDF). */

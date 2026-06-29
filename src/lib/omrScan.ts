@@ -8,6 +8,7 @@ import {
   buildMarkerAnchoredAnswerSheetTemplate,
   CALIFACIL_FIDUCIAL_CENTERS_NORM,
   CALIFACIL_VIEWFINDER_GUIDE,
+  CALIFACIL_WARP_PAGE_FRAME_NORM,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
@@ -200,9 +201,10 @@ export type CalifacilOmrScanGeometry = {
  */
 export function califacilViewfinderNormRect(W: number, H: number): OmrNormRect | null {
   if (W < 80 || H < 80) return null;
-  const { widthFrac, centerXFrac, centerYFrac, aspectRatio: ar } = CALIFACIL_VIEWFINDER_GUIDE;
+  const { widthFrac, centerXFrac, centerYFrac, aspectRatio: ar, maxHeightFrac } =
+    CALIFACIL_VIEWFINDER_GUIDE;
   const maxW = Math.min(W * widthFrac, W - 2);
-  const maxH = H * 0.98;
+  const maxH = H * (maxHeightFrac ?? 0.98);
   let rectW = maxW;
   let rectH = rectW / ar;
   if (rectH > maxH) {
@@ -3172,6 +3174,8 @@ export type AnswerSheetTemplateGuide = {
   geometry: CalifacilOmrScanGeometry;
   /** Recuadro de la tabla OMR (incluye franja de título) en coords 0–1 de página carta. */
   tableBoundsNorm: OmrNormRect;
+  /** Marco de hoja completa (fiduciales incluidos) en coords 0–1 de página carta. */
+  pageFrameNorm: OmrNormRect;
 };
 
 /**
@@ -3226,6 +3230,7 @@ export function buildAnswerSheetTemplateGuide(
       w: template.tableWidthRatio,
       h: template.tableHeightRatio,
     },
+    pageFrameNorm: CALIFACIL_WARP_PAGE_FRAME_NORM,
   };
 }
 
