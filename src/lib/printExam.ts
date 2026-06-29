@@ -24,6 +24,13 @@ export const CALIFACIL_VIEWFINDER_GUIDE = {
   aspectRatio: 8.5 / 11,
 } as const;
 
+/** Layout exclusivo de la hoja de respuestas dedicada (página 2 del PDF). */
+const ANSWER_SHEET_LAYOUT = {
+  cornerSizePt: 14,
+  cornerGapPt: 5,
+  rightStripWidthPt: 12,
+} as const;
+
 export type CalifacilVirtualKeyRow = {
   questionId: string;
   questionNumber: number;
@@ -131,6 +138,53 @@ export function califacilOmrColumnCount(questions: Question[]): number {
     5,
     Math.max(...questions.map((q) => q.options?.length ?? 0))
   );
+}
+
+function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string {
+  const rowCount = questions.length;
+  const headerCells: string[] = [
+    `<th class="omr-qnum omr-th" scope="col"><span class="omr-th-num">N.º</span></th>`,
+  ];
+  for (let c = 0; c < omrCols; c++) {
+    const letter = String.fromCharCode(65 + c);
+    headerCells.push(
+      `<th class="omr-bubble-cell omr-th" scope="col"><span class="omr-th-letter">${letter}</span></th>`
+    );
+  }
+  const thead = `<thead><tr class="omr-tr omr-tr--head">${headerCells.join('')}</tr></thead>`;
+
+  const rows: string[] = [];
+  for (let i = 0; i < rowCount; i++) {
+    const q = questions[i];
+    const qNum = i + 1;
+    if (!q || q.type !== 'multiple_choice') {
+      rows.push(
+        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">—</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
+      );
+      continue;
+    }
+    const nOpts = Math.min(omrCols, q.options?.length ?? omrCols);
+    const cells: string[] = [];
+    for (let c = 0; c < omrCols; c++) {
+      const letter = String.fromCharCode(65 + c);
+      if (c < nOpts) {
+        cells.push(
+          `<td class="omr-bubble-cell"><div class="omr-bubble-wrap"><span class="omr-bubble" aria-label="Opción ${letter}" title="Opción ${letter}"></span></div></td>`
+        );
+      } else {
+        cells.push(`<td class="omr-bubble-cell omr-bubble-cell--muted"></td>`);
+      }
+    }
+    rows.push(`<tr class="omr-tr"><td class="omr-qnum">${qNum}</td>${cells.join('')}</tr>`);
+  }
+  return `
+    <aside class="califacil-omr" aria-label="Zona CaliFacil">
+      <p class="omr-title">Marca <strong>un círculo</strong> por reactivo con bolígrafo <strong>azul o negro</strong> (tinta oscura).</p>
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="4">
+        ${thead}
+        <tbody>${rows.join('')}</tbody>
+      </table>
+    </aside>`;
 }
 
 function califacilOmrTableHtml(
@@ -301,8 +355,9 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
     /** Hoja dedicada solo a la tabla de respuestas CaliFacil (separada de las preguntas). */
     .print-page--omr-only {
       --sheet-inner-height: calc(11in - 6mm);
-      --corner-size: 8pt;
-      --corner-gap: 4pt;
+      --corner-size: 14pt;
+      --corner-gap: 5pt;
+      --align-strip-width: 12pt;
       --omr-body-inset: calc(var(--corner-size) + var(--corner-gap));
       position: relative;
       width: 100%;
@@ -327,6 +382,17 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
     .print-page--omr-only .sheet-align-corner--tr { top: 0; right: 0; }
     .print-page--omr-only .sheet-align-corner--bl { bottom: 0; left: 0; }
     .print-page--omr-only .sheet-align-corner--br { bottom: 0; right: 0; }
+    .print-page--omr-only .sheet-align-strip-right {
+      position: absolute;
+      top: var(--omr-body-inset);
+      right: 0;
+      width: var(--align-strip-width);
+      height: calc(100% - 2 * var(--omr-body-inset));
+      background: #000;
+      z-index: 10;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
     .print-page--omr-only .print-page-omr-sheet-body {
       position: relative;
       box-sizing: border-box;
@@ -337,6 +403,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       max-height: calc(var(--sheet-inner-height) - 2 * var(--omr-body-inset));
       min-height: 0;
       margin: var(--omr-body-inset);
+      margin-right: calc(var(--omr-body-inset) + var(--align-strip-width) + var(--corner-gap));
       overflow: visible;
       page-break-inside: avoid;
       break-inside: avoid-page;
@@ -470,6 +537,16 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       justify-content: center;
       min-height: 0;
       height: 100%;
+    }
+    .print-page--omr-answer-sheet .omr-bubble {
+      width: var(--omr-bubble-pt, 8pt);
+      height: var(--omr-bubble-pt, 8pt);
+      min-width: 0;
+      min-height: 0;
+      border: 0.85pt solid #000;
+      border-radius: 50%;
+      background: #fff;
+      box-sizing: border-box;
     }
     .print-page--omr-answer-sheet .omr-square {
       width: var(--omr-square-pt, 10pt);
@@ -856,6 +933,15 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       }
     }`;
 
+function answerSheetAlignMarkersHtml(): string {
+  return `
+    <span class="sheet-align-corner sheet-align-corner--tl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--tr" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--bl" aria-hidden="true"></span>
+    <span class="sheet-align-corner sheet-align-corner--br" aria-hidden="true"></span>
+    <span class="sheet-align-strip-right" aria-hidden="true"></span>`;
+}
+
 function sheetAlignCornersHtml(): string {
   return `
     <span class="sheet-align-corner sheet-align-corner--tl" aria-hidden="true"></span>
@@ -900,6 +986,21 @@ function buildQuestionPageSection(
   </section>`;
 }
 
+/** Altura de fila en la hoja de respuestas dedicada (página 2). */
+function answerSheetFillRowHeightPt(rowCount: number): number {
+  const sheetInnerPt = CALIFACIL_ANSWER_SHEET_PAGE.innerHeightPt - 17;
+  const bodyInsetPt = 2 * (ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt);
+  const chromeOutsideOmrPt = CALIFACIL_ANSWER_SHEET_PAGE.chromeAboveOmrPt;
+  const omrTitlePt = CALIFACIL_ANSWER_SHEET_PAGE.omrTitlePt;
+  const omrBorderPadPt =
+    CALIFACIL_ANSWER_SHEET_PAGE.omrBorderPadTopPt + 5;
+  const theadRowEquiv = 1.15;
+  const usable =
+    sheetInnerPt - bodyInsetPt - chromeOutsideOmrPt - omrTitlePt - omrBorderPadPt;
+  const rowPt = usable / (rowCount + theadRowEquiv);
+  return Math.round(Math.max(8.5, rowPt) * 10) / 10;
+}
+
 /** Altura de fila OMR (pt) para que la tabla llene la hoja sin cortar filas. */
 function omrFillRowHeightPt(rowCount: number): number {
   const sheetInnerPt = CALIFACIL_ANSWER_SHEET_PAGE.innerHeightPt - 17; // ~11in − 6mm márgenes @page
@@ -931,11 +1032,11 @@ export const CALIFACIL_ANSWER_SHEET_PAGE = {
  * Medida en `examen de prueba 4-2.pdf` (30 reactivos, hoja de respuestas en blanco).
  */
 export const CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION = {
-  tableLeftRatio: 32 / 850,
-  tableTopRatio: 75 / 1100,
-  tableWidthRatio: 785 / 850,
-  tableHeightRatio: 995 / 1100,
-  titleStripRatioOfTable30: 49 / 995,
+  tableLeftRatio: 30 / 850,
+  tableTopRatio: 80 / 1100,
+  tableWidthRatio: 768 / 850,
+  tableHeightRatio: 990 / 1100,
+  titleStripRatioOfTable30: 49 / 990,
   qnumColFrac: 0.09,
 } as const;
 
@@ -947,8 +1048,12 @@ export const CALIFACIL_WARP_PAGE = {
   heightIn: 11,
 } as const;
 
-const FIDUCIAL_CORNER_PT = 8;
+const FIDUCIAL_CORNER_PT = ANSWER_SHEET_LAYOUT.cornerSizePt;
 const WARP_PX_PER_IN = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.widthIn;
+
+function ptToWarpPx(pt: number): number {
+  return (pt / 72) * WARP_PX_PER_IN;
+}
 
 function fiducialCenterNorm(corner: 'tl' | 'tr' | 'bl' | 'br'): { x: number; y: number } {
   const insetPx = (FIDUCIAL_CORNER_PT / 2 / 72) * WARP_PX_PER_IN;
@@ -969,6 +1074,20 @@ export const CALIFACIL_FIDUCIAL_CENTERS_NORM = {
   tr: fiducialCenterNorm('tr'),
   bl: fiducialCenterNorm('bl'),
   br: fiducialCenterNorm('br'),
+} as const;
+
+/** Franja negra derecha de la hoja de respuestas (coords. 0–1 en canvas 850×1100). */
+export const CALIFACIL_RIGHT_ALIGN_STRIP_NORM = {
+  left: (CALIFACIL_WARP_PAGE.widthPx - ptToWarpPx(ANSWER_SHEET_LAYOUT.rightStripWidthPt)) /
+    CALIFACIL_WARP_PAGE.widthPx,
+  top:
+    ptToWarpPx(ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt) /
+    CALIFACIL_WARP_PAGE.heightPx,
+  width: ptToWarpPx(ANSWER_SHEET_LAYOUT.rightStripWidthPt) / CALIFACIL_WARP_PAGE.widthPx,
+  height:
+    (CALIFACIL_WARP_PAGE.heightPx -
+      2 * ptToWarpPx(ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt)) /
+    CALIFACIL_WARP_PAGE.heightPx,
 } as const;
 
 export type CalifacilMarkerAnchoredTemplate = CalifacilAnswerSheetOmrTemplate & {
@@ -1036,7 +1155,7 @@ export function buildCalifacilAnswerSheetOmrTemplate(
   const cal = CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION;
 
   const tableH = innerHeightPt * cal.tableHeightRatio;
-  const rowPt = omrFillRowHeightPt(rows);
+  const rowPt = answerSheetFillRowHeightPt(rows);
   const theadPt = rowPt * 1.12;
   const titleStripPt =
     CALIFACIL_ANSWER_SHEET_PAGE.omrBorderPadTopPt +
@@ -1069,17 +1188,17 @@ function buildOmrAnswerSheetSection(
   title: string,
   omrCols: number
 ): string {
-  const omrHtml = califacilOmrTableHtml(questions, omrCols);
+  const omrHtml = answerSheetOmrTableHtml(questions, omrCols);
   const rowCount = questions.length;
   const denseOmrClass = rowCount > 15 ? ' print-page--dense-omr' : '';
   const sheetNote = `Hoja de respuestas · Reactivos 1–${rowCount}`;
 
-  const rowPt = omrFillRowHeightPt(rowCount);
-  const squarePt = Math.round(Math.min(rowPt - 2, Math.max(7, rowPt * 0.72)) * 10) / 10;
+  const rowPt = answerSheetFillRowHeightPt(rowCount);
+  const bubblePt = Math.round(Math.min(rowPt - 3, Math.max(5.5, rowPt * 0.5)) * 10) / 10;
 
   return `
-  <section class="print-page print-page--omr-only print-page--omr-answer-sheet${denseOmrClass} print-page--omr-first print-page--break" style="--omr-row-count: ${rowCount}; --omr-row-pt: ${rowPt}pt; --omr-square-pt: ${squarePt}pt;">
-${sheetAlignCornersHtml()}
+  <section class="print-page print-page--omr-only print-page--omr-answer-sheet${denseOmrClass} print-page--omr-first print-page--break" style="--omr-row-count: ${rowCount}; --omr-row-pt: ${rowPt}pt; --omr-bubble-pt: ${bubblePt}pt;">
+${answerSheetAlignMarkersHtml()}
     <div class="print-page-omr-sheet-body">
       <header class="sheet-header sheet-header--omr">
         <div class="sheet-header-text">

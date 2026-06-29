@@ -1466,8 +1466,8 @@ function detectCalifacilQuadFromCornerMarkers(
 
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(8, Math.round(width * 0.1));
-  const regionH = Math.max(8, Math.round(height * 0.1));
+  const regionW = Math.max(12, Math.round(width * 0.12));
+  const regionH = Math.max(12, Math.round(height * 0.12));
 
   const tryPageCornerMarkers = (): [Point, Point, Point, Point] | null => {
     const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
@@ -2199,8 +2199,8 @@ export function detectWarpedFiducialCenters(
   if (width < 80 || height < 80) return empty;
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(8, Math.round(width * 0.1));
-  const regionH = Math.max(8, Math.round(height * 0.1));
+  const regionW = Math.max(12, Math.round(width * 0.12));
+  const regionH = Math.max(12, Math.round(height * 0.12));
   const corners: Array<{ id: WarpAlignmentCornerId; x: number; y: number }> = [
     { id: 'tl', x: 0, y: 0 },
     { id: 'tr', x: width - regionW, y: 0 },
