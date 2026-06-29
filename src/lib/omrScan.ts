@@ -5,8 +5,11 @@
 
 import {
   buildCalifacilAnswerSheetOmrTemplate,
+  buildMarkerAnchoredAnswerSheetTemplate,
+  CALIFACIL_FIDUCIAL_CENTERS_NORM,
   CALIFACIL_VIEWFINDER_GUIDE,
   CALIFACIL_PRINT_MAX_QUESTIONS,
+  markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
@@ -59,6 +62,16 @@ export const CALIFACIL_OMR_SCAN = {
   minInnerWinnerRawFrac: 0.26,
   /** Si la tinta máxima en la fila es muy baja, tratar como sin respuesta (evita falsas «A»). */
   maxStripFracBlankRow: 0.095,
+} as const;
+
+/** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
+const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
+  minInkFraction: 0.4,
+  minInkGap: 0.16,
+  minFillDarkness: 0.2,
+  minScoreAbsolute: 0.055,
+  minScoreGap: 0.03,
+  blankMaxInk: 0.07,
 } as const;
 
 /**
@@ -114,6 +127,8 @@ export type CalifacilScanOptions = {
   answerSheetTemplateOnly?: boolean;
   /** Filas de la tabla impresa (2–30). Por defecto 10. */
   rowCount?: number;
+  /** Incluye métricas de alineación fiducial en el resultado (modo depuración). */
+  includeWarpAlignment?: boolean;
 };
 
 type ScanThresholds = {
@@ -147,6 +162,26 @@ export type OmrScanMetaResult = {
    * Si no es null, la vista previa debe mostrar esta imagen para que la cuadrícula SVG coincida.
    */
   reviewSourceCanvas: HTMLCanvasElement | null;
+  /** Error de alineación fiducial tras warp (si se solicitó). */
+  warpAlignment?: WarpAlignmentReport | null;
+};
+
+/** Máximo error en píxeles entre fiduciales detectados y plantilla tras warp. */
+export const MAX_WARP_ALIGNMENT_ERROR_PX = 2;
+
+export type WarpAlignmentCornerId = 'tl' | 'tr' | 'br' | 'bl';
+
+export type WarpAlignmentReport = {
+  ok: boolean;
+  maxErrorPx: number;
+  meanErrorPx: number;
+  maxAllowedPx: number;
+  corners: Array<{
+    id: WarpAlignmentCornerId;
+    expected: Point;
+    detected: Point | null;
+    errorPx: number;
+  }>;
 };
 
 /** Rectángulo normalizado 0–1 respecto al canvas escaneado (misma relación de aspecto que la foto de revisión). */
@@ -2072,7 +2107,85 @@ export function warpCalifacilSheetFromQuad(
   canvas: HTMLCanvasElement,
   quad: [Point, Point, Point, Point]
 ): HTMLCanvasElement | null {
-  return warpPerspectiveToRect(canvas, quad);
+  return warpPerspectiveToRect(
+    canvas,
+    quad,
+    CALIFACIL_WARP_LETTER_WIDTH,
+    CALIFACIL_WARP_LETTER_HEIGHT
+  );
+}
+
+/** Detecta centros de fiduciales en imagen ya enderezada (850×1100). */
+export function detectWarpedFiducialCenters(
+  warpedCanvas: HTMLCanvasElement
+): Record<WarpAlignmentCornerId, Point | null> {
+  const ctx = warpedCanvas.getContext('2d', { willReadFrequently: true });
+  const empty = { tl: null, tr: null, bl: null, br: null } as Record<
+    WarpAlignmentCornerId,
+    Point | null
+  >;
+  if (!ctx) return empty;
+  const { width, height } = warpedCanvas;
+  if (width < 80 || height < 80) return empty;
+  const id = ctx.getImageData(0, 0, width, height);
+  const d = id.data;
+  const regionW = Math.max(8, Math.round(width * 0.1));
+  const regionH = Math.max(8, Math.round(height * 0.1));
+  const corners: Array<{ id: WarpAlignmentCornerId; x: number; y: number }> = [
+    { id: 'tl', x: 0, y: 0 },
+    { id: 'tr', x: width - regionW, y: 0 },
+    { id: 'br', x: width - regionW, y: height - regionH },
+    { id: 'bl', x: 0, y: height - regionH },
+  ];
+  const out = { ...empty };
+  for (const c of corners) {
+    out[c.id] = findCornerMarkerPoint(d, width, height, c.x, c.y, regionW, regionH);
+  }
+  return out;
+}
+
+/** Mide error en px entre fiduciales detectados y la plantilla PDF/carta. */
+export function measureWarpedFiducialAlignment(
+  warpedCanvas: HTMLCanvasElement,
+  maxAllowedPx = MAX_WARP_ALIGNMENT_ERROR_PX
+): WarpAlignmentReport {
+  const w = warpedCanvas.width;
+  const h = warpedCanvas.height;
+  const detected = detectWarpedFiducialCenters(warpedCanvas);
+  const ids: WarpAlignmentCornerId[] = ['tl', 'tr', 'br', 'bl'];
+  const corners = ids.map((id) => {
+    const norm = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
+    const expected = { x: norm.x * w, y: norm.y * h };
+    const det = detected[id];
+    const errorPx = det ? Math.hypot(det.x - expected.x, det.y - expected.y) : Infinity;
+    return { id, expected, detected: det, errorPx };
+  });
+  const finite = corners.filter((c) => Number.isFinite(c.errorPx));
+  const maxErrorPx = finite.length ? Math.max(...finite.map((c) => c.errorPx)) : Infinity;
+  const meanErrorPx =
+    finite.length > 0
+      ? finite.reduce((s, c) => s + c.errorPx, 0) / finite.length
+      : Infinity;
+  const ok =
+    finite.length === 4 && maxErrorPx <= maxAllowedPx && Number.isFinite(maxErrorPx);
+  return { ok, maxErrorPx, meanErrorPx, maxAllowedPx, corners };
+}
+
+export type WarpCalifacilSheetResult = {
+  warped: HTMLCanvasElement | null;
+  alignment: WarpAlignmentReport | null;
+};
+
+/** Warp a carta + validación de homografía por fiduciales. */
+export function warpAndValidateCalifacilSheet(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point],
+  maxErrorPx = MAX_WARP_ALIGNMENT_ERROR_PX
+): WarpCalifacilSheetResult {
+  const warped = warpCalifacilSheetFromQuad(canvas, quad);
+  if (!warped) return { warped: null, alignment: null };
+  const alignment = measureWarpedFiducialAlignment(warped, maxErrorPx);
+  return { warped, alignment };
 }
 
 export type PrepareMobileCameraScanOptions = {
@@ -2386,7 +2499,8 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
 }
 
 function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_QUESTIONS): OmrFixedTemplate[] {
-  const base = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const anchored = buildMarkerAnchoredAnswerSheetTemplate(rowCount);
+  const base = markerAnchoredTemplateToPageRatios(anchored);
   const nudge = (
     t: OmrFixedTemplate,
     dLeft: number,
@@ -3050,6 +3164,66 @@ function scanCalifacilOmrCanvasDetailed(
   );
 }
 
+function pickAnswerSheetRowAbsolute(params: {
+  inkFracs: number[];
+  fills: number[];
+  scores: number[];
+  cols: number;
+}): { pick: number | null; ambiguous: boolean; confidence: number } {
+  const { inkFracs, fills, scores, cols } = params;
+  const maxInk = inkFracs.reduce((a, b) => Math.max(a, b), 0);
+  if (maxInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk) {
+    return { pick: null, ambiguous: false, confidence: 0 };
+  }
+
+  let inkBest = 0;
+  for (let c = 1; c < cols; c++) {
+    if ((inkFracs[c] ?? 0) > (inkFracs[inkBest] ?? 0)) inkBest = c;
+  }
+  let inkSecond = inkBest === 0 ? 1 : 0;
+  for (let c = 0; c < cols; c++) {
+    if (c === inkBest) continue;
+    if ((inkFracs[c] ?? 0) > (inkFracs[inkSecond] ?? 0)) inkSecond = c;
+  }
+  const inkVal = inkFracs[inkBest] ?? 0;
+  const inkGap = inkVal - (inkFracs[inkSecond] ?? 0);
+
+  let scoreBest = 0;
+  for (let c = 1; c < cols; c++) {
+    if ((scores[c] ?? 0) > (scores[scoreBest] ?? 0)) scoreBest = c;
+  }
+  let scoreSecond = scoreBest === 0 ? 1 : 0;
+  for (let c = 0; c < cols; c++) {
+    if (c === scoreBest) continue;
+    if ((scores[c] ?? 0) > (scores[scoreSecond] ?? 0)) scoreSecond = c;
+  }
+  const scoreVal = scores[scoreBest] ?? 0;
+  const scoreGap = scoreVal - (scores[scoreSecond] ?? 0);
+  const fillBest = fills[scoreBest] ?? 0;
+
+  const inkOk =
+    inkVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction &&
+    inkGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap;
+  const scoreOk =
+    fillBest >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minFillDarkness &&
+    scoreVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreAbsolute &&
+    scoreGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreGap;
+
+  if (!inkOk || !scoreOk || inkBest !== scoreBest) {
+    const ambiguous =
+      maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.4 &&
+      (inkOk || scoreOk) &&
+      inkBest !== scoreBest;
+    return { pick: null, ambiguous, confidence: 0 };
+  }
+
+  return {
+    pick: inkBest,
+    ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
+    confidence: inkVal + scoreGap,
+  };
+}
+
 function scanCalifacilOmrCanvasDetailedWithProfile(
   canvas: HTMLCanvasElement,
   columns: number,
@@ -3432,6 +3606,16 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     let pick: number | null = null;
     let ambiguous = false;
 
+    if (templateGridOnly) {
+      const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+      pick = abs.pick;
+      ambiguous = abs.ambiguous;
+      if (pick !== null) {
+        resolvedCount++;
+        confidenceSum += abs.confidence;
+        clarityStripGapSum += abs.confidence * 0.4;
+      }
+    } else {
     const innerWinnerRaw = innerFracs[innerPickInfo.bestIdx] ?? 0;
     const minInnerWin = CALIFACIL_OMR_SCAN.minInnerWinnerRawFrac;
 
@@ -3508,37 +3692,43 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       }
     }
 
-    out[row] = pick;
-    rowMetas.push({ pick, ambiguous, inkFractions: [...stripFracs] });
-    if (pick !== null) {
-      resolvedCount++;
-      const scoredAsInner =
-        pick === innerPickInfo.bestIdx &&
-        innerStrong &&
-        (stripPrimaryPick === null || innerPickInfo.bestIdx !== stripPrimaryPick);
+      if (pick !== null) {
+        resolvedCount++;
+        const scoredAsInner =
+          pick === innerPickInfo.bestIdx &&
+          innerStrong &&
+          (stripPrimaryPick === null || innerPickInfo.bestIdx !== stripPrimaryPick);
 
-      if (scoredAsInner) {
-        const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
-        confidenceSum +=
-          innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
-      } else if (stripPrimaryPick !== null && pick === stripPrimaryPick) {
-        const maxStrip = stripFracs.reduce((a, b) => Math.max(a, b), 0);
-        confidenceSum +=
-          stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
-      } else if (
-        pick === innerPickInfo.bestIdx &&
-        innerPickInfo.aboveMed >= minAbove * 0.95 &&
-        innerPickInfo.gap >= minStripGap * 0.92
-      ) {
-        const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
-        confidenceSum +=
-          innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
-      } else if (rectRulePick !== null && pick === rectRulePick) {
-        confidenceSum += rectGap * 18 + (innerRectDark[pick] ?? 0) * 12;
-      } else {
-        confidenceSum += best + gap + maxInk * 0.15;
+        if (scoredAsInner) {
+          const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
+          confidenceSum +=
+            innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
+        } else if (stripPrimaryPick !== null && pick === stripPrimaryPick) {
+          const maxStrip = stripFracs.reduce((a, b) => Math.max(a, b), 0);
+          confidenceSum +=
+            stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
+        } else if (
+          pick === innerPickInfo.bestIdx &&
+          innerPickInfo.aboveMed >= minAbove * 0.95 &&
+          innerPickInfo.gap >= minStripGap * 0.92
+        ) {
+          const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
+          confidenceSum +=
+            innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
+        } else if (rectRulePick !== null && pick === rectRulePick) {
+          confidenceSum += rectGap * 18 + (innerRectDark[pick] ?? 0) * 12;
+        } else {
+          confidenceSum += best + gap + maxInk * 0.15;
+        }
       }
     }
+
+    out[row] = pick;
+    rowMetas.push({
+      pick,
+      ambiguous,
+      inkFractions: [...(templateGridOnly ? inkFracs : stripFracs)],
+    });
 
     const rowRects: OmrNormRect[] = [];
     for (let c = 0; c < cols; c++) {
@@ -3836,7 +4026,7 @@ export function scanCalifacilOmrSheetWithMeta(
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
     ? templateGridOnly
-      ? buildAnswerSheetCaptureVariants(canvas)
+      ? [{ canvas, preferFullSheetFirst: true }]
       : buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
@@ -3999,6 +4189,9 @@ export function scanCalifacilOmrSheetWithMeta(
     maxSameColumnCount: best.maxSameColumnCount,
     geometry: best.geometry,
     reviewSourceCanvas: reviewCanvas,
+    warpAlignment: opts?.includeWarpAlignment
+      ? measureWarpedFiducialAlignment(canvas)
+      : undefined,
   };
 }
 

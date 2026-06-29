@@ -939,6 +939,82 @@ export const CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION = {
   qnumColFrac: 0.09,
 } as const;
 
+/** Canvas carta tras warp fiducial (8.5×11 in @ 100 px/in). */
+export const CALIFACIL_WARP_PAGE = {
+  widthPx: 850,
+  heightPx: 1100,
+  widthIn: 8.5,
+  heightIn: 11,
+} as const;
+
+const FIDUCIAL_CORNER_PT = 8;
+const WARP_PX_PER_IN = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.widthIn;
+
+function fiducialCenterNorm(corner: 'tl' | 'tr' | 'bl' | 'br'): { x: number; y: number } {
+  const insetPx = (FIDUCIAL_CORNER_PT / 2 / 72) * WARP_PX_PER_IN;
+  const w = CALIFACIL_WARP_PAGE.widthPx;
+  const h = CALIFACIL_WARP_PAGE.heightPx;
+  const positions = {
+    tl: { x: insetPx / w, y: insetPx / h },
+    tr: { x: 1 - insetPx / w, y: insetPx / h },
+    bl: { x: insetPx / w, y: 1 - insetPx / h },
+    br: { x: 1 - insetPx / w, y: 1 - insetPx / h },
+  };
+  return positions[corner];
+}
+
+/** Centros normalizados de los cuadros negros de esquina en canvas 850×1100. */
+export const CALIFACIL_FIDUCIAL_CENTERS_NORM = {
+  tl: fiducialCenterNorm('tl'),
+  tr: fiducialCenterNorm('tr'),
+  bl: fiducialCenterNorm('bl'),
+  br: fiducialCenterNorm('br'),
+} as const;
+
+export type CalifacilMarkerAnchoredTemplate = CalifacilAnswerSheetOmrTemplate & {
+  /** Rectángulo interior definido por los centros de los 4 fiduciales (coords. 0–1 de página). */
+  markerQuad: { left: number; top: number; width: number; height: number };
+};
+
+/** Convierte ratios de página absolutos a fracciones dentro del cuadrilátero fiducial. */
+export function buildMarkerAnchoredAnswerSheetTemplate(
+  rowCount: number
+): CalifacilMarkerAnchoredTemplate {
+  const page = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const tl = CALIFACIL_FIDUCIAL_CENTERS_NORM.tl;
+  const br = CALIFACIL_FIDUCIAL_CENTERS_NORM.br;
+  const markerQuad = {
+    left: tl.x,
+    top: tl.y,
+    width: br.x - tl.x,
+    height: br.y - tl.y,
+  };
+  return {
+    markerQuad,
+    tableLeftRatio: (page.tableLeftRatio - markerQuad.left) / markerQuad.width,
+    tableTopRatio: (page.tableTopRatio - markerQuad.top) / markerQuad.height,
+    tableWidthRatio: page.tableWidthRatio / markerQuad.width,
+    tableHeightRatio: page.tableHeightRatio / markerQuad.height,
+    titleStripRatioOfTable: page.titleStripRatioOfTable,
+    qnumWidthRatio: page.qnumWidthRatio,
+  };
+}
+
+/** Reconstruye ratios de página a partir de plantilla anclada a fiduciales. */
+export function markerAnchoredTemplateToPageRatios(
+  anchored: CalifacilMarkerAnchoredTemplate
+): CalifacilAnswerSheetOmrTemplate {
+  const mq = anchored.markerQuad;
+  return {
+    tableLeftRatio: mq.left + anchored.tableLeftRatio * mq.width,
+    tableTopRatio: mq.top + anchored.tableTopRatio * mq.height,
+    tableWidthRatio: anchored.tableWidthRatio * mq.width,
+    tableHeightRatio: anchored.tableHeightRatio * mq.height,
+    titleStripRatioOfTable: anchored.titleStripRatioOfTable,
+    qnumWidthRatio: anchored.qnumWidthRatio,
+  };
+}
+
 export type CalifacilAnswerSheetOmrTemplate = {
   tableLeftRatio: number;
   tableTopRatio: number;
