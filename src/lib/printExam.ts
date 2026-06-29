@@ -1043,6 +1043,9 @@ function ptToWarpPx(pt: number): number {
  * Plantilla OMR en canvas 850×1100 tras warp fiducial.
  * Calculada desde el layout impreso de la hoja de respuestas (página 2).
  */
+/** Ajuste empírico: las filas de lectura quedan ~1.5% más arriba (warp vs. impreso). */
+const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0.018;
+
 function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
   const pageW = CALIFACIL_WARP_PAGE.widthPx;
   const pageH = CALIFACIL_WARP_PAGE.heightPx;
@@ -1066,12 +1069,17 @@ function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetO
       theadPt
   );
 
+  const titleStripRatio = Math.max(
+    0.028,
+    titleStripPx / tableH - ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO
+  );
+
   return {
     tableLeftRatio: tableLeftPx / pageW,
-    tableTopRatio: tableTopPx / pageH,
+    tableTopRatio: tableTopPx / pageH - 0.003,
     tableWidthRatio: tableW / pageW,
-    tableHeightRatio: tableH / pageH,
-    titleStripRatioOfTable: titleStripPx / tableH,
+    tableHeightRatio: tableH / pageH + 0.003,
+    titleStripRatioOfTable: titleStripRatio,
     qnumWidthRatio: CALIFACIL_ANSWER_SHEET_PAGE.qnumColFrac,
   };
 }
