@@ -13,7 +13,7 @@ import {
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Info, LayoutDashboard, Loader2, AlertCircle } from 'lucide-react';
+import { AlertCircle, Info, LayoutDashboard, Loader2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -587,9 +587,9 @@ export default function CalificarPage() {
   const reviewOrangeFrameRect = useMemo(
     () =>
       reviewOmrGeometry
-        ? califacilReviewOrangeFrameRect(reviewOmrGeometry, currentChunk.length)
+        ? califacilReviewOrangeFrameRect(reviewOmrGeometry, currentChunk.length, isMobile)
         : null,
-    [reviewOmrGeometry, currentChunk.length]
+    [reviewOmrGeometry, currentChunk.length, isMobile]
   );
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
@@ -624,22 +624,32 @@ export default function CalificarPage() {
 
   const setTorchEnabled = useCallback(async (enabled: boolean) => {
     const track = streamRef.current?.getVideoTracks?.()[0];
-    if (!track) return false;
-    const capabilities =
-      typeof track.getCapabilities === 'function'
-        ? (track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean })
-        : null;
-    if (!capabilities?.torch) return false;
-    try {
-      await track.applyConstraints({
-        advanced: [{ torch: enabled } as MediaTrackConstraintSet],
-      });
-      setFlashOn(enabled);
-      return true;
-    } catch {
-      return false;
+    if (!track || typeof track.applyConstraints !== 'function') return false;
+    const attempts: MediaTrackConstraints[] = [
+      { advanced: [{ torch: enabled } as MediaTrackConstraintSet] },
+      { torch: enabled } as MediaTrackConstraints,
+      { advanced: [{ fillLightMode: enabled ? 'flash' : 'off' } as MediaTrackConstraintSet] },
+    ];
+    for (const constraints of attempts) {
+      try {
+        await track.applyConstraints(constraints);
+        setFlashOn(enabled);
+        setFlashSupported(true);
+        return true;
+      } catch {
+        // Siguiente método (Android / iOS varían).
+      }
     }
+    return false;
   }, []);
+
+  const toggleFlash = useCallback(async () => {
+    const next = !flashOn;
+    const ok = await setTorchEnabled(next);
+    if (!ok && next) {
+      toast.message('Este navegador no permite activar el flash. Mejora la luz o acércate a una lámpara.');
+    }
+  }, [flashOn, setTorchEnabled]);
 
   const clearAutoSnapshot = useCallback(() => {
     setShowAutoSnapshot(false);
@@ -1600,7 +1610,7 @@ export default function CalificarPage() {
           ? (track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean })
           : null;
       const supportsTorch = Boolean(capabilities?.torch);
-      setFlashSupported(supportsTorch);
+      setFlashSupported(isMobile || supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
       if (track && typeof track.applyConstraints === 'function') {
@@ -2205,6 +2215,42 @@ export default function CalificarPage() {
 
   startLiveCameraRef.current = startLiveCamera;
 
+  const retakeMobileSheetPhoto = useCallback(
+    (sheetIdx = sheetIndexRef.current) => {
+      setMobileSheetSnapshots((prev) => prev.filter((snap) => snap.sheetIndex !== sheetIdx));
+      setMobileResultsDraft((prev) => {
+        const chunk = sheets[sheetIdx] ?? [];
+        const next = { ...prev };
+        for (const q of chunk) delete next[q.id];
+        return next;
+      });
+      setReviewOmrGeometry(null);
+      setReviewQualityHint(null);
+      setDraftSelections({});
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      setAutoGradeDialogOpen(false);
+      setSheetIndex(sheetIdx);
+      sheetIndexRef.current = sheetIdx;
+      stopLiveCamera();
+      startingCameraRef.current = false;
+      mobileCaptureBusyRef.current = false;
+      setScanBusy(false);
+      flushSync(() => {
+        setPhase('capturar');
+      });
+      phaseRef.current = 'capturar';
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          void startLiveCamera({ skipPhaseGuard: true });
+        });
+      });
+    },
+    [sheets, startLiveCamera, stopLiveCamera]
+  );
+
   const openMobileCapture = useCallback(() => {
     if (examLoading) {
       toast.error('Cargando examen, espera un momento.');
@@ -2682,6 +2728,17 @@ export default function CalificarPage() {
                 <Button
                   type="button"
                   variant="outline"
+                  className="w-full border-orange-300 text-orange-800 hover:bg-orange-50"
+                  onClick={() => {
+                    setAutoGradeDialogOpen(false);
+                    retakeMobileSheetPhoto(sheetIndexRef.current);
+                  }}
+                >
+                  Tomar otra foto
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
                   className="w-full"
                   onClick={() => {
                     setAutoGradeDialogOpen(false);
@@ -3010,19 +3067,38 @@ export default function CalificarPage() {
                   completa
                 </p>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="shrink-0 text-white hover:bg-white/10 hover:text-white"
-                disabled={scanBusy}
-                onClick={() => {
-                  stopLiveCamera();
-                  setPhase('elegir');
-                }}
-              >
-                Volver
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                {isMobile ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      'h-9 w-9 shrink-0 text-white hover:bg-white/10 hover:text-white',
+                      flashOn && 'bg-white/15 text-amber-300'
+                    )}
+                    disabled={scanBusy}
+                    aria-label={flashOn ? 'Apagar flash' : 'Encender flash'}
+                    title={flashOn ? 'Apagar flash' : 'Encender flash'}
+                    onClick={() => void toggleFlash()}
+                  >
+                    <Zap className="h-5 w-5" aria-hidden />
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 text-white hover:bg-white/10 hover:text-white"
+                  disabled={scanBusy}
+                  onClick={() => {
+                    stopLiveCamera();
+                    setPhase('elegir');
+                  }}
+                >
+                  Volver
+                </Button>
+              </div>
             </div>
 
             <input
@@ -3257,6 +3333,17 @@ export default function CalificarPage() {
                       <span className="font-medium text-orange-700">naranja</span> = respuesta correcta esperada,
                       azul = casillas vacías detectadas.
                     </p>
+                    {isMobile ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 w-full border-orange-300 bg-white text-orange-800 hover:bg-orange-50"
+                        onClick={() => retakeMobileSheetPhoto(sheetIndex)}
+                      >
+                        Tomar otra foto
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -3309,11 +3396,10 @@ export default function CalificarPage() {
                     className="flex-1"
                     onClick={() => {
                       if (isMobile) {
-                        stopLiveCamera();
-                        setPhase('elegir');
-                      } else {
-                        setPhase('capturar');
+                        retakeMobileSheetPhoto(sheetIndex);
+                        return;
                       }
+                      setPhase('capturar');
                       setReviewOmrGeometry(null);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
@@ -3323,7 +3409,7 @@ export default function CalificarPage() {
                       resetLiveReadings();
                     }}
                   >
-                    {useLiveCameraUi ? 'Escanear otra vez' : 'Importar otra imagen'}
+                    {useLiveCameraUi ? 'Tomar otra foto' : 'Importar otra imagen'}
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
@@ -3428,6 +3514,15 @@ export default function CalificarPage() {
                         <p className="mt-1 text-[11px] leading-snug text-emerald-900/85">
                           Verde = acierto, rojo = opción leída incorrecta, naranja = respuesta correcta esperada.
                         </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 w-full border-orange-300 bg-white text-orange-800 hover:bg-orange-50"
+                          onClick={() => retakeMobileSheetPhoto(snap.sheetIndex)}
+                        >
+                          Tomar otra foto de esta hoja
+                        </Button>
                       </div>
                     ) : null}
                     {chunk.map((q, idx) => {
@@ -3466,6 +3561,15 @@ export default function CalificarPage() {
               })}
             </Tabs>
             <div className="flex flex-col gap-2 pt-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1 border-orange-300 text-orange-800 hover:bg-orange-50"
+                disabled={scanBusy}
+                onClick={() => retakeMobileSheetPhoto(mobileSheetSnapshots[resultsSheetIdx]?.sheetIndex ?? sheetIndex)}
+              >
+                Tomar otra foto
+              </Button>
               <Button
                 type="button"
                 className="flex-1 bg-orange-600 hover:bg-orange-700"

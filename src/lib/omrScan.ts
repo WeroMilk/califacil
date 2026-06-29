@@ -66,12 +66,12 @@ export const CALIFACIL_OMR_SCAN = {
 
 /** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
-  minInkFraction: 0.4,
-  minInkGap: 0.16,
-  minFillDarkness: 0.2,
-  minScoreAbsolute: 0.055,
-  minScoreGap: 0.03,
-  blankMaxInk: 0.07,
+  minInkFraction: 0.32,
+  minInkGap: 0.12,
+  minFillDarkness: 0.16,
+  minScoreAbsolute: 0.045,
+  minScoreGap: 0.025,
+  blankMaxInk: 0.085,
 } as const;
 
 /**
@@ -2589,8 +2589,12 @@ function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_
   });
   return [
     base,
-    nudge(base, -0.002, -0.003, 0.004, 0.002, 0.002, 0.001),
-    nudge(base, 0.002, 0.003, -0.004, -0.002, -0.002, -0.001),
+    nudge(base, -0.004, -0.01, 0.006, 0.004, 0.004, 0),
+    nudge(base, 0.004, 0.01, -0.006, -0.004, -0.004, 0),
+    nudge(base, 0, -0.014, 0, 0.003, 0.006, 0),
+    nudge(base, 0, 0.014, 0, -0.003, -0.006, 0),
+    nudge(base, -0.006, 0, 0.012, 0, 0, 0.002),
+    nudge(base, 0.006, 0, -0.012, 0, 0, -0.002),
   ];
 }
 
@@ -3943,7 +3947,9 @@ export function scanCalifacilOmrSheet(
   const strictFixedTemplateMode =
     Boolean(opts?.answerSheetTemplateOnly) ||
     (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([-4, 0, 4] as const) : ([-16, -8, 0, 8, 16] as const);
+  const fixedTemplateShifts = strictFixedTemplateMode
+    ? ([-10, -6, -3, 0, 3, 6, 10] as const)
+    : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     const fixedTemplates = strictFixedTemplateMode
@@ -4143,7 +4149,9 @@ export function scanCalifacilOmrSheetWithMeta(
   const strictFixedTemplateMode =
     Boolean(opts?.answerSheetTemplateOnly) ||
     (geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor));
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([-4, 0, 4] as const) : ([-16, -8, 0, 8, 16] as const);
+  const fixedTemplateShifts = strictFixedTemplateMode
+    ? ([-10, -6, -3, 0, 3, 6, 10] as const)
+    : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     const fixedTemplates = strictFixedTemplateMode

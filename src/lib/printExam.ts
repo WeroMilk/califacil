@@ -1027,19 +1027,6 @@ export const CALIFACIL_ANSWER_SHEET_PAGE = {
   qnumColFrac: 0.09,
 } as const;
 
-/**
- * Plantilla OMR en canvas 850×1100 tras warp fiducial.
- * Medida en `examen de prueba 4-2.pdf` (30 reactivos, hoja de respuestas en blanco).
- */
-export const CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION = {
-  tableLeftRatio: 30 / 850,
-  tableTopRatio: 80 / 1100,
-  tableWidthRatio: 768 / 850,
-  tableHeightRatio: 990 / 1100,
-  titleStripRatioOfTable30: 49 / 990,
-  qnumColFrac: 0.09,
-} as const;
-
 /** Canvas carta tras warp fiducial (8.5×11 in @ 100 px/in). */
 export const CALIFACIL_WARP_PAGE = {
   widthPx: 850,
@@ -1048,12 +1035,58 @@ export const CALIFACIL_WARP_PAGE = {
   heightIn: 11,
 } as const;
 
+function ptToWarpPx(pt: number): number {
+  return (pt / 72) * (CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.widthIn);
+}
+
+/**
+ * Plantilla OMR en canvas 850×1100 tras warp fiducial.
+ * Calculada desde el layout impreso de la hoja de respuestas (página 2).
+ */
+function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
+  const pageW = CALIFACIL_WARP_PAGE.widthPx;
+  const pageH = CALIFACIL_WARP_PAGE.heightPx;
+  const { cornerSizePt, cornerGapPt, rightStripWidthPt } = ANSWER_SHEET_LAYOUT;
+  const bodyInsetPx = ptToWarpPx(cornerSizePt + cornerGapPt);
+  const rightMarginPx = bodyInsetPx + ptToWarpPx(rightStripWidthPt + cornerGapPt);
+  const chromeTopPx = ptToWarpPx(CALIFACIL_ANSWER_SHEET_PAGE.chromeAboveOmrPt);
+
+  const tableLeftPx = bodyInsetPx;
+  const tableTopPx = bodyInsetPx + chromeTopPx;
+  const tableRightPx = pageW - rightMarginPx;
+  const tableBottomPx = pageH - bodyInsetPx;
+  const tableW = Math.max(1, tableRightPx - tableLeftPx);
+  const tableH = Math.max(1, tableBottomPx - tableTopPx);
+
+  const rowPt = answerSheetFillRowHeightPt(rowCount);
+  const theadPt = rowPt * 1.12;
+  const titleStripPx = ptToWarpPx(
+    CALIFACIL_ANSWER_SHEET_PAGE.omrBorderPadTopPt +
+      CALIFACIL_ANSWER_SHEET_PAGE.omrTitlePt +
+      theadPt
+  );
+
+  return {
+    tableLeftRatio: tableLeftPx / pageW,
+    tableTopRatio: tableTopPx / pageH,
+    tableWidthRatio: tableW / pageW,
+    tableHeightRatio: tableH / pageH,
+    titleStripRatioOfTable: titleStripPx / tableH,
+    qnumWidthRatio: CALIFACIL_ANSWER_SHEET_PAGE.qnumColFrac,
+  };
+}
+
+export const CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION = (() => {
+  const t = computeAnswerSheetPageTemplate(30);
+  return {
+    ...t,
+    titleStripRatioOfTable30: t.titleStripRatioOfTable,
+    qnumColFrac: t.qnumWidthRatio,
+  };
+})();
+
 const FIDUCIAL_CORNER_PT = ANSWER_SHEET_LAYOUT.cornerSizePt;
 const WARP_PX_PER_IN = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.widthIn;
-
-function ptToWarpPx(pt: number): number {
-  return (pt / 72) * WARP_PX_PER_IN;
-}
 
 function fiducialCenterNorm(corner: 'tl' | 'tr' | 'bl' | 'br'): { x: number; y: number } {
   const insetPx = (FIDUCIAL_CORNER_PT / 2 / 72) * WARP_PX_PER_IN;
@@ -1151,27 +1184,7 @@ export function buildCalifacilAnswerSheetOmrTemplate(
   rowCount: number
 ): CalifacilAnswerSheetOmrTemplate {
   const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(2, Math.round(rowCount)));
-  const { widthPt, innerHeightPt, qnumColFrac } = CALIFACIL_ANSWER_SHEET_PAGE;
-  const cal = CALIFACIL_ANSWER_SHEET_WARP_CALIBRATION;
-
-  const tableH = innerHeightPt * cal.tableHeightRatio;
-  const rowPt = answerSheetFillRowHeightPt(rows);
-  const theadPt = rowPt * 1.12;
-  const titleStripPt =
-    CALIFACIL_ANSWER_SHEET_PAGE.omrBorderPadTopPt +
-    CALIFACIL_ANSWER_SHEET_PAGE.omrTitlePt +
-    theadPt;
-  const titleStripRatioOfTable =
-    rows === 30 ? cal.titleStripRatioOfTable30 : titleStripPt / tableH;
-
-  return {
-    tableLeftRatio: cal.tableLeftRatio,
-    tableTopRatio: cal.tableTopRatio,
-    tableWidthRatio: cal.tableWidthRatio,
-    tableHeightRatio: cal.tableHeightRatio,
-    titleStripRatioOfTable,
-    qnumWidthRatio: qnumColFrac,
-  };
+  return computeAnswerSheetPageTemplate(rows);
 }
 
 function omrSheetMetaRowHtml(): string {
