@@ -31,6 +31,8 @@ import {
   califacilViewfinderGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
+  countAnswerSheetFiducialsInRoi,
+  estimateCanvasShadowAsymmetry,
   captureVideoGuideRoiFrame,
   detectLargestQuadInRoiCanvas,
   estimateCanvasMeanLuminance,
@@ -40,6 +42,9 @@ import {
   isCalifacilExamSheetStrict,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
+  measureRoiSheetFillRatio,
+  MOBILE_MIN_FIDUCIAL_CORNERS,
+  MOBILE_MIN_ROI_FILL_RATIO,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   prepareCalifacilScanInput,
@@ -142,7 +147,11 @@ const MOBILE_SCAN_MAX_WIDTH = 1080;
 /** Resolución máxima al capturar foto final en móvil. */
 const MOBILE_CAPTURE_MAX_SIDE = 2400;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
-const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
+const LOW_VISIBILITY_AUTOTORCH_TICKS = 3;
+/** Asimetría de luminancia izq/der que sugiere sombra fuerte en la hoja. */
+const SHADOW_ASYMMETRY_TORCH = 0.14;
+/** Ticks con sombra antes de activar flash automático. */
+const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas consecutivos con cuadrilátero estable en ROI antes de captura automática móvil. */
@@ -398,6 +407,10 @@ export default function CalificarPage() {
   }, [liveVideoLayout]);
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
+  const [mobileSheetFillRatio, setMobileSheetFillRatio] = useState(0);
+  const [mobileFiducialCount, setMobileFiducialCount] = useState(0);
+  const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
+  const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -412,6 +425,7 @@ export default function CalificarPage() {
   const stableFullTicksRef = useRef(0);
   const lowVisibilityTicksRef = useRef(0);
   const autotorchTriedRef = useRef(false);
+  const shadowTorchTicksRef = useRef(0);
   const glareHintShownRef = useRef(false);
   const autoFinalizeInProgressRef = useRef(false);
   /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
@@ -607,6 +621,7 @@ export default function CalificarPage() {
     stableFullTicksRef.current = 0;
     lowVisibilityTicksRef.current = 0;
     autotorchTriedRef.current = false;
+    shadowTorchTicksRef.current = 0;
     glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     liveLockedAnswersRef.current = {};
@@ -628,6 +643,10 @@ export default function CalificarPage() {
     setLiveVideoLayout(null);
     setLiveShowBubbleOverlay(false);
     setCornersAlignedView(false);
+    setMobileSheetFillRatio(0);
+    setMobileFiducialCount(0);
+    setMobileShadowWarning(false);
+    setMobileStableTicks(0);
     setLiveStatus(
       isMobile
         ? 'Alinea los 4 cuadros negros de esquina con los visores. La captura es automática al detectarlas.'
@@ -656,6 +675,7 @@ export default function CalificarPage() {
     stableFullTicksRef.current = 0;
     lowVisibilityTicksRef.current = 0;
     autotorchTriedRef.current = false;
+    shadowTorchTicksRef.current = 0;
     glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     setFlashSupported(false);
@@ -1507,6 +1527,15 @@ export default function CalificarPage() {
       setFlashSupported(supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
+      if (track && typeof track.applyConstraints === 'function') {
+        try {
+          await track.applyConstraints({
+            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+          });
+        } catch {
+          // Algunos navegadores no exponen focusMode vía applyConstraints.
+        }
+      }
       const scanCanvas = document.createElement('canvas');
       const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
       let hotLoopStatus = '';
@@ -1566,6 +1595,10 @@ export default function CalificarPage() {
             const { roiCanvas } = roiCapture;
             if (estimateCanvasMeanLuminance(roiCanvas) < MIN_FRAME_LUMINANCE) {
               setCornersAlignedView(false);
+              setMobileSheetFillRatio(0);
+              setMobileFiducialCount(0);
+              setMobileShadowWarning(false);
+              setMobileStableTicks(0);
               setLiveScanGeometry(null);
               setLiveScanPicks([]);
               setLiveScanLockedRows([]);
@@ -1582,6 +1615,25 @@ export default function CalificarPage() {
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
             const quadValid = roiQuad !== null && isValidMobileRoiQuad(roiQuad, roiW, roiH);
+            const fillRatio =
+              roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
+            const fiducialCount = countAnswerSheetFiducialsInRoi(roiCanvas);
+            const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
+            const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
+
+            setMobileSheetFillRatio(fillRatio);
+            setMobileFiducialCount(fiducialCount);
+            setMobileShadowWarning(shadowStrong);
+
+            if (shadowStrong && flashSupported && !flashOn && !autotorchTriedRef.current) {
+              shadowTorchTicksRef.current += 1;
+              if (shadowTorchTicksRef.current >= SHADOW_AUTOTORCH_TICKS) {
+                autotorchTriedRef.current = true;
+                void setTorchEnabled(true);
+              }
+            } else if (!shadowStrong) {
+              shadowTorchTicksRef.current = 0;
+            }
 
             setLiveShowBubbleOverlay(false);
             setLiveScanGeometry(null);
@@ -1591,6 +1643,7 @@ export default function CalificarPage() {
 
             if (!quadValid || !roiQuad) {
               cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
               lastRoiQuadRef.current = null;
               setCornersAlignedView(false);
               lowVisibilityTicksRef.current += 1;
@@ -1604,8 +1657,42 @@ export default function CalificarPage() {
                 void setTorchEnabled(true);
                 setLiveStatus('Activé el flash. Encuadra la hoja dentro del rectángulo.');
               } else {
-                setLiveStatus('Encuadra la hoja dentro del rectángulo verde.');
+                setLiveStatus('Encuadra la hoja dentro del rectángulo.');
               }
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            if (fillRatio < MOBILE_MIN_ROI_FILL_RATIO) {
+              cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
+              lastRoiQuadRef.current = roiQuad;
+              setCornersAlignedView(false);
+              setLiveStatus(
+                fillRatio < 0.3
+                  ? 'Acerca el teléfono: la hoja debe llenar el rectángulo.'
+                  : 'Un poco más cerca — la hoja debe ocupar casi todo el marco.'
+              );
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            if (fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) {
+              cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
+              lastRoiQuadRef.current = roiQuad;
+              setCornersAlignedView(false);
+              setLiveStatus('Alinea los 4 cuadros negros de las esquinas con el marco.');
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            if (shadowStrong && !flashOn) {
+              cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
+              lastRoiQuadRef.current = roiQuad;
+              setCornersAlignedView(false);
+              setLiveStatus('Hay sombra sobre la hoja — muévela o activa el flash.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -1614,14 +1701,16 @@ export default function CalificarPage() {
             lastRoiQuadRef.current = roiQuad;
             if (!stable) {
               cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
               setCornersAlignedView(false);
-              setLiveStatus('Ajusta la hoja dentro del rectángulo…');
+              setLiveStatus('Mantén la hoja quieta dentro del rectángulo…');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
 
             cornerStableTicksRef.current += 1;
             lowVisibilityTicksRef.current = 0;
+            setMobileStableTicks(cornerStableTicksRef.current);
             setCornersAlignedView(true);
             if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
               setLiveStatus('Mantén la hoja quieta…');
@@ -1635,6 +1724,7 @@ export default function CalificarPage() {
             }
 
             cornerStableTicksRef.current = 0;
+            setMobileStableTicks(0);
             lastRoiQuadRef.current = null;
             mobileCaptureBusyRef.current = true;
             setLiveStatus('Capturando foto para calificar…');
@@ -2870,6 +2960,11 @@ export default function CalificarPage() {
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
                       guideRect={mobileGuideRectPx}
+                      fillRatio={mobileSheetFillRatio}
+                      stableTicks={mobileStableTicks}
+                      stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}
+                      shadowWarning={mobileShadowWarning}
+                      fiducialCount={mobileFiducialCount}
                     />
                   </div>
                   {scanBusy ? (
@@ -2901,7 +2996,15 @@ export default function CalificarPage() {
                   }}
                 >
                   <p className="mb-1 text-center text-sm font-semibold text-white">
-                    {cornersAlignedView ? 'Esquinas alineadas' : 'Buscando hoja…'}
+                    {cornersAlignedView && mobileStableTicks >= CORNER_ALIGN_STABLE_TICKS
+                      ? 'Listo — capturando'
+                      : mobileSheetFillRatio > 0 && mobileSheetFillRatio < 0.3
+                        ? 'Acerca el teléfono'
+                        : mobileShadowWarning && !flashOn
+                          ? 'Reduce la sombra'
+                          : cornersAlignedView
+                            ? 'Mantén la hoja quieta'
+                            : 'Buscando hoja…'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
                 </div>

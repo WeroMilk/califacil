@@ -1858,6 +1858,90 @@ export function detectLargestQuadInRoiCanvas(
   return best;
 }
 
+/** Mínimo de área de hoja dentro del ROI (0–1) para permitir captura automática. */
+export const MOBILE_MIN_ROI_FILL_RATIO = 0.4;
+/** Mínimo de esquinas negras fiduciales visibles en el ROI (de 4). */
+export const MOBILE_MIN_FIDUCIAL_CORNERS = 3;
+
+export function measureRoiSheetFillRatio(
+  quad: [Point, Point, Point, Point],
+  roiW: number,
+  roiH: number
+): number {
+  return quadShoelaceArea(quad) / Math.max(1, roiW * roiH);
+}
+
+/** 0 = uniforme; valores altos ⇒ sombra fuerte (p. ej. mitad oscura de la hoja). */
+export function estimateCanvasShadowAsymmetry(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const { width: w, height: h } = canvas;
+  if (w < 40 || h < 40) return 0;
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  const mid = Math.floor(w / 2);
+  const step = Math.max(4, Math.floor(Math.sqrt((w * h) / 2800)));
+  let leftSum = 0;
+  let rightSum = 0;
+  let ln = 0;
+  let rn = 0;
+  for (let y = Math.floor(h * 0.08); y < Math.floor(h * 0.92); y += step) {
+    for (let x = 0; x < mid; x += step) {
+      const i = (y * w + x) * 4;
+      leftSum += (d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114) / 255;
+      ln++;
+    }
+    for (let x = mid; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      rightSum += (d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114) / 255;
+      rn++;
+    }
+  }
+  if (ln < 1 || rn < 1) return 0;
+  const left = leftSum / ln;
+  const right = rightSum / rn;
+  return Math.abs(left - right) / Math.max(0.18, (left + right) * 0.5);
+}
+
+/** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */
+export function countAnswerSheetFiducialsInRoi(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return 0;
+  const patchW = Math.max(8, Math.round(W * 0.085));
+  const patchH = Math.max(8, Math.round(H * 0.085));
+  const inset = Math.max(4, Math.round(W * 0.022));
+  const corners = [
+    { x: inset, y: inset },
+    { x: W - patchW - inset, y: inset },
+    { x: inset, y: H - patchH - inset },
+    { x: W - patchW - inset, y: H - patchH - inset },
+  ];
+  return countDarkCornerPatches(ctx, corners, patchW, patchH);
+}
+
+/** CLAHE + gamma para fotos de cámara con sombras antes del escaneo OMR. */
+export function prepareAnswerSheetCaptureCanvas(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  return applyOmrcheckerStylePreprocess(canvas);
+}
+
+function buildAnswerSheetCaptureVariants(
+  canvas: HTMLCanvasElement
+): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
+  const out: Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> = [
+    { canvas, preferFullSheetFirst: true },
+  ];
+  const pre = applyOmrcheckerStylePreprocess(canvas);
+  if (pre && pre !== canvas) {
+    out.push({ canvas: pre, preferFullSheetFirst: true });
+  }
+  return out;
+}
+
 /** Valida cuadrilátero detectado: 4 esquinas y área mínima dentro del ROI. */
 export function isValidMobileRoiQuad(
   quad: [Point, Point, Point, Point],
@@ -1879,7 +1963,7 @@ export function isValidMobileRoiQuad(
   }
 
   const area = quadShoelaceArea(quad);
-  if (area < roiW * roiH * 0.12) return false;
+  if (area < roiW * roiH * 0.28) return false;
 
   const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
@@ -3710,7 +3794,7 @@ export function scanCalifacilOmrSheetWithMeta(
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
     ? templateGridOnly
-      ? [{ canvas, preferFullSheetFirst: true }]
+      ? buildAnswerSheetCaptureVariants(canvas)
       : buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
