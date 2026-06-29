@@ -42,7 +42,9 @@ import {
   isCalifacilExamSheetStrict,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
+  mapRoiQuadCornersToViewportPx,
   measureRoiSheetFillRatio,
+  measureWarpedFiducialAlignment,
   MAX_WARP_ALIGNMENT_ERROR_PX,
   MOBILE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
@@ -55,6 +57,7 @@ import {
   scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
   warpAndValidateCalifacilSheet,
+  warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
@@ -69,6 +72,7 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { MobileScanViewfinderOverlay } from '@/components/mobile-scan-viewfinder-overlay';
+import type { MobileSheetCornerGuidePx } from '@/components/mobile-scan-viewfinder-overlay';
 import {
   type ExamFullscreenMode,
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -166,9 +170,11 @@ const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas consecutivos con cuadrilátero estable en ROI antes de captura automática móvil. */
-const CORNER_ALIGN_STABLE_TICKS = 3;
+const CORNER_ALIGN_STABLE_TICKS = 2;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 90;
+const MOBILE_CORNER_LOOP_MS = 75;
+/** Tolerancia extra al capturar manualmente o con fallback de esquinas. */
+const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 14;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Superpone plantilla PDF y error fiducial en px (`.env`: `NEXT_PUBLIC_CALIFACIL_OMR_DEBUG=true`). */
@@ -206,6 +212,22 @@ function warpHighResFromRoiDetection(
     fullCanvas.height
   );
   return warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, MAX_WARP_ALIGNMENT_ERROR_PX);
+}
+
+function warpMobileCaptureWithFallback(
+  fullCanvas: HTMLCanvasElement,
+  roiQuad: RoiQuad,
+  roiCapture: MobileGuideRoiCapture
+): { warped: HTMLCanvasElement | null; alignment: WarpAlignmentReport | null } {
+  const primary = warpHighResFromRoiDetection(fullCanvas, roiQuad, roiCapture);
+  if (primary.warped && primary.alignment?.ok) return primary;
+
+  const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+  if (!warped) return primary;
+
+  const alignment = measureWarpedFiducialAlignment(warped, MOBILE_WARP_FALLBACK_MAX_ERROR_PX);
+  if (alignment.ok) return { warped, alignment };
+  return { warped: primary.warped ?? warped, alignment: primary.alignment ?? alignment };
 }
 
 /** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */
@@ -451,6 +473,9 @@ export default function CalificarPage() {
   const [mobileFiducialCorners, setMobileFiducialCorners] = useState<
     [boolean, boolean, boolean, boolean]
   >([false, false, false, false]);
+  const [mobileSheetCornerGuides, setMobileSheetCornerGuides] = useState<
+    MobileSheetCornerGuidePx[] | null
+  >(null);
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
@@ -1673,7 +1698,7 @@ export default function CalificarPage() {
             }
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
-            const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas);
+            const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
             const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
             const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
@@ -1682,6 +1707,13 @@ export default function CalificarPage() {
             setMobileFiducialCount(fiducialCount);
             setMobileFiducialCorners(fiducialCorners);
             setMobileShadowWarning(shadowStrong);
+            if (quadValid && roiQuad && liveVideoLayout) {
+              setMobileSheetCornerGuides(
+                mapRoiQuadCornersToViewportPx(roiQuad, roiCapture, liveVideoLayout)
+              );
+            } else {
+              setMobileSheetCornerGuides(null);
+            }
 
             if (shadowStrong && flashSupported && !flashOn && !autotorchTriedRef.current) {
               shadowTorchTicksRef.current += 1;
@@ -1728,9 +1760,9 @@ export default function CalificarPage() {
               lastRoiQuadRef.current = roiQuad;
               setCornersAlignedView(false);
               setLiveStatus(
-                fillRatio < 0.3
-                  ? 'Acerca el teléfono: la hoja debe llenar el rectángulo.'
-                  : 'Un poco más cerca — la hoja debe ocupar casi todo el marco.'
+                fillRatio < 0.15
+                  ? 'Acerca un poco el teléfono — o usa el botón de captura manual abajo.'
+                  : 'Centra los cuadros negros en los visores blancos.'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -1741,17 +1773,9 @@ export default function CalificarPage() {
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
               setCornersAlignedView(false);
-              setLiveStatus('Centra los cuadros negros dentro de los visores blancos.');
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            if (shadowStrong && !flashOn) {
-              cornerStableTicksRef.current = 0;
-              setMobileStableTicks(0);
-              lastRoiQuadRef.current = roiQuad;
-              setCornersAlignedView(false);
-              setLiveStatus('Hay sombra sobre la hoja — muévela o activa el flash.');
+              setLiveStatus(
+                'Coloca cada cuadro negro dentro de su visor — o captura manual con el botón blanco.'
+              );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -1801,7 +1825,7 @@ export default function CalificarPage() {
                 return;
               }
               playAutoCaptureClickSound();
-              const { warped, alignment } = warpHighResFromRoiDetection(
+              const { warped, alignment } = warpMobileCaptureWithFallback(
                 fullCanvas,
                 captureQuad,
                 captureRoi
@@ -1812,14 +1836,7 @@ export default function CalificarPage() {
                 return;
               }
               if (!alignment?.ok) {
-                const errPx = alignment?.maxErrorPx ?? Number.POSITIVE_INFINITY;
-                setLiveStatus(
-                  `Alineación imprecisa (${Number.isFinite(errPx) ? errPx.toFixed(1) : '?'} px). Reencuadra.`
-                );
-                toast.error(
-                  `Homografía fuera de tolerancia (máx ${MAX_WARP_ALIGNMENT_ERROR_PX} px). Centra los cuadros negros en los visores.`
-                );
-                return;
+                toast.message('Alineación aproximada — revisa las respuestas en la siguiente pantalla.');
               }
               setScanBusy(true);
               const result = await finalizeCapturedSheetRef.current(warped, undefined, {
@@ -2532,20 +2549,30 @@ export default function CalificarPage() {
         }
       }
       if (!roiCapture || !roiQuad) {
-        toast.error('No se detectó la hoja. Alinea los visores blancos e intenta de nuevo.');
-        return;
-      }
-      const { warped, alignment } = warpHighResFromRoiDetection(fullCanvas, roiQuad, roiCapture);
-      if (!warped) {
-        toast.error('No se detectaron las 4 esquinas negras. Alinea la hoja e intenta de nuevo.');
-        return;
-      }
-      if (!alignment || !alignment.ok) {
-        const errPx = alignment?.maxErrorPx ?? Number.POSITIVE_INFINITY;
-        toast.error(
-          `Alineación imprecisa (${Number.isFinite(errPx) ? errPx.toFixed(1) : '?'} px). Límite ${MAX_WARP_ALIGNMENT_ERROR_PX} px.`
+        const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+        if (!warpedOnly) {
+          toast.error('No se detectó la hoja. Alinea los visores blancos e intenta de nuevo.');
+          return;
+        }
+        const alignmentOnly = measureWarpedFiducialAlignment(
+          warpedOnly,
+          MOBILE_WARP_FALLBACK_MAX_ERROR_PX
         );
+        playAutoCaptureClickSound();
+        const resultOnly = await finalizeCapturedSheet(warpedOnly, undefined, {
+          preWarped: true,
+          warpAlignment: alignmentOnly,
+        });
+        if (resultOnly.success) playScanCompleteChime();
         return;
+      }
+      const { warped, alignment } = warpMobileCaptureWithFallback(fullCanvas, roiQuad, roiCapture);
+      if (!warped) {
+        toast.error('No se detectaron las esquinas. Alinea la hoja e intenta de nuevo.');
+        return;
+      }
+      if (!alignment?.ok) {
+        toast.message('Alineación aproximada — revisa las respuestas.');
       }
       playAutoCaptureClickSound();
       const result = await finalizeCapturedSheet(warped, undefined, {
@@ -3064,6 +3091,7 @@ export default function CalificarPage() {
                       examTitle={exam.title}
                       sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
                       guideRect={mobileGuideRectPx}
+                      sheetCornerGuides={mobileSheetCornerGuides}
                       fillRatio={mobileSheetFillRatio}
                       stableTicks={mobileStableTicks}
                       stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}
@@ -3103,17 +3131,20 @@ export default function CalificarPage() {
                   <p className="mb-1 text-center text-sm font-semibold text-white">
                     {cornersAlignedView && mobileStableTicks >= CORNER_ALIGN_STABLE_TICKS
                       ? 'Listo — capturando'
-                      : mobileSheetFillRatio > 0 && mobileSheetFillRatio < 0.3
-                        ? 'Acerca el teléfono'
+                      : mobileSheetFillRatio > 0 && mobileSheetFillRatio < MOBILE_MIN_ROI_FILL_RATIO
+                        ? 'Acerca un poco o usa captura manual'
                         : mobileShadowWarning && !flashOn
-                          ? 'Reduce la sombra'
-                          : mobileFiducialCount > 0 && mobileFiducialCount < 4
-                          ? 'Alinea los visores blancos'
-                          : cornersAlignedView
-                            ? 'Mantén la hoja quieta'
-                            : 'Buscando hoja…'}
+                          ? 'Mejor luz — sigue alineando'
+                          : mobileFiducialCount > 0 && mobileFiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
+                            ? 'Alinea los visores con los cuadros negros'
+                            : cornersAlignedView
+                              ? 'Mantén la hoja quieta'
+                              : 'Buscando hoja…'}
                   </p>
                   <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
+                  <p className="mt-1 text-center text-[10px] text-white/70">
+                    Botón blanco abajo = captura manual si no dispara sola
+                  </p>
                 </div>
               ) : null}
             </div>

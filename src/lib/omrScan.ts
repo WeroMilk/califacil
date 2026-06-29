@@ -167,7 +167,7 @@ export type OmrScanMetaResult = {
 };
 
 /** Máximo error en píxeles entre fiduciales detectados y plantilla tras warp. */
-export const MAX_WARP_ALIGNMENT_ERROR_PX = 2;
+export const MAX_WARP_ALIGNMENT_ERROR_PX = 8;
 
 export type WarpAlignmentCornerId = 'tl' | 'tr' | 'br' | 'bl';
 
@@ -1894,9 +1894,9 @@ export function detectLargestQuadInRoiCanvas(
 }
 
 /** Mínimo de área de hoja dentro del ROI (0–1) para permitir captura automática. */
-export const MOBILE_MIN_ROI_FILL_RATIO = 0.4;
-/** Mínimo de esquinas negras fiduciales visibles en el ROI (de 4). */
-export const MOBILE_MIN_FIDUCIAL_CORNERS = 3;
+export const MOBILE_MIN_ROI_FILL_RATIO = 0.15;
+/** Mínimo de esquinas negras fiduciales visibles (de 4). */
+export const MOBILE_MIN_FIDUCIAL_CORNERS = 2;
 
 export function measureRoiSheetFillRatio(
   quad: [Point, Point, Point, Point],
@@ -1938,10 +1938,69 @@ export function estimateCanvasShadowAsymmetry(canvas: HTMLCanvasElement): number
   return Math.abs(left - right) / Math.max(0.18, (left + right) * 0.5);
 }
 
+/** Estado por esquina [TL, TR, BL, BR] de fiduciales negros en parches de esquina. */
+function detectFiducialsAtCornerPatches(
+  ctx: CanvasRenderingContext2D,
+  corners: { x: number; y: number }[],
+  patchW: number,
+  patchH: number
+): [boolean, boolean, boolean, boolean] {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+  for (let i = 0; i < 4; i++) {
+    const c = corners[i]!;
+    const px = Math.max(0, Math.min(W - patchW, Math.round(c.x - patchW / 2)));
+    const py = Math.max(0, Math.min(H - patchH, Math.round(c.y - patchH / 2)));
+    const id = ctx.getImageData(px, py, patchW, patchH);
+    let darkCount = 0;
+    let lumSum = 0;
+    const total = patchW * patchH;
+    for (let j = 0; j < id.data.length; j += 4) {
+      const lum = id.data[j]! * 0.299 + id.data[j + 1]! * 0.587 + id.data[j + 2]! * 0.114;
+      lumSum += lum;
+      if (lum < 88) darkCount++;
+    }
+    const darkFrac = darkCount / total;
+    const meanLum = lumSum / total;
+    detected[i] = darkFrac >= 0.1 && meanLum < 175;
+  }
+  return detected;
+}
+
+/** Fiduciales en las esquinas del cuadrilátero de hoja detectado (no del ROI completo). */
+export function detectAnswerSheetFiducialsAtQuad(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point]
+): [boolean, boolean, boolean, boolean] {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return [false, false, false, false];
+  const W = canvas.width;
+  const H = canvas.height;
+  const [tl, tr, br, bl] = quad;
+  const cx = (tl.x + tr.x + br.x + bl.x) * 0.25;
+  const cy = (tl.y + tr.y + br.y + bl.y) * 0.25;
+  const inset = (c: Point): Point => ({
+    x: c.x + (cx - c.x) * 0.12,
+    y: c.y + (cy - c.y) * 0.12,
+  });
+  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.07));
+  return detectFiducialsAtCornerPatches(
+    ctx,
+    [inset(tl), inset(tr), inset(bl), inset(br)],
+    patch,
+    patch
+  );
+}
+
 /** Estado por esquina [TL, TR, BL, BR] de fiduciales negros visibles en el ROI. */
 export function detectAnswerSheetFiducialsInRoi(
-  canvas: HTMLCanvasElement
+  canvas: HTMLCanvasElement,
+  sheetQuad: [Point, Point, Point, Point] | null = null
 ): [boolean, boolean, boolean, boolean] {
+  if (sheetQuad) {
+    return detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad);
+  }
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [false, false, false, false];
   const W = canvas.width;
@@ -1956,21 +2015,7 @@ export function detectAnswerSheetFiducialsInRoi(
     { x: inset, y: H - patchH - inset },
     { x: W - patchW - inset, y: H - patchH - inset },
   ];
-  const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
-  for (let i = 0; i < 4; i++) {
-    const { x, y } = corners[i]!;
-    const px = Math.max(0, Math.round(x));
-    const py = Math.max(0, Math.round(y));
-    const id = ctx.getImageData(px, py, patchW, patchH);
-    let darkCount = 0;
-    const total = patchW * patchH;
-    for (let j = 0; j < id.data.length; j += 4) {
-      const lum = id.data[j]! * 0.299 + id.data[j + 1]! * 0.587 + id.data[j + 2]! * 0.114;
-      if (lum < 95) darkCount++;
-    }
-    detected[i] = darkCount / total >= 0.07;
-  }
-  return detected;
+  return detectFiducialsAtCornerPatches(ctx, corners, patchW, patchH);
 }
 
 /** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */
@@ -2040,7 +2085,7 @@ export function isValidMobileRoiQuad(
   }
 
   const area = quadShoelaceArea(quad);
-  if (area < roiW * roiH * 0.28) return false;
+  if (area < roiW * roiH * 0.14) return false;
 
   const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
@@ -2048,7 +2093,7 @@ export function isValidMobileRoiQuad(
   const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
   const avgW = (topW + bottomW) * 0.5;
   const avgH = (leftH + rightH) * 0.5;
-  if (avgW < roiW * 0.32 || avgH < roiH * 0.32) return false;
+  if (avgW < roiW * 0.2 || avgH < roiH * 0.2) return false;
 
   const aspect = avgW / Math.max(1, avgH);
   if (aspect < 0.45 || aspect > 1.15) return false;
@@ -2062,7 +2107,7 @@ export function mobileRoiQuadsAreStable(
   next: [Point, Point, Point, Point],
   roiW: number,
   roiH: number,
-  maxCornerShiftFrac = 0.028
+  maxCornerShiftFrac = 0.04
 ): boolean {
   if (!prev) return false;
   const maxShift = Math.max(roiW, roiH) * maxCornerShiftFrac;
@@ -2087,6 +2132,31 @@ export function mapRoiQuadToFrame(
     x: roiRect.left + p.x * sx,
     y: roiRect.top + p.y * sy,
   })) as [Point, Point, Point, Point];
+}
+
+/** Esquinas del cuadrilátero de hoja → píxeles en pantalla (object-cover). */
+export function mapRoiQuadCornersToViewportPx(
+  quad: [Point, Point, Point, Point],
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox,
+  cornerBoxSize = 76
+): Array<{ left: number; top: number; size: number }> {
+  const roiW = roiCapture.roiCanvas.width;
+  const roiH = roiCapture.roiCanvas.height;
+  const frameQuad = mapRoiQuadToFrame(quad, roiCapture.roiRect, roiW, roiH);
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    roiCapture.frameW,
+    roiCapture.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  const toViewport = (p: Point) => ({
+    left: letterbox.offsetX + p.x * scale - cropX - cornerBoxSize / 2,
+    top: letterbox.offsetY + p.y * scale - cropY - cornerBoxSize / 2,
+    size: cornerBoxSize,
+  });
+  const [tl, tr, br, bl] = frameQuad;
+  return [toViewport(tl), toViewport(tr), toViewport(bl), toViewport(br)];
 }
 
 /** Escala un cuadrilátero cuando el canvas de captura se redimensionó respecto al sensor. */
