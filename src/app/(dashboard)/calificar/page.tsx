@@ -171,10 +171,10 @@ const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas consecutivos con cuadrilátero estable en ROI antes de captura automática móvil. */
-const CORNER_ALIGN_STABLE_TICKS = 80;
+const CORNER_ALIGN_STABLE_TICKS = 30;
 /** Intervalo del loop de detección de esquinas en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 100;
-/** Tiempo mínimo de espera con hoja alineada antes de capturar (≈8 s). */
+/** Tiempo mínimo de espera con hoja alineada antes de capturar (≈3 s). */
 const MOBILE_ALIGN_HOLD_MS = CORNER_ALIGN_STABLE_TICKS * MOBILE_CORNER_LOOP_MS;
 /** Tolerancia extra al capturar manualmente o con fallback de esquinas. */
 const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 14;
