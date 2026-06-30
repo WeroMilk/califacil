@@ -13,7 +13,7 @@ import {
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, Info, LayoutDashboard, Loader2, Zap } from 'lucide-react';
+import { AlertCircle, Camera, Info, LayoutDashboard, Loader2, Palette, X, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -28,7 +28,6 @@ import {
   autoOrientCalifacilSheet,
   califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
-  califacilMobileAnswerSheetGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
   detectAnswerSheetFiducialsInRoi,
@@ -44,6 +43,7 @@ import {
   diagnoseCalifacilAnswerSheetReadiness,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
+  mapRoiQuadPolygonToViewportPx,
   scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -76,7 +76,7 @@ import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
-import { MobileScanViewfinderOverlay } from '@/components/mobile-scan-viewfinder-overlay';
+import { IphoneDocumentScannerOverlay } from '@/components/iphone-document-scanner-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -127,6 +127,9 @@ import {
 } from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando' | 'ver_resultados';
+
+type FlashMode = 'auto' | 'on' | 'off';
+type LiveColorMode = 'color' | 'grayscale' | 'bw';
 
 type MobileCaptureReviewState = {
   sourceCanvas: HTMLCanvasElement;
@@ -468,16 +471,19 @@ export default function CalificarPage() {
   const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
   const [flashSupported, setFlashSupported] = useState(false);
   const [flashOn, setFlashOn] = useState(false);
+  const [flashMode, setFlashMode] = useState<FlashMode>('auto');
+  const [autoShutterEnabled, setAutoShutterEnabled] = useState(true);
+  const [liveColorMode, setLiveColorMode] = useState<LiveColorMode>('color');
+  const [liveFilterMenuOpen, setLiveFilterMenuOpen] = useState(false);
+  const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
+    Array<{ x: number; y: number }> | null
+  >(null);
   const [cameraFullscreenMode, setCameraFullscreenMode] = useState<ExamFullscreenMode>('none');
   const [liveScanGeometry, setLiveScanGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [liveScanPicks, setLiveScanPicks] = useState<(number | null)[]>([]);
   const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
-  const mobileGuideRectPx = useMemo(() => {
-    if (!liveVideoLayout) return null;
-    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
-  }, [liveVideoLayout]);
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [mobileSheetFillRatio, setMobileSheetFillRatio] = useState(0);
@@ -490,6 +496,9 @@ export default function CalificarPage() {
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const liveVideoLayoutRef = useRef<LiveVideoLetterbox | null>(null);
+  const autoShutterEnabledRef = useRef(true);
+  const flashModeRef = useRef<FlashMode>('auto');
   const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
   const mobileCameraShellRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -661,15 +670,43 @@ export default function CalificarPage() {
     return ok;
   }, []);
 
-  const toggleFlash = useCallback(async () => {
-    const next = !flashOn;
-    const ok = await setTorchEnabled(next);
-    if (!ok && next) {
-      toast.message(
-        'No se pudo activar el flash. Usa Safari, cámara trasera y buena luz sobre la hoja.'
-      );
-    }
-  }, [flashOn, setTorchEnabled]);
+  useEffect(() => {
+    liveVideoLayoutRef.current = liveVideoLayout;
+  }, [liveVideoLayout]);
+
+  useEffect(() => {
+    autoShutterEnabledRef.current = autoShutterEnabled;
+  }, [autoShutterEnabled]);
+
+  useEffect(() => {
+    flashModeRef.current = flashMode;
+  }, [flashMode]);
+
+  const applyFlashMode = useCallback(
+    async (mode: FlashMode) => {
+      if (mode === 'on') {
+        autotorchTriedRef.current = true;
+        await setTorchEnabled(true);
+      } else if (mode === 'off') {
+        autotorchTriedRef.current = true;
+        await setTorchEnabled(false);
+      } else {
+        autotorchTriedRef.current = false;
+        shadowTorchTicksRef.current = 0;
+        lowVisibilityTicksRef.current = 0;
+        await setTorchEnabled(false);
+      }
+    },
+    [setTorchEnabled]
+  );
+
+  const cycleFlashMode = useCallback(() => {
+    setFlashMode((prev) => {
+      const next: FlashMode = prev === 'auto' ? 'on' : prev === 'on' ? 'off' : 'auto';
+      void applyFlashMode(next);
+      return next;
+    });
+  }, [applyFlashMode]);
 
   const clearAutoSnapshot = useCallback(() => {
     setShowAutoSnapshot(false);
@@ -747,6 +784,8 @@ export default function CalificarPage() {
     setMobileFiducialCorners([false, false, false, false]);
     setMobileShadowWarning(false);
     setMobileStableTicks(0);
+    setMobileDocumentPolygon(null);
+    setLiveFilterMenuOpen(false);
     setLiveStatus(
       isMobile
         ? 'Coloca los cuadros negros de la hoja dentro de los visores blancos. La captura es automática.'
@@ -782,6 +821,10 @@ export default function CalificarPage() {
     autoFinalizeInProgressRef.current = false;
     setFlashSupported(false);
     setFlashOn(false);
+    setFlashMode('auto');
+    flashModeRef.current = 'auto';
+    setMobileDocumentPolygon(null);
+    setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
@@ -1801,6 +1844,14 @@ export default function CalificarPage() {
               smoothedRoiQuadRef.current = roiQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
             }
+            const layout = liveVideoLayoutRef.current;
+            if (quadValid && roiQuad && roiCapture && layout) {
+              setMobileDocumentPolygon(
+                mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
+              );
+            } else {
+              setMobileDocumentPolygon(null);
+            }
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
@@ -1813,7 +1864,7 @@ export default function CalificarPage() {
             setMobileFiducialCorners(fiducialCorners);
             setMobileShadowWarning(shadowStrong);
 
-            if (shadowStrong && flashSupported && !flashOn && !autotorchTriedRef.current) {
+            if (shadowStrong && flashSupported && flashModeRef.current === 'auto' && !flashOn && !autotorchTriedRef.current) {
               shadowTorchTicksRef.current += 1;
               if (shadowTorchTicksRef.current >= SHADOW_AUTOTORCH_TICKS) {
                 autotorchTriedRef.current = true;
@@ -1839,6 +1890,7 @@ export default function CalificarPage() {
               lowVisibilityTicksRef.current += 1;
               if (
                 flashSupported &&
+                flashModeRef.current === 'auto' &&
                 !flashOn &&
                 !autotorchTriedRef.current &&
                 lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
@@ -1920,7 +1972,11 @@ export default function CalificarPage() {
               return;
             }
 
-            if (!mobileCaptureBusyRef.current) {
+            if (
+              autoShutterEnabledRef.current &&
+              !mobileCaptureBusyRef.current &&
+              cornerStableTicksRef.current >= CORNER_ALIGN_STABLE_TICKS
+            ) {
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
               const captureRoi = lastRoiCaptureMetaRef.current;
               cornerStableTicksRef.current = 0;
@@ -1995,6 +2051,7 @@ export default function CalificarPage() {
             if (
               isMobile &&
               flashSupported &&
+              flashModeRef.current === 'auto' &&
               !flashOn &&
               !autotorchTriedRef.current &&
               lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
@@ -2147,6 +2204,7 @@ export default function CalificarPage() {
           if (
             isMobile &&
             flashSupported &&
+            flashModeRef.current === 'auto' &&
             !flashOn &&
             !autotorchTriedRef.current &&
             lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
@@ -3259,73 +3317,11 @@ export default function CalificarPage() {
           <div
             ref={mobileCameraShellRef}
             className={cn(
-              'fixed inset-0 z-[200] flex h-[100dvh] w-full max-h-[100dvh] flex-col bg-black text-white',
+              'fixed inset-0 z-[200] bg-black text-white',
               cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
               cameraFullscreenMode === 'pseudo' && '!bg-black'
             )}
-            style={{
-              paddingTop: 'env(safe-area-inset-top)',
-              paddingBottom: 'env(safe-area-inset-bottom)',
-            }}
           >
-            <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/15 px-3 py-2">
-              <div className="min-w-0 pr-2">
-                <p className="truncate text-sm font-semibold">
-                  Hoja {sheetIndex + 1} de {totalSheets}
-                </p>
-                <p className="text-[11px] text-white/70">
-                  Preguntas 1–{currentChunk.length} · Encuadra la hoja carta
-                  completa
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {isMobile ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-9 shrink-0 bg-orange-500 px-3 text-white hover:bg-orange-600"
-                    disabled={scanBusy || !cameraOpen}
-                    onClick={() => {
-                      const video = videoRef.current;
-                      if (video) triggerMobileSheetCapture(video);
-                    }}
-                  >
-                    Capturar
-                  </Button>
-                ) : null}
-                {isMobile ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      'h-9 w-9 shrink-0 text-white hover:bg-white/10 hover:text-white',
-                      flashOn && 'bg-white/15 text-amber-300'
-                    )}
-                    disabled={scanBusy}
-                    aria-label={flashOn ? 'Apagar flash' : 'Encender flash'}
-                    title={flashOn ? 'Apagar flash' : 'Encender flash'}
-                    onClick={() => void toggleFlash()}
-                  >
-                    <Zap className="h-5 w-5" aria-hidden />
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 text-white hover:bg-white/10 hover:text-white"
-                  disabled={scanBusy}
-                  onClick={() => {
-                    stopLiveCamera();
-                    setPhase('elegir');
-                  }}
-                >
-                  Volver
-                </Button>
-              </div>
-            </div>
-
             <input
               ref={galleryInputRef}
               type="file"
@@ -3334,12 +3330,12 @@ export default function CalificarPage() {
               onChange={handleGalleryFile}
             />
 
-            <div ref={mobileVideoViewportRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+            <div ref={mobileVideoViewportRef} className="relative h-[100dvh] w-full overflow-hidden bg-black">
               {!cameraOpen ? (
                 <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
-                  <div className="flex items-center gap-2 text-sm text-orange-100">
+                  <div className="flex items-center gap-2 text-sm text-white/80">
                     <Loader2 className="h-5 w-5 animate-spin" />
-                    Abriendo cámara en vivo…
+                    Abriendo cámara…
                   </div>
                   <Button
                     type="button"
@@ -3352,7 +3348,7 @@ export default function CalificarPage() {
                 </div>
               ) : (
                 <>
-                  <div className="relative h-full min-h-0 w-full">
+                  <div className="relative h-full w-full">
                     <div
                       className="absolute overflow-hidden bg-black"
                       style={
@@ -3378,103 +3374,149 @@ export default function CalificarPage() {
                         )}
                       />
                     </div>
-                    <CalifacilLiveScanOverlay
-                      geometry={liveScanGeometry}
-                      picks={liveScanPicks}
-                      lockedRows={liveScanLockedRows}
-                      ambiguousRows={liveScanAmbiguousRows}
-                      rowCount={currentChunk.length}
-                      letterbox={liveVideoLayout}
-                      visible={liveShowBubbleOverlay}
-                    />
-                    <MobileScanViewfinderOverlay
-                      aligned={cornersAlignedView}
-                      examTitle={exam.title}
-                      sheetLabel={`Hoja ${sheetIndex + 1} de ${totalSheets}`}
-                      guideRect={mobileGuideRectPx}
-                      fillRatio={mobileSheetFillRatio}
-                      stableTicks={mobileStableTicks}
-                      stableTicksRequired={CORNER_ALIGN_STABLE_TICKS}
-                      alignHoldMs={MOBILE_ALIGN_HOLD_MS}
-                      shadowWarning={mobileShadowWarning}
-                      fiducialCount={mobileFiducialCount}
-                      fiducialCorners={mobileFiducialCorners}
+                    <IphoneDocumentScannerOverlay
+                      documentPolygon={mobileDocumentPolygon}
+                      detected={cornersAlignedView}
                     />
                   </div>
+
+                  <button
+                    type="button"
+                    className="absolute left-3 z-[70] flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm"
+                    style={{ top: 'max(0.65rem, env(safe-area-inset-top, 0px))' }}
+                    aria-label="Cerrar cámara"
+                    disabled={scanBusy}
+                    onClick={() => {
+                      stopLiveCamera();
+                      setPhase('elegir');
+                    }}
+                  >
+                    <X className="h-5 w-5" strokeWidth={2.5} />
+                  </button>
+
                   {scanBusy ? (
-                    <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/35">
+                    <div className="pointer-events-none absolute inset-0 z-[65] flex items-center justify-center bg-black/35">
                       <Loader2
-                        className="h-10 w-10 animate-spin text-orange-400 motion-reduce:animate-none [animation-duration:750ms]"
+                        className="h-10 w-10 animate-spin text-white motion-reduce:animate-none [animation-duration:750ms]"
                         aria-hidden
                       />
                     </div>
                   ) : null}
-                  <button
-                    type="button"
-                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-[60] flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-orange-400 bg-white shadow-[0_4px_24px_rgba(0,0,0,0.45)] disabled:opacity-60"
-                    style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-                    disabled={scanBusy || Boolean(mobileCaptureReview)}
-                    aria-label="Capturar y calificar"
-                    title="Capturar y calificar ahora"
-                    onPointerUp={(e) => {
-                      if (e.pointerType === 'mouse' && e.button !== 0) return;
-                      e.preventDefault();
-                      captureMobilePhotoManually();
+
+                  <div
+                    className="absolute inset-x-0 bottom-0 z-[70] flex flex-col items-center pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-8"
+                    style={{
+                      background:
+                        'linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.35) 55%, transparent 100%)',
                     }}
                   >
-                    <span className="pointer-events-none block h-[3.25rem] w-[3.25rem] rounded-full bg-white ring-2 ring-orange-500/80" />
-                  </button>
-                  <div className="absolute bottom-[max(6.75rem,calc(env(safe-area-inset-bottom,0px)+5.75rem))] left-0 right-0 z-[58] flex items-end justify-center gap-10 px-6">
+                    <div className="mb-3 flex w-full max-w-sm items-end justify-around px-6">
+                      <button
+                        type="button"
+                        className="relative flex flex-col items-center gap-1 text-[11px] font-medium text-white"
+                        disabled={scanBusy || Boolean(mobileCaptureReview)}
+                        aria-label="Flash"
+                        onClick={() => cycleFlashMode()}
+                      >
+                        <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
+                          <Zap
+                            className={cn(
+                              'h-5 w-5',
+                              (flashOn || flashMode === 'on') && 'fill-amber-300 text-amber-300'
+                            )}
+                          />
+                          {flashMode === 'auto' ? (
+                            <span className="absolute -bottom-0.5 -right-0.5 rounded bg-black/80 px-1 text-[9px] font-bold">
+                              A
+                            </span>
+                          ) : null}
+                        </span>
+                        Flash
+                      </button>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          className="flex flex-col items-center gap-1 text-[11px] font-medium text-white"
+                          disabled={scanBusy || Boolean(mobileCaptureReview)}
+                          aria-label="Filtros"
+                          onClick={() => setLiveFilterMenuOpen((v) => !v)}
+                        >
+                          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
+                            <Palette className="h-5 w-5" />
+                          </span>
+                          Filtros
+                        </button>
+                        {liveFilterMenuOpen ? (
+                          <div className="absolute bottom-full left-1/2 z-20 mb-2 w-36 -translate-x-1/2 rounded-xl border border-white/10 bg-black/90 p-1 shadow-lg">
+                            {(
+                              [
+                                ['color', 'Color'],
+                                ['grayscale', 'Escala grises'],
+                                ['bw', 'Blanco y negro'],
+                              ] as const
+                            ).map(([id, label]) => (
+                              <button
+                                key={id}
+                                type="button"
+                                className={cn(
+                                  'block w-full rounded-lg px-3 py-2 text-left text-sm text-white',
+                                  liveColorMode === id ? 'bg-white/15 font-semibold' : 'hover:bg-white/10'
+                                )}
+                                onClick={() => {
+                                  setLiveColorMode(id);
+                                  setLiveFilterMenuOpen(false);
+                                }}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="relative flex flex-col items-center gap-1 text-[11px] font-medium text-white"
+                        disabled={scanBusy || Boolean(mobileCaptureReview)}
+                        aria-label="Obturador automático"
+                        onClick={() => setAutoShutterEnabled((v) => !v)}
+                      >
+                        <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
+                          <Camera className="h-5 w-5" />
+                          {autoShutterEnabled ? (
+                            <span className="absolute -bottom-0.5 -right-0.5 rounded bg-black/80 px-1 text-[9px] font-bold">
+                              A
+                            </span>
+                          ) : null}
+                        </span>
+                        Obturador
+                      </button>
+                    </div>
+
+                    <p className="mb-3 rounded-full bg-black/45 px-3 py-1 text-xs font-medium text-white/95 backdrop-blur-sm">
+                      {liveColorMode === 'color'
+                        ? 'Color'
+                        : liveColorMode === 'grayscale'
+                          ? 'Escala grises'
+                          : 'Blanco y negro'}
+                    </p>
+
                     <button
                       type="button"
-                      className={cn(
-                        'flex flex-col items-center gap-0.5 text-[11px] font-medium text-white/95',
-                        flashOn && 'text-amber-300'
-                      )}
+                      className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full bg-white shadow-[0_2px_16px_rgba(0,0,0,0.45)] disabled:opacity-60"
+                      style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                       disabled={scanBusy || Boolean(mobileCaptureReview)}
-                      aria-label={flashOn ? 'Apagar flash' : 'Encender flash'}
-                      onClick={() => void toggleFlash()}
+                      aria-label="Capturar"
+                      onPointerUp={(e) => {
+                        if (e.pointerType === 'mouse' && e.button !== 0) return;
+                        e.preventDefault();
+                        captureMobilePhotoManually();
+                      }}
                     >
-                      <span
-                        className={cn(
-                          'flex h-11 w-11 items-center justify-center rounded-full bg-black/45 backdrop-blur-sm',
-                          flashOn && 'bg-amber-500/35 ring-1 ring-amber-300/80'
-                        )}
-                      >
-                        <Zap className={cn('h-5 w-5', flashOn && 'fill-current')} />
-                      </span>
-                      Flash
+                      <span className="block h-[3.85rem] w-[3.85rem] rounded-full bg-white" />
                     </button>
                   </div>
                 </>
               )}
-              {cameraOpen ? (
-                <div
-                  className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] pt-6"
-                  style={{
-                    background:
-                      'linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.45) 55%, transparent 100%)',
-                  }}
-                >
-                  <p className="mb-1 text-center text-sm font-semibold text-white">
-                    {scanBusy
-                      ? 'Escaneando y calificando…'
-                      : cornersAlignedView && mobileStableTicks >= CORNER_ALIGN_STABLE_TICKS
-                      ? 'Auto-captura en curso…'
-                      : cornersAlignedView && mobileStableTicks > 0
-                        ? `Hoja detectada — auto en ~${Math.max(
-                            1,
-                            Math.ceil(
-                              ((CORNER_ALIGN_STABLE_TICKS - mobileStableTicks) *
-                                MOBILE_CORNER_LOOP_MS) /
-                                1000
-                            )
-                          )} s o pulsa capturar`
-                        : 'Encuadra la hoja y pulsa el botón blanco para calificar'}
-                  </p>
-                  <p className="text-center text-xs leading-snug text-white/90">{liveStatus}</p>
-                </div>
-              ) : null}
             </div>
           </div>,
           document.body
@@ -3488,6 +3530,7 @@ export default function CalificarPage() {
             frameQuad={mobileCaptureReview.frameQuad}
             initialWarped={mobileCaptureReview.warped}
             initialAlignment={mobileCaptureReview.alignment}
+            initialFilter={liveColorMode}
             busy={scanBusy}
             onRetake={retakeMobileCaptureReview}
             onConfirm={(warped, alignment) => void confirmMobileCaptureReview(warped, alignment)}

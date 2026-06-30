@@ -32,6 +32,7 @@ type Props = {
   frameQuad: ScanReviewQuad;
   initialWarped: HTMLCanvasElement;
   initialAlignment: WarpAlignmentReport | null;
+  initialFilter?: ScanReviewFilter;
   busy?: boolean;
   onRetake: () => void;
   onConfirm: (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => void;
@@ -122,12 +123,13 @@ export function MobileSheetScanReview({
   frameQuad,
   initialWarped,
   initialAlignment,
+  initialFilter = 'color',
   busy = false,
   onRetake,
   onConfirm,
 }: Props) {
   const [adjustMode, setAdjustMode] = useState(false);
-  const [filter, setFilter] = useState<ScanReviewFilter>('color');
+  const [filter, setFilter] = useState<ScanReviewFilter>(initialFilter);
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [sourceQuad, setSourceQuad] = useState<ScanReviewQuad>(() => cloneQuad(frameQuad));

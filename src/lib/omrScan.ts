@@ -2401,6 +2401,29 @@ export function mapRoiQuadCornersToViewportPx(
   return [toViewport(tl), toViewport(tr), toViewport(bl), toViewport(br)];
 }
 
+/** Cuadrilátero detectado → polígono en píxeles de pantalla (object-cover). */
+export function mapRoiQuadPolygonToViewportPx(
+  quad: [Point, Point, Point, Point],
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox
+): Array<{ x: number; y: number }> {
+  const roiW = roiCapture.roiCanvas.width;
+  const roiH = roiCapture.roiCanvas.height;
+  const frameQuad = mapRoiQuadToFrame(quad, roiCapture.roiRect, roiW, roiH);
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    roiCapture.frameW,
+    roiCapture.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  const toViewport = (p: Point) => ({
+    x: letterbox.offsetX + p.x * scale - cropX,
+    y: letterbox.offsetY + p.y * scale - cropY,
+  });
+  const [tl, tr, br, bl] = frameQuad;
+  return [toViewport(tl), toViewport(tr), toViewport(br), toViewport(bl)];
+}
+
 /** Escala un cuadrilátero cuando el canvas de captura se redimensionó respecto al sensor. */
 export function scaleQuadToCanvas(
   quad: [Point, Point, Point, Point],
