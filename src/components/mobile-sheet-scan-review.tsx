@@ -602,7 +602,7 @@ export function MobileSheetScanReview({
                     <button
                       key={i}
                       type="button"
-                      className="absolute z-[4] h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-white bg-orange-500 shadow-lg active:scale-95"
+                      className="absolute z-[4] h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-orange-500 shadow-lg active:scale-95"
                       style={{
                         left: `${nx * 100}%`,
                         top: `${ny * 100}%`,
