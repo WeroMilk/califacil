@@ -3309,6 +3309,135 @@ function pickUniformTableLines(
   return best;
 }
 
+function lineYsHaveUniformSpacing(lineYs: number[], tolerance = 0.2): boolean {
+  if (lineYs.length < 3) return false;
+  const gaps: number[] = [];
+  for (let i = 1; i < lineYs.length; i++) gaps.push(lineYs[i]! - lineYs[i - 1]!);
+  const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  if (avg < 2) return false;
+  return gaps.every((g) => Math.abs(g - avg) <= avg * tolerance);
+}
+
+type SweptAnswerSheetGrid = {
+  lineYs: number[];
+  colEdges: number[];
+};
+
+/**
+ * Busca la tabla de respuestas en toda la imagen (útil cuando el warp no coincide con la plantilla carta).
+ */
+function sweepAnswerSheetTableGrid(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  rowCount: number,
+  columns: number
+): SweptAnswerSheetGrid | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const profiles: OmrGeometryProfile[] = [
+    {
+      bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
+      titleStripRatioOfBand: CALIFACIL_OMR_SCAN.titleStripRatioOfBand,
+      qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
+    },
+    { bottomBandRatio: 0.52, titleStripRatioOfBand: 0.2, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.58, titleStripRatioOfBand: 0.17, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.65, titleStripRatioOfBand: 0.14, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.1, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+  ];
+  const shifts = [0, -6, 6, -8, 8, -12, 12, -18, 18, -24, 24];
+
+  let best: SweptAnswerSheetGrid | null = null;
+  let bestScore = -1;
+
+  for (const profile of profiles) {
+    const bandH = height * profile.bottomBandRatio;
+    const bandTop = height - bandH;
+    const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
+    const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
+    const qNumW = width * profile.qnumWidthRatio;
+    for (const colShift of shifts) {
+      const bubbleAreaLeft = Math.max(2, Math.min(width * 0.48, Math.round(qNumW + colShift)));
+      const bubbleAreaW = Math.max(24, width - bubbleAreaLeft - Math.round(width * 0.035));
+      const lineYs = refineOmrRowBoundariesFromTableLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        dataTop,
+        dataHeight,
+        rows
+      );
+      if (!lineYs || lineYs.length !== rows + 1) continue;
+      const rowH = (lineYs[rows]! - lineYs[0]!) / rows;
+      let colEdges =
+        inferColumnEdgesFromVerticalLines(
+          data,
+          width,
+          height,
+          bubbleAreaLeft,
+          bubbleAreaW,
+          cols,
+          lineYs[0]!,
+          rowH
+        ) ??
+        inferColumnEdgesGlobalFromVerticalLines(
+          data,
+          width,
+          height,
+          cols,
+          lineYs[0]!,
+          rowH
+        );
+      if (!colEdges || colEdges.length !== cols + 1) {
+        colEdges = Array.from({ length: cols + 1 }, (_, c) =>
+          c === cols
+            ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+            : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+        );
+      }
+      const span = lineYs[rows]! - lineYs[0]!;
+      const score = span + (lineYsHaveUniformSpacing(lineYs) ? 120 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { lineYs, colEdges };
+      }
+    }
+  }
+  return best;
+}
+
+function buildCellsFromTableLines(
+  lineYs: number[],
+  columnEdges: number[],
+  width: number,
+  height: number,
+  cols: number
+): CalifacilOmrScanGeometry {
+  const rows = lineYs.length - 1;
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const yRowTop = lineYs[row]!;
+    const yRowBot = lineYs[row + 1]!;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = columnEdges[c]!;
+      const x1 = columnEdges[c + 1]!;
+      rowRects.push({
+        x: x0 / width,
+        y: yRowTop / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (yRowBot - yRowTop) / height),
+      });
+    }
+    cells.push(rowRects);
+  }
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
 /**
  * Detecta líneas horizontales de la rejilla impresa y devuelve sus y (N+1 bordes → N filas).
  */
@@ -3621,10 +3750,11 @@ export function buildRegisteredAnswerSheetGeometry(
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   let lineYs: number[] | null = null;
   let colEdges: number[] | null = null;
+  let imageData: Uint8ClampedArray | null = null;
   if (ctx) {
-    const { data } = ctx.getImageData(0, 0, width, height);
+    imageData = ctx.getImageData(0, 0, width, height).data;
     lineYs = refineOmrRowBoundariesFromTableLines(
-      data,
+      imageData,
       width,
       height,
       bubbleAreaLeft,
@@ -3633,7 +3763,7 @@ export function buildRegisteredAnswerSheetGeometry(
       rows
     );
     colEdges = inferColumnEdgesFromVerticalLines(
-      data,
+      imageData,
       width,
       height,
       bubbleAreaLeft,
@@ -3654,9 +3784,10 @@ export function buildRegisteredAnswerSheetGeometry(
       if (dev > rowH * 0.92) rowAligned = false;
     }
     avgDev /= rows + 1;
-    if (!rowAligned) {
+    const uniformRows = lineYsHaveUniformSpacing(lineYs);
+    if (!rowAligned && !uniformRows) {
       lineYs = null;
-    } else {
+    } else if (rowAligned) {
       const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
       lineYs = lineYs.map((y, i) => {
         const expected = dataTop + i * rowH;
@@ -3665,6 +3796,13 @@ export function buildRegisteredAnswerSheetGeometry(
     }
   } else {
     lineYs = null;
+  }
+
+  if (!lineYs && imageData) {
+    const swept = sweepAnswerSheetTableGrid(imageData, width, height, rowCount, columns);
+    if (swept) {
+      return buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+    }
   }
 
   if (colEdges && colEdges.length === cols + 1) {
@@ -5063,7 +5201,11 @@ export function scanWarpedMobileAnswerSheetFast(
       controlNumber: null,
     };
   }
-  const geometry = buildAnswerSheetOmrGeometry(rows, columns, warped.width, warped.height);
+  let geometry = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
+  const gridValidation = validateAnswerSheetGeometry(geometry, rows);
+  if (!gridValidation.ok) {
+    geometry = buildAnswerSheetOmrGeometry(rows, columns, warped.width, warped.height);
+  }
   const thresholds: ScanThresholds = {
     minMarkDarkness: 0.072,
     minBestVsSecondGap: 0.038,

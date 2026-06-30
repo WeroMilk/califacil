@@ -1538,8 +1538,9 @@ export default function CalificarPage() {
   }, [isMobile, phase]);
 
   useLayoutEffect(() => {
-    if (!cameraOpen) return;
+    if (!cameraOpen || mobileCaptureReview) return;
     void attachStreamToVideo();
+    updateLiveVideoLayout();
     const video = videoRef.current;
     if (!video) return;
     const onLoadedMetadata = () => {
@@ -1550,7 +1551,7 @@ export default function CalificarPage() {
     return () => {
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
-  }, [attachStreamToVideo, cameraOpen, updateLiveVideoLayout]);
+  }, [attachStreamToVideo, cameraOpen, mobileCaptureReview, updateLiveVideoLayout]);
 
   useEffect(() => {
     if (!cameraOpen) {
@@ -2815,7 +2816,14 @@ export default function CalificarPage() {
         }
         const refined = refineWarpedCalifacilSheet(warpedOnly, {
           maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fast: true,
+          fast: false,
+        });
+        warped = refined.canvas;
+        alignment = refined.alignment;
+      } else {
+        const refined = refineWarpedCalifacilSheet(warped, {
+          maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          fast: false,
         });
         warped = refined.canvas;
         alignment = refined.alignment;
@@ -2846,7 +2854,17 @@ export default function CalificarPage() {
     setReviewScanning(false);
     setReviewStatus(null);
     setLiveStatus('Encuadra la hoja y pulsa el botón blanco para calificar');
-  }, []);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (streamRef.current) {
+          void attachStreamToVideo();
+          updateLiveVideoLayout();
+        } else if (phaseRef.current === 'capturar') {
+          void startLiveCamera({ skipPhaseGuard: true });
+        }
+      });
+    });
+  }, [attachStreamToVideo, startLiveCamera, updateLiveVideoLayout]);
 
   const previewMobileCaptureAlignment = useCallback(
     async (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => {
@@ -2864,7 +2882,7 @@ export default function CalificarPage() {
       try {
         await yieldForSpinnerPaint();
         if (scanGen !== reviewScanGenRef.current) return;
-        const scanCanvas = downscaleCanvasForOmrScan(warped, 960);
+        const scanCanvas = downscaleCanvasForOmrScan(warped, 1200);
         const meta = scanWarpedMobileAnswerSheetFast(scanCanvas, omrCols, omrRowCount);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);

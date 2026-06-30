@@ -232,7 +232,7 @@ export function MobileSheetScanReview({
     (quad: ScanReviewQuad) => {
       const next = warpFromQuad(sourceCanvas, quad);
       if (!next) return;
-      const refined = refineWarpedCalifacilSheet(next, { maxAllowedPx: 22, fast: true });
+      const refined = refineWarpedCalifacilSheet(next, { maxAllowedPx: 22, fast: false });
       setWarped(refined.canvas);
       setAlignment(refined.alignment);
     },
