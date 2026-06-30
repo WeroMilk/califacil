@@ -43,6 +43,8 @@ import {
   isCalifacilAnswerSheetReadyForGrading,
   diagnoseCalifacilAnswerSheetReadiness,
   isValidMobileRoiQuad,
+  mapRoiQuadToFrame,
+  scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
   MAX_WARP_ALIGNMENT_ERROR_PX,
@@ -64,6 +66,7 @@ import {
 } from '@/lib/omrScan';
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
 import { warpCalifacilMobileCaptureFast } from '@/lib/omr/pipeline';
+import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import {
   CalifacilLiveScanOverlay,
   type LiveVideoLetterbox,
@@ -74,6 +77,7 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { MobileScanViewfinderOverlay } from '@/components/mobile-scan-viewfinder-overlay';
+import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -123,6 +127,13 @@ import {
 } from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando' | 'ver_resultados';
+
+type MobileCaptureReviewState = {
+  sourceCanvas: HTMLCanvasElement;
+  frameQuad: RoiQuad;
+  warped: HTMLCanvasElement;
+  alignment: WarpAlignmentReport | null;
+};
 
 type MobileSheetSnapshot = {
   sheetIndex: number;
@@ -212,6 +223,36 @@ function warpMobileCaptureWithFallback(
     maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
   });
   return { warped: result.warped, alignment: result.alignment };
+}
+
+function defaultDocumentQuad(canvasW: number, canvasH: number): RoiQuad {
+  const m = 0.035;
+  return [
+    { x: canvasW * m, y: canvasH * m },
+    { x: canvasW * (1 - m), y: canvasH * m },
+    { x: canvasW * (1 - m), y: canvasH * (1 - m) },
+    { x: canvasW * m, y: canvasH * (1 - m) },
+  ];
+}
+
+function frameQuadOnFullCanvas(
+  roiQuad: RoiQuad,
+  roiCapture: MobileGuideRoiCapture,
+  fullCanvas: HTMLCanvasElement
+): RoiQuad {
+  const frameQuad = mapRoiQuadToFrame(
+    roiQuad,
+    roiCapture.roiRect,
+    roiCapture.roiCanvas.width,
+    roiCapture.roiCanvas.height
+  );
+  return scaleQuadToCanvas(
+    frameQuad,
+    roiCapture.frameW,
+    roiCapture.frameH,
+    fullCanvas.width,
+    fullCanvas.height
+  );
 }
 
 /** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */
@@ -508,7 +549,11 @@ export default function CalificarPage() {
   const [mobileSheetSnapshots, setMobileSheetSnapshots] = useState<MobileSheetSnapshot[]>([]);
   const [mobileResultsDraft, setMobileResultsDraft] = useState<Record<string, string>>({});
   const [resultsSheetIdx, setResultsSheetIdx] = useState(0);
+  const [mobileCaptureReview, setMobileCaptureReview] = useState<MobileCaptureReviewState | null>(
+    null
+  );
   const mobileCaptureBusyRef = useRef(false);
+  const mobileReviewOpenRef = useRef(false);
   const triggerMobileSheetCaptureRef = useRef<
     (
       video: HTMLVideoElement,
@@ -604,31 +649,25 @@ export default function CalificarPage() {
   const canGradeStudents = virtualKeyComplete;
 
   const setTorchEnabled = useCallback(async (enabled: boolean) => {
-    const track = streamRef.current?.getVideoTracks?.()[0];
-    if (!track || typeof track.applyConstraints !== 'function') return false;
-    const attempts: MediaTrackConstraints[] = [
-      { advanced: [{ torch: enabled } as MediaTrackConstraintSet] },
-      { torch: enabled } as MediaTrackConstraints,
-      { advanced: [{ fillLightMode: enabled ? 'flash' : 'off' } as MediaTrackConstraintSet] },
-    ];
-    for (const constraints of attempts) {
-      try {
-        await track.applyConstraints(constraints);
-        setFlashOn(enabled);
-        setFlashSupported(true);
-        return true;
-      } catch {
-        // Siguiente método (Android / iOS varían).
-      }
+    const ok = await setCameraTorch({
+      streamRef,
+      videoEl: videoRef.current,
+      enabled,
+    });
+    if (ok) {
+      setFlashOn(enabled);
+      setFlashSupported(true);
     }
-    return false;
+    return ok;
   }, []);
 
   const toggleFlash = useCallback(async () => {
     const next = !flashOn;
     const ok = await setTorchEnabled(next);
     if (!ok && next) {
-      toast.message('Este navegador no permite activar el flash. Mejora la luz o acércate a una lámpara.');
+      toast.message(
+        'No se pudo activar el flash. Usa Safari, cámara trasera y buena luz sobre la hoja.'
+      );
     }
   }, [flashOn, setTorchEnabled]);
 
@@ -725,6 +764,8 @@ export default function CalificarPage() {
     void exitExamFullscreenSafe();
     setCameraFullscreenMode('none');
     void setTorchEnabled(false);
+    mobileReviewOpenRef.current = false;
+    setMobileCaptureReview(null);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -1651,11 +1692,8 @@ export default function CalificarPage() {
       resetLiveReadings();
       setCameraOpen(true);
       const track = stream.getVideoTracks()[0];
-      const capabilities =
-        typeof track?.getCapabilities === 'function'
-          ? (track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean })
-          : null;
-      const supportsTorch = Boolean(capabilities?.torch);
+      const supportsTorch =
+        trackReportsTorchCapability(track) || (isMobile && Boolean(track));
       setFlashSupported(isMobile || supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
@@ -1694,6 +1732,10 @@ export default function CalificarPage() {
         }
         if (isMobile && mobileCaptureBusyRef.current) {
           scheduleLiveScan(200);
+          return;
+        }
+        if (isMobile && mobileReviewOpenRef.current) {
+          scheduleLiveScan(300);
           return;
         }
 
@@ -2669,6 +2711,32 @@ export default function CalificarPage() {
         alignment = refined.alignment;
       }
 
+      const frameQuad =
+        roiCapture && roiQuad
+          ? frameQuadOnFullCanvas(roiQuad, roiCapture, fullCanvas)
+          : defaultDocumentQuad(fullCanvas.width, fullCanvas.height);
+
+      playAutoCaptureClickSound();
+      mobileReviewOpenRef.current = true;
+      setMobileCaptureReview({
+        sourceCanvas: fullCanvas,
+        frameQuad,
+        warped,
+        alignment,
+      });
+      setLiveStatus('Ajusta el escaneo y pulsa ✓ para calificar');
+    },
+    [omrCols, omrRowCount]
+  );
+
+  const retakeMobileCaptureReview = useCallback(() => {
+    mobileReviewOpenRef.current = false;
+    setMobileCaptureReview(null);
+    setLiveStatus('Encuadra la hoja y pulsa el botón blanco para calificar');
+  }, []);
+
+  const confirmMobileCaptureReview = useCallback(
+    async (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => {
       if (!isCalifacilAnswerSheetReadyForGrading(warped, omrCols, omrRowCount, alignment)) {
         const { issues } = diagnoseCalifacilAnswerSheetReadiness(
           warped,
@@ -2677,24 +2745,27 @@ export default function CalificarPage() {
           alignment
         );
         const detail =
-          issues.length > 0
-            ? issues.slice(0, 2).join('; ')
-            : 'Apunta a la hoja impresa con esquinas y franjas negras.';
+          issues.length > 0 ? issues.join('; ') : 'Revisa el ajuste de esquinas.';
         toast.error(`No es una hoja CaliFacil válida. ${detail}`);
         setLiveStatus(`Sin hoja válida: ${detail}`);
         return;
       }
-
-      playAutoCaptureClickSound();
-      const result = await finalizeCapturedSheet(warped, undefined, {
-        preWarped: true,
-        warpAlignment: alignment,
-      });
-      if (result.success) {
-        playScanCompleteChime();
-        stopLiveCamera();
-      } else {
-        setLiveStatus('No se pudo calificar. Pulsa Capturar e intenta de nuevo.');
+      setScanBusy(true);
+      mobileReviewOpenRef.current = false;
+      setMobileCaptureReview(null);
+      try {
+        const result = await finalizeCapturedSheet(warped, undefined, {
+          preWarped: true,
+          warpAlignment: alignment,
+        });
+        if (result.success) {
+          playScanCompleteChime();
+          stopLiveCamera();
+        } else {
+          setLiveStatus('No se pudo calificar. Pulsa Capturar e intenta de nuevo.');
+        }
+      } finally {
+        setScanBusy(false);
       }
     },
     [finalizeCapturedSheet, omrCols, omrRowCount, stopLiveCamera]
@@ -3342,7 +3413,7 @@ export default function CalificarPage() {
                     type="button"
                     className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-[60] flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-orange-400 bg-white shadow-[0_4px_24px_rgba(0,0,0,0.45)] disabled:opacity-60"
                     style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-                    disabled={scanBusy}
+                    disabled={scanBusy || Boolean(mobileCaptureReview)}
                     aria-label="Capturar y calificar"
                     title="Capturar y calificar ahora"
                     onPointerUp={(e) => {
@@ -3353,6 +3424,28 @@ export default function CalificarPage() {
                   >
                     <span className="pointer-events-none block h-[3.25rem] w-[3.25rem] rounded-full bg-white ring-2 ring-orange-500/80" />
                   </button>
+                  <div className="absolute bottom-[max(6.75rem,calc(env(safe-area-inset-bottom,0px)+5.75rem))] left-0 right-0 z-[58] flex items-end justify-center gap-10 px-6">
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex flex-col items-center gap-0.5 text-[11px] font-medium text-white/95',
+                        flashOn && 'text-amber-300'
+                      )}
+                      disabled={scanBusy || Boolean(mobileCaptureReview)}
+                      aria-label={flashOn ? 'Apagar flash' : 'Encender flash'}
+                      onClick={() => void toggleFlash()}
+                    >
+                      <span
+                        className={cn(
+                          'flex h-11 w-11 items-center justify-center rounded-full bg-black/45 backdrop-blur-sm',
+                          flashOn && 'bg-amber-500/35 ring-1 ring-amber-300/80'
+                        )}
+                      >
+                        <Zap className={cn('h-5 w-5', flashOn && 'fill-current')} />
+                      </span>
+                      Flash
+                    </button>
+                  </div>
                 </>
               )}
               {cameraOpen ? (
@@ -3384,6 +3477,21 @@ export default function CalificarPage() {
               ) : null}
             </div>
           </div>,
+          document.body
+        )}
+
+      {mobileCaptureReview &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <MobileSheetScanReview
+            sourceCanvas={mobileCaptureReview.sourceCanvas}
+            frameQuad={mobileCaptureReview.frameQuad}
+            initialWarped={mobileCaptureReview.warped}
+            initialAlignment={mobileCaptureReview.alignment}
+            busy={scanBusy}
+            onRetake={retakeMobileCaptureReview}
+            onConfirm={(warped, alignment) => void confirmMobileCaptureReview(warped, alignment)}
+          />,
           document.body
         )}
 
