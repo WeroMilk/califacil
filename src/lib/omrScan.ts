@@ -4271,7 +4271,7 @@ function sweepAnswerSheetGridInNormFrame(
           const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
           const read = readAnswerSheetPicksFromTemplateGeometry(
             canvas,
-            tightenGeometryCellsForSampling(geom),
+            geometryCellsForBubbleSampling(geom),
             FRAME_GRID_SCAN_THRESHOLDS,
             rows,
             cols
@@ -4376,7 +4376,7 @@ function buildTemplateAlignedGeometryInNormFrame(
   const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
   const read = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
-    tightenGeometryCellsForSampling(geom),
+    geometryCellsForBubbleSampling(geom),
     FRAME_GRID_SCAN_THRESHOLDS,
     rows,
     cols
@@ -4452,19 +4452,46 @@ export function buildAnswerSheetOmrGeometryInNormRect(
   return buildUniformBubbleGridInNormFrame(frame, rowCount, columns, width, height);
 }
 
-/** Reduce celdas al centro (muestreo de burbuja) sin buscar píxeles oscuros en franjas. */
-function tightenGeometryCellsForSampling(
-  geometry: CalifacilOmrScanGeometry,
-  shrink = 0.44
+/**
+ * Cuadrícula de calificación anclada al marco naranja (escala al mover o redimensionar el marco).
+ */
+export function buildAnswerSheetGradingGeometryFromNormFrame(
+  frame: OmrNormRect,
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number
 ): CalifacilOmrScanGeometry {
-  const pad = (1 - shrink) / 2;
+  const base = buildUniformBubbleGridInNormFrame(
+    frame,
+    rowCount,
+    columns,
+    imageWidth,
+    imageHeight
+  );
+  return geometryCellsForBubbleSampling(base);
+}
+
+/** Expansión de celda para muestreo (más alto en Y por deriva vertical del warp). */
+const CALIFACIL_OMR_CELL_SAMPLE_EXPAND_X = 0.14;
+const CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y = 0.34;
+
+/**
+ * Amplía cada celda para muestrear burbujas con margen extra (especialmente en altura).
+ */
+function geometryCellsForBubbleSampling(
+  geometry: CalifacilOmrScanGeometry,
+  expandX = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_X,
+  expandY = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y
+): CalifacilOmrScanGeometry {
   const cells = geometry.cells.map((row) =>
-    row.map((cell) => ({
-      x: cell.x + cell.w * pad,
-      y: cell.y + cell.h * pad,
-      w: cell.w * shrink,
-      h: cell.h * shrink,
-    }))
+    row.map((cell) => {
+      const x = Math.max(0, cell.x - cell.w * (expandX / 2));
+      const y = Math.max(0, cell.y - cell.h * (expandY / 2));
+      const w = Math.min(1 - x, cell.w * (1 + expandX));
+      const h = Math.min(1 - y, cell.h * (1 + expandY));
+      return { x, y, w, h };
+    })
   );
   return { ...geometry, cells };
 }
@@ -4495,7 +4522,7 @@ function omrMetaFromGeometry(
   columns: number
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
-  const readGeometry = tightenGeometryCellsForSampling(geometry);
+  const readGeometry = geometryCellsForBubbleSampling(geometry);
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
     readGeometry,
@@ -4508,7 +4535,7 @@ function omrMetaFromGeometry(
     rows: templateRead.rows,
     needsVisionAssist: false,
     maxSameColumnCount: templateRead.maxSameColumnCount,
-    geometry,
+    geometry: readGeometry,
     reviewSourceCanvas: canvas,
     controlNumberDigits: [],
     controlNumber: null,
@@ -4653,15 +4680,14 @@ export function scanWarpedWithNormTableFrame(
       controlNumber: null,
     };
   }
-  const geometry = buildAnswerSheetOmrGeometryInNormRect(
+  const baseGeometry = buildUniformBubbleGridInNormFrame(
     tableFrame,
     rows,
     columns,
     warped.width,
-    warped.height,
-    warped
+    warped.height
   );
-  return omrMetaFromGeometry(warped, geometry, rows, columns);
+  return omrMetaFromGeometry(warped, baseGeometry, rows, columns);
 }
 
 /**
@@ -5287,15 +5313,15 @@ function readAnswerSheetPicksFromTemplateGeometry(
       }
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
-      const marginX = c === 0 || c === cols - 1 ? 0.24 : 0.16;
-      const marginY = 0.14;
+      const marginX = c === 0 || c === cols - 1 ? 0.08 : 0.05;
+      const marginY = 0.03;
       const xa = cell.x * W + cellW * marginX;
       const xb = cell.x * W + cellW * (1 - marginX);
       const ya = cell.y * H + cellH * marginY;
       const yb = cell.y * H + cellH * (1 - marginY);
       const cx = cell.x * W + cellW * 0.5;
       const cy = cell.y * H + cellH * 0.5;
-      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.2);
+      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.34);
 
       const fillDark = sampleRectMeanDarkness(data, width, height, xa, ya, xb, yb);
       const ringDark = sampleAnnulusDarkness(

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { cn, getGradeColor } from '@/lib/utils';
 import {
+  buildAnswerSheetGradingGeometryFromNormFrame,
   CALIFACIL_WARP_LETTER_HEIGHT,
   CALIFACIL_WARP_LETTER_WIDTH,
   califacilOmrOrangeFrameRect,
@@ -331,9 +332,15 @@ export function MobileSheetScanReview({
   }, [alignPreview, alignOrangeFrame, rowCount]);
 
   const displayGeometry = useMemo(() => {
-    if (!alignPreview) return null;
-    return alignPreview.geometry;
-  }, [alignPreview]);
+    if (!alignPreview || !orangeFrameNorm) return null;
+    return buildAnswerSheetGradingGeometryFromNormFrame(
+      orangeFrameNorm,
+      rowCount,
+      columnCount,
+      alignPreview.geometry.imageWidth,
+      alignPreview.geometry.imageHeight
+    );
+  }, [alignPreview, orangeFrameNorm, rowCount, columnCount]);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
