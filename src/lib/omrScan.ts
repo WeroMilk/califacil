@@ -448,12 +448,13 @@ export function getObjectContainVideoLayout(
 }
 
 /**
- * Caja que envuelve todas las celdas OMR detectadas (más un pequeño margen), para alinear
- * el marco naranja de revisión con el overlay verde/rojo.
+ * Caja que envuelve todas las celdas OMR (coords. normalizadas 0–1).
+ * `pad` en fracción de imagen (p. ej. 0 = borde exacto de las celdas del overlay).
  */
-export function califacilGeometryTableBounds(
+function boundsFromOmrCells(
   geometry: CalifacilOmrScanGeometry,
-  rowCount: number
+  rowCount: number,
+  pad: number
 ): OmrNormRect | null {
   const rows = Math.min(Math.max(0, rowCount), geometry.cells.length);
   if (rows <= 0) return null;
@@ -476,12 +477,33 @@ export function califacilGeometryTableBounds(
     }
   }
   if (!any || minX >= maxX || minY >= maxY) return null;
-  const pad = 0.012;
   const x = Math.max(0, minX - pad);
   const y = Math.max(0, minY - pad);
   const x2 = Math.min(1, maxX + pad);
   const y2 = Math.min(1, maxY + pad);
   return { x, y, w: x2 - x, h: y2 - y };
+}
+
+/**
+ * Marco naranja de revisión: bounding box exacto de {@link geometry.cells}
+ * (misma geometría que usa el calificador y la cuadrícula azul).
+ */
+export function califacilOmrOrangeFrameRect(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): OmrNormRect | null {
+  return boundsFromOmrCells(geometry, rowCount, 0);
+}
+
+/**
+ * Caja que envuelve todas las celdas OMR detectadas (más un pequeño margen), para alinear
+ * el marco naranja de revisión con el overlay verde/rojo.
+ */
+export function califacilGeometryTableBounds(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): OmrNormRect | null {
+  return boundsFromOmrCells(geometry, rowCount, 0.012);
 }
 
 type ScanDetailedResult = {

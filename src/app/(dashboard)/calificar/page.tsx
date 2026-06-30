@@ -26,7 +26,7 @@ import {
 } from '@/lib/printExam';
 import {
   autoOrientCalifacilSheet,
-  califacilGeometryTableBounds,
+  califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
   califacilViewfinderNormRect,
@@ -332,39 +332,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Marco naranja de revisión: envuelve la tabla OMR (como la cuadrícula azul de celdas). */
-function isLetterPageGeometry(geometry: CalifacilOmrScanGeometry): boolean {
-  const aspect = geometry.imageWidth / Math.max(1, geometry.imageHeight);
-  return aspect > 0.72 && aspect < 0.84;
-}
-
 function califacilReviewOrangeFrameRect(
   geometry: CalifacilOmrScanGeometry,
-  rowCount: number,
-  answerSheetLayout = false
+  rowCount: number
 ): { x: number; y: number; w: number; h: number } | null {
-  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
-  if (cellBounds) {
-    const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
-    const t = useTemplate ? buildCalifacilAnswerSheetOmrTemplate(rowCount) : null;
-    const headerFrac = t ? t.titleStripRatioOfTable * t.tableHeightRatio : cellBounds.h * 0.12;
-    const tableLeft = t ? t.tableLeftRatio : cellBounds.x;
-    const tableWidth = t ? t.tableWidthRatio : cellBounds.w;
-    const y = Math.max(0, cellBounds.y - headerFrac);
-    const h = Math.min(1 - y, cellBounds.h + headerFrac + 0.003);
-    return { x: tableLeft, y, w: tableWidth, h };
-  }
-  const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
-  if (useTemplate) {
-    const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-    return {
-      x: t.tableLeftRatio,
-      y: t.tableTopRatio,
-      w: t.tableWidthRatio,
-      h: t.tableHeightRatio,
-    };
-  }
-  return califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
+  return (
+    califacilOmrOrangeFrameRect(geometry, rowCount) ??
+    califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
+  );
 }
 
 /** Imagen + overlay: mismo aspecto que `geometry` para que el SVG no se estire respecto al JPEG. */
@@ -587,9 +562,9 @@ export default function CalificarPage() {
   const reviewOrangeFrameRect = useMemo(
     () =>
       reviewOmrGeometry
-        ? califacilReviewOrangeFrameRect(reviewOmrGeometry, currentChunk.length, isMobile)
+        ? califacilReviewOrangeFrameRect(reviewOmrGeometry, currentChunk.length)
         : null,
-    [reviewOmrGeometry, currentChunk.length, isMobile]
+    [reviewOmrGeometry, currentChunk.length]
   );
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
@@ -3588,8 +3563,7 @@ export default function CalificarPage() {
                 const chunk = sheets[snap.sheetIndex] ?? [];
                 const orangeFrameRect = califacilReviewOrangeFrameRect(
                   snap.geometry,
-                  chunk.length,
-                  snap.answerSheetLayout
+                  chunk.length
                 );
                 let rCorrect = 0;
                 for (const q of chunk) {
