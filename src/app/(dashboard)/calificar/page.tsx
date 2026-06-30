@@ -44,8 +44,6 @@ import {
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
   mapRoiQuadPolygonToViewportPx,
-  mapAnswerSheetBubblesToViewport,
-  type ViewportAnswerBubble,
   scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -84,7 +82,6 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { IphoneDocumentScannerOverlay, IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
-import { MobileAnswerSheetCameraOverlay } from '@/components/mobile-answer-sheet-camera-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -499,9 +496,6 @@ export default function CalificarPage() {
   const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
     Array<{ x: number; y: number }> | null
   >(null);
-  const [mobileAlignBubbles, setMobileAlignBubbles] = useState<ViewportAnswerBubble[] | null>(
-    null
-  );
   const [cameraFullscreenMode, setCameraFullscreenMode] = useState<ExamFullscreenMode>('none');
   const [liveScanGeometry, setLiveScanGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [liveScanPicks, setLiveScanPicks] = useState<(number | null)[]>([]);
@@ -716,18 +710,58 @@ export default function CalificarPage() {
     virtualKeyReadyCount === virtualKeyMcTotal;
   const canGradeStudents = virtualKeyComplete;
 
-  const setTorchEnabled = useCallback(async (enabled: boolean) => {
-    const ok = await setCameraTorch({
-      streamRef,
-      videoEl: videoRef.current,
-      enabled,
-    });
-    if (ok) {
-      setFlashOn(enabled);
-      setFlashSupported(true);
+  const attachStreamToVideo = useCallback(async () => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
     }
-    return ok;
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await video.play();
+        if (!video.paused) break;
+      } catch {
+        await sleep(120);
+      }
+    }
   }, []);
+
+  const updateLiveVideoLayout = useCallback(() => {
+    const container = mobileVideoViewportRef.current;
+    const video = videoRef.current;
+    if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
+    const { width: cw, height: ch } = container.getBoundingClientRect();
+    if (cw < 20 || ch < 20) return;
+    const layout = getObjectContainVideoLayout(video.videoWidth, video.videoHeight, cw, ch);
+    setLiveVideoLayout({
+      ...layout,
+      frameW: video.videoWidth,
+      frameH: video.videoHeight,
+    });
+  }, []);
+
+  const setTorchEnabled = useCallback(
+    async (enabled: boolean) => {
+      const ok = await setCameraTorch({
+        streamRef,
+        videoEl: videoRef.current,
+        enabled,
+      });
+      if (ok) {
+        setFlashOn(enabled);
+        setFlashSupported(true);
+        await attachStreamToVideo();
+        updateLiveVideoLayout();
+      }
+      return ok;
+    },
+    [attachStreamToVideo, updateLiveVideoLayout]
+  );
 
   useEffect(() => {
     liveVideoLayoutRef.current = liveVideoLayout;
@@ -742,29 +776,37 @@ export default function CalificarPage() {
   }, [flashMode]);
 
   const applyFlashMode = useCallback(
-    async (mode: FlashMode) => {
+    async (mode: FlashMode): Promise<boolean> => {
       if (mode === 'on') {
         autotorchTriedRef.current = true;
-        await setTorchEnabled(true);
-      } else if (mode === 'off') {
-        autotorchTriedRef.current = true;
-        await setTorchEnabled(false);
-      } else {
-        autotorchTriedRef.current = false;
-        shadowTorchTicksRef.current = 0;
-        lowVisibilityTicksRef.current = 0;
-        await setTorchEnabled(false);
+        return setTorchEnabled(true);
       }
+      if (mode === 'off') {
+        autotorchTriedRef.current = true;
+        return setTorchEnabled(false);
+      }
+      autotorchTriedRef.current = false;
+      shadowTorchTicksRef.current = 0;
+      lowVisibilityTicksRef.current = 0;
+      return setTorchEnabled(false);
     },
     [setTorchEnabled]
   );
 
-  const cycleFlashMode = useCallback(() => {
-    setFlashMode((prev) => {
-      const next: FlashMode = prev === 'auto' ? 'on' : prev === 'on' ? 'off' : 'auto';
-      void applyFlashMode(next);
-      return next;
-    });
+  const cycleFlashMode = useCallback(async () => {
+    const order: FlashMode[] = ['auto', 'on', 'off'];
+    const idx = order.indexOf(flashModeRef.current);
+    const next = order[(idx + 1) % order.length]!;
+    setFlashMode(next);
+    flashModeRef.current = next;
+    if (next === 'on') {
+      const ok = await applyFlashMode(next);
+      if (!ok) {
+        toast.error('No se pudo activar el flash en este dispositivo.');
+      }
+    } else {
+      await applyFlashMode(next);
+    }
   }, [applyFlashMode]);
 
   const clearAutoSnapshot = useCallback(() => {
@@ -844,7 +886,6 @@ export default function CalificarPage() {
     setMobileShadowWarning(false);
     setMobileStableTicks(0);
     setMobileDocumentPolygon(null);
-    setMobileAlignBubbles(null);
     setLiveFilterMenuOpen(false);
     setLiveStatus(
       isMobile
@@ -887,46 +928,10 @@ export default function CalificarPage() {
     setFlashMode('auto');
     flashModeRef.current = 'auto';
     setMobileDocumentPolygon(null);
-    setMobileAlignBubbles(null);
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
-
-  const attachStreamToVideo = useCallback(async () => {
-    const video = videoRef.current;
-    const stream = streamRef.current;
-    if (!video || !stream) return;
-    if (video.srcObject !== stream) {
-      video.srcObject = stream;
-    }
-    video.muted = true;
-    video.playsInline = true;
-    video.setAttribute('playsinline', 'true');
-    video.setAttribute('webkit-playsinline', 'true');
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await video.play();
-        if (!video.paused) break;
-      } catch {
-        await sleep(120);
-      }
-    }
-  }, []);
-
-  const updateLiveVideoLayout = useCallback(() => {
-    const container = mobileVideoViewportRef.current;
-    const video = videoRef.current;
-    if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
-    const { width: cw, height: ch } = container.getBoundingClientRect();
-    if (cw < 20 || ch < 20) return;
-    const layout = getObjectContainVideoLayout(video.videoWidth, video.videoHeight, cw, ch);
-    setLiveVideoLayout({
-      ...layout,
-      frameW: video.videoWidth,
-      frameH: video.videoHeight,
-    });
-  }, []);
 
   const mapRawToDraft = useCallback(
     (raw: (number | null)[], chunk: Question[]) => {
@@ -1607,19 +1612,28 @@ export default function CalificarPage() {
 
   useLayoutEffect(() => {
     if (!cameraOpen || mobileCaptureReview) return;
-    void attachStreamToVideo();
-    updateLiveVideoLayout();
+    const syncVideo = async () => {
+      await attachStreamToVideo();
+      updateLiveVideoLayout();
+      await applyFlashMode(flashModeRef.current);
+    };
+    void syncVideo();
     const video = videoRef.current;
     if (!video) return;
     const onLoadedMetadata = () => {
-      void attachStreamToVideo();
-      updateLiveVideoLayout();
+      void syncVideo();
     };
     video.addEventListener('loadedmetadata', onLoadedMetadata);
     return () => {
       video.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
-  }, [attachStreamToVideo, cameraOpen, mobileCaptureReview, updateLiveVideoLayout]);
+  }, [
+    applyFlashMode,
+    attachStreamToVideo,
+    cameraOpen,
+    mobileCaptureReview,
+    updateLiveVideoLayout,
+  ]);
 
   useEffect(() => {
     if (!cameraOpen) {
@@ -1859,8 +1873,9 @@ export default function CalificarPage() {
       const supportsTorch =
         trackReportsTorchCapability(track) || (isMobile && Boolean(track));
       setFlashSupported(isMobile || supportsTorch);
-      // Inicia siempre con flash apagado para abrir la cámara más rápido.
-      setFlashOn(false);
+      if (flashModeRef.current !== 'on') {
+        setFlashOn(false);
+      }
       if (track && typeof track.applyConstraints === 'function') {
         try {
           await track.applyConstraints({
@@ -1978,23 +1993,8 @@ export default function CalificarPage() {
               } else {
                 setMobileDocumentPolygon(null);
               }
-              if (fillRatio >= MOBILE_MIN_ROI_FILL_RATIO * 0.75) {
-                setMobileAlignBubbles(
-                  mapAnswerSheetBubblesToViewport(
-                    roiCanvas,
-                    roiCapture,
-                    layout,
-                    omrRowCount,
-                    omrCols,
-                    expectedChunkPicksRef.current
-                  )
-                );
-              } else {
-                setMobileAlignBubbles(null);
-              }
             } else {
               setMobileDocumentPolygon(null);
-              setMobileAlignBubbles(null);
             }
             const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
             const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
@@ -2947,14 +2947,17 @@ export default function CalificarPage() {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         if (streamRef.current) {
-          void attachStreamToVideo();
-          updateLiveVideoLayout();
+          void (async () => {
+            await attachStreamToVideo();
+            updateLiveVideoLayout();
+            await applyFlashMode(flashModeRef.current);
+          })();
         } else if (phaseRef.current === 'capturar') {
           void startLiveCamera({ skipPhaseGuard: true });
         }
       });
     });
-  }, [attachStreamToVideo, startLiveCamera, updateLiveVideoLayout]);
+  }, [applyFlashMode, attachStreamToVideo, startLiveCamera, updateLiveVideoLayout]);
 
   const previewMobileCaptureAlignment = useCallback(
     async (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => {
@@ -3643,11 +3646,7 @@ export default function CalificarPage() {
                     <IphoneDocumentScannerOverlay
                       documentPolygon={mobileDocumentPolygon}
                       detected={cornersAlignedView}
-                      hint="Encuadra la tabla; los círculos se ajustan a las burbujas impresas."
-                    />
-                    <MobileAnswerSheetCameraOverlay
-                      bubbles={mobileAlignBubbles}
-                      visible={Boolean(mobileAlignBubbles?.length)}
+                      hint="Encuadra la tabla de respuestas dentro del recuadro."
                     />
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
@@ -3686,9 +3685,11 @@ export default function CalificarPage() {
                       <button
                         type="button"
                         className="relative flex flex-col items-center gap-1.5 text-[11px] font-medium text-white active:scale-95 transition-transform"
-                        disabled={scanBusy}
+                        style={{ touchAction: 'manipulation' }}
                         aria-label="Flash"
-                        onClick={() => cycleFlashMode()}
+                        onClick={() => {
+                          void cycleFlashMode();
+                        }}
                       >
                         <span className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/12 ring-1 ring-white/20 backdrop-blur-md">
                           <Zap

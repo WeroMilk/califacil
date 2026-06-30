@@ -54,39 +54,67 @@ export async function restartStreamWithTorch({
   const settings =
     prevTrack && typeof prevTrack.getSettings === 'function' ? prevTrack.getSettings() : null;
   const deviceId = settings?.deviceId;
-  if (!deviceId) return false;
 
-  const video: MediaTrackConstraints = {
-    deviceId: { exact: deviceId },
+  const baseVideo: MediaTrackConstraints = {
     facingMode: { ideal: 'environment' },
     width: { ideal: 1920 },
     height: { ideal: 1080 },
   };
-  if (enabled) {
-    video.advanced = [{ torch: true } as MediaTrackConstraintSet];
+  if (deviceId) {
+    baseVideo.deviceId = { exact: deviceId };
   }
 
-  try {
-    const next = await navigator.mediaDevices.getUserMedia({ audio: false, video });
-    prev?.getTracks().forEach((t) => t.stop());
-    streamRef.current = next;
-    if (videoEl) {
-      videoEl.srcObject = next;
-      try {
-        await videoEl.play();
-      } catch {
-        // Ignorar si el elemento no está montado.
+  const videoVariants: MediaTrackConstraints[] = enabled
+    ? [
+        {
+          ...baseVideo,
+          advanced: [{ torch: true } as MediaTrackConstraintSet],
+        },
+        {
+          ...baseVideo,
+          advanced: [{ fillLightMode: 'flash' } as MediaTrackConstraintSet],
+        },
+        { ...baseVideo, torch: true } as MediaTrackConstraints,
+        baseVideo,
+      ]
+    : [baseVideo];
+
+  for (const video of videoVariants) {
+    try {
+      const next = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+      prev?.getTracks().forEach((t) => t.stop());
+      streamRef.current = next;
+      if (videoEl) {
+        videoEl.srcObject = next;
+        try {
+          await videoEl.play();
+        } catch {
+          // Ignorar si el elemento no está montado.
+        }
       }
+      const track = next.getVideoTracks()[0];
+      if (enabled && track) {
+        const ok = await applyTorchToTrack(track, true);
+        if (!ok) {
+          next.getTracks().forEach((t) => t.stop());
+          streamRef.current = prev;
+          if (videoEl && prev) {
+            videoEl.srcObject = prev;
+            try {
+              await videoEl.play();
+            } catch {
+              // Ignorar si el elemento no está montado.
+            }
+          }
+          continue;
+        }
+      }
+      return true;
+    } catch {
+      // Probar el siguiente formato de constraints.
     }
-    const track = next.getVideoTracks()[0];
-    if (enabled && track) {
-      const ok = await applyTorchToTrack(track, true);
-      if (!ok) return false;
-    }
-    return true;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 export type SetCameraTorchOpts = RestartTorchOpts;
