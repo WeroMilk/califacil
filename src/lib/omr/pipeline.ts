@@ -4,6 +4,7 @@ import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
   detectCalifacilSheetCornerQuadRobust,
   mapRoiQuadToFrame,
+  measureWarpedFiducialAlignment,
   refineWarpedCalifacilSheet,
   scaleQuadToCanvas,
   warpAndValidateCalifacilSheet,
@@ -30,11 +31,63 @@ function alignmentScore(alignment: WarpAlignmentReport | null): number {
 function finalizeWarpCandidate(
   warped: HTMLCanvasElement | null,
   alignment: WarpAlignmentReport | null,
-  maxAllowedPx: number
+  maxAllowedPx: number,
+  fast = false
 ): { warped: HTMLCanvasElement | null; alignment: WarpAlignmentReport | null } {
   if (!warped) return { warped: null, alignment };
-  const refined = refineWarpedCalifacilSheet(warped, { maxAllowedPx });
+  const refined = refineWarpedCalifacilSheet(warped, { maxAllowedPx, fast });
   return { warped: refined.canvas, alignment: refined.alignment };
+}
+
+/**
+ * Warp rápido para captura móvil: un solo camino, sin barrido full-res.
+ * Estilo ZipGrade: foto → documento enderezado en <1 s.
+ */
+export function warpCalifacilMobileCaptureFast(
+  fullCanvas: HTMLCanvasElement,
+  opts?: {
+    roiQuad?: RoiQuad | null;
+    roiCapture?: MobileGuideRoiCapture | null;
+    maxErrorPx?: number;
+  }
+): MobileWarpPipelineResult {
+  const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+  const fallbackMaxErrorPx = maxErrorPx + 8;
+
+  const roiQuad = opts?.roiQuad;
+  const roiCapture = opts?.roiCapture;
+  if (roiQuad && roiCapture) {
+    const roiW = roiCapture.roiCanvas.width;
+    const roiH = roiCapture.roiCanvas.height;
+    const frameQuad = mapRoiQuadToFrame(roiQuad, roiCapture.roiRect, roiW, roiH);
+    const scaledQuad = scaleQuadToCanvas(
+      frameQuad,
+      roiCapture.frameW,
+      roiCapture.frameH,
+      fullCanvas.width,
+      fullCanvas.height
+    );
+    const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
+    const finalized = finalizeWarpCandidate(roiWarp.warped, roiWarp.alignment, maxErrorPx, true);
+    if (finalized.warped) {
+      return { ...finalized, source: 'roi' };
+    }
+  }
+
+  const cornerWarped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+  if (cornerWarped) {
+    const finalized = finalizeWarpCandidate(
+      cornerWarped,
+      measureWarpedFiducialAlignment(cornerWarped, fallbackMaxErrorPx),
+      fallbackMaxErrorPx,
+      true
+    );
+    if (finalized.warped) {
+      return { ...finalized, source: 'corner_markers' };
+    }
+  }
+
+  return { warped: null, alignment: null, source: 'none' };
 }
 
 /**

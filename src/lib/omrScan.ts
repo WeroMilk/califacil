@@ -2151,7 +2151,7 @@ export function prepareAnswerSheetDisplayCanvas(
   if (!ctx) return null;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.filter = 'contrast(1.08) brightness(1.06) saturate(0.95)';
+  ctx.filter = 'grayscale(1) contrast(1.38) brightness(1.1)';
   ctx.drawImage(canvas, 0, 0, out.width, out.height);
   ctx.filter = 'none';
   return out;
@@ -2207,13 +2207,27 @@ export function isValidMobileRoiQuad(
   return true;
 }
 
+/** Suaviza cuadrilátero ROI entre frames para reducir jitter de detección. */
+export function smoothMobileRoiQuad(
+  prev: [Point, Point, Point, Point] | null,
+  next: [Point, Point, Point, Point],
+  alpha = 0.5
+): [Point, Point, Point, Point] {
+  if (!prev) return next;
+  const t = Math.max(0.12, Math.min(0.88, alpha));
+  return next.map((p, i) => ({
+    x: prev[i]!.x * (1 - t) + p.x * t,
+    y: prev[i]!.y * (1 - t) + p.y * t,
+  })) as [Point, Point, Point, Point];
+}
+
 /** Compara dos cuads consecutivos en el ROI para exigir estabilidad temporal. */
 export function mobileRoiQuadsAreStable(
   prev: [Point, Point, Point, Point] | null,
   next: [Point, Point, Point, Point],
   roiW: number,
   roiH: number,
-  maxCornerShiftFrac = 0.04
+  maxCornerShiftFrac = 0.09
 ): boolean {
   if (!prev) return false;
   const maxShift = Math.max(roiW, roiH) * maxCornerShiftFrac;
@@ -2393,9 +2407,12 @@ export function refineWarpedCalifacilSheet(
     maxIterations?: number;
     targetMaxErrorPx?: number;
     maxAllowedPx?: number;
+    /** Omite deskew y limita iteraciones — captura móvil en tiempo real. */
+    fast?: boolean;
   }
 ): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport; iterations: number } {
   const maxAllowedPx = opts?.maxAllowedPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+  const maxIterations = opts?.fast ? 1 : (opts?.maxIterations ?? REFINE_WARP_MAX_ITERATIONS);
   const refined = refineWarpedSheetFiducials(
     warped,
     detectWarpedFiducialCenters,
@@ -2409,11 +2426,18 @@ export function refineWarpedCalifacilSheet(
       };
     },
     {
-      maxIterations: opts?.maxIterations ?? REFINE_WARP_MAX_ITERATIONS,
+      maxIterations,
       targetMaxErrorPx: opts?.targetMaxErrorPx ?? REFINE_WARP_TARGET_MAX_ERROR_PX,
       maxAllowedPx,
     }
   );
+  if (opts?.fast) {
+    return {
+      canvas: refined.canvas,
+      alignment: measureWarpedFiducialAlignment(refined.canvas, maxAllowedPx),
+      iterations: refined.iterations,
+    };
+  }
   const deskewed = deskewWarpedCalifacilSheet(refined.canvas);
   const deskewRefined = refineWarpedSheetFiducials(
     deskewed,

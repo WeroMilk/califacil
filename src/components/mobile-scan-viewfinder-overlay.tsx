@@ -117,20 +117,20 @@ export function MobileScanViewfinderOverlay({
 
   const bannerLine =
     aligned && stableTicks >= stableTicksRequired
-      ? 'Capturando…'
+      ? 'Procesando escaneo…'
       : aligned && secsUntilCapture !== null
-        ? `No muevas el teléfono — captura en ~${secsUntilCapture} s`
+        ? `Hoja detectada — captura en ~${secsUntilCapture} s o pulsa el botón blanco`
         : aligned
-          ? 'Alinea los círculos y mantén la hoja quieta'
+          ? 'Hoja detectada — pulsa el botón blanco para capturar'
         : fillLow
-          ? 'Acerca un poco el teléfono'
+          ? 'Acerca un poco o pulsa capturar'
           : shadowWarning
-            ? 'Mejor luz o flash — sigue alineando'
+            ? 'Mejor luz — puedes capturar igual con el botón blanco'
             : useSheetCorners
-              ? 'Alinea las dos franjas negras de la hoja con las barras del visor'
+              ? 'Encuadra la hoja; alinea las franjas negras si puedes'
               : fiducialCount > 0 && fiducialCount < 4
-                ? 'Faltan cuadros negros en las esquinas'
-                : 'Encuadra la hoja dentro del marco punteado';
+                ? 'Encuadra la hoja completa y pulsa capturar'
+                : 'Encuadra la hoja dentro del marco y pulsa el botón blanco';
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
