@@ -4383,12 +4383,124 @@ export function buildAnswerSheetOmrGeometryInNormRect(
       if (swept) {
         const geom = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
         const validation = validateAnswerSheetGeometry(geom, rows);
-        if (validation.ok || swept.lineYs.length === rows + 1) return geom;
+        if (validation.ok || swept.lineYs.length === rows + 1) {
+          return canvas
+            ? refineAnswerSheetGeometryBubbleCenters(canvas, geom)
+            : geom;
+        }
       }
     }
   }
 
+  const fullFallback =
+    canvas && frame.w >= 0.82 && frame.h >= 0.75
+      ? sweepFullCanvasTableGeometry(canvas, rowCount, columns)
+      : null;
+  if (fullFallback) {
+    return refineAnswerSheetGeometryBubbleCenters(canvas!, fullFallback.geometry);
+  }
+
   return buildUniformBubbleGridInNormFrame(frame, rowCount, columns, width, height);
+}
+
+/** Centra cada celda en la burbuja impresa (mejor lectura y overlay). */
+function refineAnswerSheetGeometryBubbleCenters(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry
+): CalifacilOmrScanGeometry {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return geometry;
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const W = Math.max(1, geometry.imageWidth);
+  const H = Math.max(1, geometry.imageHeight);
+  const cells = geometry.cells.map((row) =>
+    row.map((cell) => {
+      const center = refineBubbleCenterInCell(data, width, height, cell);
+      const cellW = cell.w * W;
+      const cellH = cell.h * H;
+      const r = Math.max(2, Math.min(cellW, cellH) * 0.24);
+      return {
+        x: Math.max(0, Math.min(1, (center.x - r) / W)),
+        y: Math.max(0, Math.min(1, (center.y - r) / H)),
+        w: Math.max(0.004, Math.min(1, (2 * r) / W)),
+        h: Math.max(0.004, Math.min(1, (2 * r) / H)),
+      };
+    })
+  );
+  return { imageWidth: W, imageHeight: H, cells };
+}
+
+function tableFrameFromBubbleGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): OmrNormRect | null {
+  const bubble = boundsFromOmrCells(geometry, rowCount, 0);
+  if (!bubble) return null;
+  const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const padTop = bubble.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
+  const padLeft = bubble.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
+  const x = Math.max(0, bubble.x - padLeft);
+  const y = Math.max(0, bubble.y - padTop);
+  return {
+    x,
+    y,
+    w: Math.min(1 - x, bubble.w + padLeft + bubble.w * 0.025),
+    h: Math.min(1 - y, bubble.h + padTop + bubble.h * 0.015),
+  };
+}
+
+function omrMetaFromGeometry(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number,
+  columns: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const refined = refineAnswerSheetGeometryBubbleCenters(canvas, geometry);
+  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    refined,
+    FRAME_GRID_SCAN_THRESHOLDS,
+    rows,
+    columns
+  );
+  return {
+    picks: templateRead.picks,
+    rows: templateRead.rows,
+    needsVisionAssist: false,
+    maxSameColumnCount: templateRead.maxSameColumnCount,
+    geometry: refined,
+    reviewSourceCanvas: canvas,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+}
+
+/** Detecta la tabla en toda la imagen (capturas recortadas al marco guía). */
+function sweepFullCanvasTableGeometry(
+  canvas: HTMLCanvasElement,
+  rowCount: number,
+  columns: number
+): { geometry: CalifacilOmrScanGeometry; tableFrame: OmrNormRect } | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 40 || height < 40) return null;
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const swept = sweepAnswerSheetTableGrid(data, width, height, rowCount, columns);
+  if (!swept || swept.lineYs.length !== rows + 1) return null;
+  const geometry = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+  const tableFrame =
+    tableFrameFromBubbleGeometry(geometry, rows) ??
+    califacilGeometryTableBounds(geometry, rows) ?? {
+      x: 0.03,
+      y: 0.04,
+      w: 0.94,
+      h: 0.92,
+    };
+  return { geometry, tableFrame };
 }
 
 /**
@@ -4401,9 +4513,14 @@ export function scanWarpedWithBestTableFrame(
 ): { meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect } {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const templateFrame = califacilOmrTableFrameNormRect(rows);
-  const candidates: OmrNormRect[] = [templateFrame];
-  for (const dy of [-0.025, -0.015, 0.015, 0.025]) {
-    for (const dx of [-0.02, 0.02]) {
+  const candidates: OmrNormRect[] = [
+    templateFrame,
+    { x: 0.03, y: 0.04, w: 0.94, h: 0.92 },
+    { x: 0.05, y: 0.06, w: 0.9, h: 0.88 },
+    { x: 0.02, y: 0.1, w: 0.96, h: 0.86 },
+  ];
+  for (const dy of [-0.03, -0.02, -0.015, 0.015, 0.02, 0.03]) {
+    for (const dx of [-0.025, -0.015, 0.015, 0.025]) {
       candidates.push({
         x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
         y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
@@ -4413,7 +4530,33 @@ export function scanWarpedWithBestTableFrame(
     }
   }
 
+  let bestMeta: OmrScanMetaResult | null = null;
+  let bestFrame = templateFrame;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  const fullSweep = sweepFullCanvasTableGeometry(warped, rows, columns);
+  if (fullSweep) {
+    const meta = omrMetaFromGeometry(warped, fullSweep.geometry, rows, columns);
+    const score = scoreOmrMetaPicks(meta, rows);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMeta = meta;
+      bestFrame = fullSweep.tableFrame;
+    }
+    candidates.push(fullSweep.tableFrame);
+  }
+
   const hybrid = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
+  if (validateAnswerSheetGeometry(hybrid, rows).ok) {
+    const meta = omrMetaFromGeometry(warped, hybrid, rows, columns);
+    const score = scoreOmrMetaPicks(meta, rows);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMeta = meta;
+      bestFrame = tableFrameFromBubbleGeometry(hybrid, rows) ?? templateFrame;
+    }
+  }
+
   const bubbleBbox = califacilOmrOrangeFrameRect(hybrid, rows);
   const tableBbox = califacilGeometryTableBounds(hybrid, rows);
   if (bubbleBbox) candidates.push(bubbleBbox);
@@ -4432,10 +4575,6 @@ export function scanWarpedWithBestTableFrame(
       h: Math.min(1 - y, bubbleBbox.h + padTop + bubbleBbox.h * 0.015),
     });
   }
-
-  let bestMeta: OmrScanMetaResult | null = null;
-  let bestFrame = templateFrame;
-  let bestScore = Number.NEGATIVE_INFINITY;
 
   for (const frame of candidates) {
     const meta = scanWarpedWithNormTableFrame(warped, columns, rows, frame);
@@ -4483,24 +4622,7 @@ export function scanWarpedWithNormTableFrame(
     warped.height,
     warped
   );
-  const thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS;
-  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
-    warped,
-    geometry,
-    thresholds,
-    rows,
-    columns
-  );
-  return {
-    picks: templateRead.picks,
-    rows: templateRead.rows,
-    needsVisionAssist: false,
-    maxSameColumnCount: templateRead.maxSameColumnCount,
-    geometry,
-    reviewSourceCanvas: warped,
-    controlNumberDigits: [],
-    controlNumber: null,
-  };
+  return omrMetaFromGeometry(warped, geometry, rows, columns);
 }
 
 /**

@@ -28,6 +28,7 @@ import {
   autoOrientCalifacilSheet,
   califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
+  califacilMobileAnswerSheetGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
   detectAnswerSheetFiducialsInRoi,
@@ -79,6 +80,7 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
+import { MobileAnswerSheetAlignGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -764,6 +766,11 @@ export default function CalificarPage() {
     liveVideoLayoutRef.current = liveVideoLayout;
   }, [liveVideoLayout]);
 
+  const mobileAnswerSheetGuideRect = useMemo(() => {
+    if (!liveVideoLayout) return null;
+    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
+  }, [liveVideoLayout]);
+
   useEffect(() => {
     autoShutterEnabledRef.current = autoShutterEnabled;
   }, [autoShutterEnabled]);
@@ -886,7 +893,7 @@ export default function CalificarPage() {
     setLiveFilterMenuOpen(false);
     setLiveStatus(
       isMobile
-        ? 'Coloca los cuadros negros de la hoja dentro de los visores blancos. La captura es automática.'
+        ? 'Coloca la hoja dentro del marco naranja de la cámara. La captura es automática.'
         : 'Elige una imagen: puede ser la hoja completa o solo el recuadro CaliFacil; se leerá la tabla y se comparará con la clave del examen.'
     );
     clearAutoSnapshot();
@@ -2036,7 +2043,7 @@ export default function CalificarPage() {
                 void setTorchEnabled(true);
                 setLiveStatus('Activé el flash. Encuadra la hoja dentro del rectángulo.');
               } else {
-                setLiveStatus('Encuadra la hoja dentro del rectángulo.');
+                setLiveStatus('Encuadra la tabla dentro del marco naranja.');
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -3638,6 +3645,23 @@ export default function CalificarPage() {
                         )}
                       />
                     </div>
+                    {mobileAnswerSheetGuideRect ? (
+                      <>
+                        <div className="pointer-events-none absolute inset-0 z-[10] bg-black/32" aria-hidden />
+                        <MobileAnswerSheetAlignGuideOverlay
+                          guideRect={mobileAnswerSheetGuideRect}
+                          aligned={cornersAlignedView}
+                        />
+                        <p
+                          className="pointer-events-none absolute left-1/2 z-[20] w-[min(92%,18rem)] -translate-x-1/2 rounded-lg bg-black/55 px-3 py-2 text-center text-[13px] font-medium leading-snug text-white/95 backdrop-blur-sm"
+                          style={{ top: Math.max(56, mobileAnswerSheetGuideRect.top - 52) }}
+                        >
+                          {cornersAlignedView
+                            ? 'Hoja detectada — pulsa el botón blanco para capturar'
+                            : 'Encuadra la tabla dentro del marco naranja'}
+                        </p>
+                      </>
+                    ) : null}
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
 
