@@ -138,6 +138,14 @@ type MobileCaptureReviewState = {
   alignment: WarpAlignmentReport | null;
 };
 
+type MobileReviewAlignPreview = {
+  warped: HTMLCanvasElement;
+  alignment: WarpAlignmentReport | null;
+  geometry: CalifacilOmrScanGeometry;
+  picks: (number | null)[];
+  draft: Record<string, string>;
+};
+
 type MobileSheetSnapshot = {
   sheetIndex: number;
   previewUrl: string;
@@ -562,6 +570,9 @@ export default function CalificarPage() {
   const [mobileCaptureReview, setMobileCaptureReview] = useState<MobileCaptureReviewState | null>(
     null
   );
+  const [mobileReviewAlign, setMobileReviewAlign] = useState<MobileReviewAlignPreview | null>(
+    null
+  );
   const mobileCaptureBusyRef = useRef(false);
   const mobileReviewOpenRef = useRef(false);
   const triggerMobileSheetCaptureRef = useRef<
@@ -616,6 +627,21 @@ export default function CalificarPage() {
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
     [currentChunk, examVirtualKeyByQuestionId]
   );
+  const mobileAlignPreviewProp = useMemo(() => {
+    if (!mobileReviewAlign) return null;
+    const stats = gradeMcDraftAgainstKey(
+      mobileReviewAlign.draft,
+      questions,
+      examVirtualKeyByQuestionId
+    );
+    return {
+      geometry: mobileReviewAlign.geometry,
+      picks: mobileReviewAlign.picks,
+      expectedPicks: expectedChunkPicks,
+      previewCanvas: mobileReviewAlign.warped,
+      score: { correct: stats.correct, total: stats.total, pct: stats.pct },
+    };
+  }, [mobileReviewAlign, expectedChunkPicks, questions, examVirtualKeyByQuestionId]);
   const reviewOrangeFrameRect = useMemo(
     () =>
       reviewOmrGeometry
@@ -806,6 +832,7 @@ export default function CalificarPage() {
     void setTorchEnabled(false);
     mobileReviewOpenRef.current = false;
     setMobileCaptureReview(null);
+    setMobileReviewAlign(null);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -2790,44 +2817,78 @@ export default function CalificarPage() {
   const retakeMobileCaptureReview = useCallback(() => {
     mobileReviewOpenRef.current = false;
     setMobileCaptureReview(null);
+    setMobileReviewAlign(null);
     setLiveStatus('Encuadra la hoja y pulsa el botón blanco para calificar');
   }, []);
 
-  const confirmMobileCaptureReview = useCallback(
+  const previewMobileCaptureAlignment = useCallback(
     async (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => {
-      if (!isCalifacilAnswerSheetReadyForGrading(warped, omrCols, omrRowCount, alignment)) {
-        const { issues } = diagnoseCalifacilAnswerSheetReadiness(
-          warped,
-          omrCols,
-          omrRowCount,
-          alignment
-        );
-        const detail =
-          issues.length > 0 ? issues.join('; ') : 'Revisa el ajuste de esquinas.';
-        toast.error(`No es una hoja CaliFacil válida. ${detail}`);
-        setLiveStatus(`Sin hoja válida: ${detail}`);
+      const chunk = sheets[sheetIndexRef.current] ?? [];
+      if (chunk.length === 0) {
+        toast.error('No hay preguntas en esta hoja.');
         return;
       }
       setScanBusy(true);
-      mobileReviewOpenRef.current = false;
-      setMobileCaptureReview(null);
+      toast.message('Leyendo respuestas…');
       try {
-        const result = await finalizeCapturedSheet(warped, undefined, {
-          preWarped: true,
-          warpAlignment: alignment,
+        await yieldForSpinnerPaint();
+        const meta = scanCalifacilOmrSheetWithMeta(warped, omrCols, {
+          skipGuideCrop: true,
+          geometryMode: 'fullSheet',
+          preserveInputCanvas: true,
+          fixedTemplateAnchor: true,
+          answerSheetTemplateOnly: true,
+          rowCount: omrRowCount,
         });
-        if (result.success) {
-          playScanCompleteChime();
-          stopLiveCamera();
-        } else {
-          setLiveStatus('No se pudo calificar. Pulsa Capturar e intenta de nuevo.');
+        const mapped = mapRawToDraft([...meta.picks], chunk);
+        if (!meta.geometry || mapped.resolvedCount < 1) {
+          toast.error(
+            'No se leyeron marcas en la tabla. Usa Ajustar para corregir el encuadre e intenta de nuevo.'
+          );
+          return;
         }
+        setMobileReviewAlign({
+          warped,
+          alignment,
+          geometry: meta.geometry,
+          picks: [...meta.picks],
+          draft: mapped.draft,
+        });
+      } catch {
+        toast.error('No se pudo leer la hoja. Intenta ajustar las esquinas.');
       } finally {
         setScanBusy(false);
       }
     },
-    [finalizeCapturedSheet, omrCols, omrRowCount, stopLiveCamera]
+    [mapRawToDraft, omrCols, omrRowCount, sheets]
   );
+
+  const finalizeMobileReviewGrade = useCallback(async () => {
+    if (!mobileReviewAlign) return;
+    setScanBusy(true);
+    try {
+      const result = await finalizeCapturedSheet(mobileReviewAlign.warped, undefined, {
+        preWarped: true,
+        warpAlignment: mobileReviewAlign.alignment,
+        skipReviewUi: true,
+      });
+      if (result.success) {
+        playScanCompleteChime();
+        mobileReviewOpenRef.current = false;
+        setMobileCaptureReview(null);
+        setMobileReviewAlign(null);
+        stopLiveCamera();
+      } else {
+        toast.error('No se pudo calificar. Ajusta el encuadre e intenta de nuevo.');
+      }
+    } finally {
+      setScanBusy(false);
+    }
+  }, [finalizeCapturedSheet, mobileReviewAlign, stopLiveCamera]);
+
+  const backFromMobileReviewAlign = useCallback(() => {
+    setMobileReviewAlign(null);
+  }, []);
 
   const triggerMobileSheetCapture = useCallback(
     (
@@ -3543,9 +3604,15 @@ export default function CalificarPage() {
             initialWarped={mobileCaptureReview.warped}
             initialAlignment={mobileCaptureReview.alignment}
             initialFilter={liveColorMode}
+            rowCount={currentChunk.length}
+            alignPreview={mobileAlignPreviewProp}
             busy={scanBusy}
             onRetake={retakeMobileCaptureReview}
-            onConfirm={(warped, alignment) => void confirmMobileCaptureReview(warped, alignment)}
+            onPreviewAlignment={(warped, alignment) =>
+              void previewMobileCaptureAlignment(warped, alignment)
+            }
+            onFinalizeGrade={() => void finalizeMobileReviewGrade()}
+            onBackFromAlign={backFromMobileReviewAlign}
           />,
           document.body
         )}

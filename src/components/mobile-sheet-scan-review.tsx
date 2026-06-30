@@ -5,18 +5,23 @@ import {
   ArrowLeft,
   Check,
   Crop,
+  Loader2,
   Palette,
   RotateCcw,
   Trash2,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, getGradeColor } from '@/lib/utils';
 import {
   CALIFACIL_WARP_LETTER_HEIGHT,
   CALIFACIL_WARP_LETTER_WIDTH,
+  califacilOmrOrangeFrameRect,
+  califacilViewfinderNormRect,
   refineWarpedCalifacilSheet,
   warpCalifacilSheetFromQuad,
+  type CalifacilOmrScanGeometry,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
+import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 
 export type ScanReviewQuad = [
   { x: number; y: number },
@@ -27,15 +32,27 @@ export type ScanReviewQuad = [
 
 export type ScanReviewFilter = 'color' | 'grayscale' | 'bw';
 
+export type MobileAlignPreview = {
+  geometry: CalifacilOmrScanGeometry;
+  picks: (number | null)[];
+  expectedPicks: (number | null)[];
+  previewCanvas: HTMLCanvasElement;
+  score: { correct: number; total: number; pct: number };
+};
+
 type Props = {
   sourceCanvas: HTMLCanvasElement;
   frameQuad: ScanReviewQuad;
   initialWarped: HTMLCanvasElement;
   initialAlignment: WarpAlignmentReport | null;
   initialFilter?: ScanReviewFilter;
+  rowCount: number;
+  alignPreview?: MobileAlignPreview | null;
   busy?: boolean;
   onRetake: () => void;
-  onConfirm: (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => void;
+  onPreviewAlignment: (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => void;
+  onFinalizeGrade: () => void;
+  onBackFromAlign: () => void;
 };
 
 function cloneQuad(quad: ScanReviewQuad): ScanReviewQuad {
@@ -166,15 +183,29 @@ function sourceQuadToDisplay(
   return quad.map((p) => ({ x: p.x * sx, y: p.y * sy })) as ScanReviewQuad;
 }
 
+function orangeFrameForGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): { x: number; y: number; w: number; h: number } | null {
+  return (
+    califacilOmrOrangeFrameRect(geometry, rowCount) ??
+    califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
+  );
+}
+
 export function MobileSheetScanReview({
   sourceCanvas,
   frameQuad,
   initialWarped,
   initialAlignment,
   initialFilter = 'color',
+  rowCount,
+  alignPreview = null,
   busy = false,
   onRetake,
-  onConfirm,
+  onPreviewAlignment,
+  onFinalizeGrade,
+  onBackFromAlign,
 }: Props) {
   const [adjustMode, setAdjustMode] = useState(false);
   const [filter, setFilter] = useState<ScanReviewFilter>(initialFilter);
@@ -193,6 +224,7 @@ export function MobileSheetScanReview({
   );
   const previewUrl = useCanvasPreviewUrl(filteredPreview, 1280);
   const sourceUrl = useCanvasPreviewUrl(sourceCanvas, 1600);
+  const alignUrl = useCanvasPreviewUrl(alignPreview?.previewCanvas ?? null, 1280);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
@@ -257,9 +289,13 @@ export function MobileSheetScanReview({
     recomputeWarp(nextSource);
   };
 
-  const handleConfirm = () => {
-    const filtered = applyFilterAndRotation(warped, filter, rotation);
-    onConfirm(filtered, alignment);
+  const handleCheck = () => {
+    if (busy) return;
+    if (alignPreview) {
+      onFinalizeGrade();
+      return;
+    }
+    onPreviewAlignment(filteredPreview, alignment);
   };
 
   const quadPoints = displayQuad.length === 4 ? displayQuad : [];
@@ -268,9 +304,15 @@ export function MobileSheetScanReview({
       ? `${quadPoints[0].x},${quadPoints[0].y} ${quadPoints[1].x},${quadPoints[1].y} ${quadPoints[2].x},${quadPoints[2].y} ${quadPoints[3].x},${quadPoints[3].y}`
       : '';
 
+  const orangeFrame = alignPreview
+    ? orangeFrameForGeometry(alignPreview.geometry, rowCount)
+    : null;
+  const geoW = alignPreview ? Math.max(1, alignPreview.geometry.imageWidth) : 1;
+  const geoH = alignPreview ? Math.max(1, alignPreview.geometry.imageHeight) : 1;
+
   return (
     <div
-      className="fixed inset-0 z-[260] flex animate-fade-in flex-col bg-[#1c1c1e] text-gray-900"
+      className="fixed inset-0 z-[260] flex animate-fade-in flex-col bg-[#1c1c1e] text-white"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
@@ -279,34 +321,92 @@ export function MobileSheetScanReview({
       <div className="flex shrink-0 items-center justify-between px-3 py-2">
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-black/5"
-          aria-label="Volver a cámara"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10"
+          aria-label={alignPreview ? 'Volver a editar' : 'Volver a cámara'}
           disabled={busy}
-          onClick={onRetake}
+          onClick={alignPreview ? onBackFromAlign : onRetake}
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
+        {alignPreview ? (
+          <p className="text-sm font-semibold text-white/90">Revisa la alineación</p>
+        ) : (
+          <button
+            type="button"
+            className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold"
+            disabled={busy}
+            onClick={onRetake}
+          >
+            Repetir
+          </button>
+        )}
         <button
           type="button"
-          className="rounded-full bg-black/5 px-4 py-2 text-sm font-semibold"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-400 text-black shadow-lg disabled:opacity-50"
+          aria-label={alignPreview ? 'Calificar' : 'Ver lectura de respuestas'}
           disabled={busy}
-          onClick={onRetake}
+          onClick={handleCheck}
         >
-          Repetir
-        </button>
-        <button
-          type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-400 text-white shadow"
-          aria-label="Usar escaneo y calificar"
-          disabled={busy}
-          onClick={handleConfirm}
-        >
-          <Check className="h-5 w-5" strokeWidth={3} />
+          {busy ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <Check className="h-5 w-5" strokeWidth={3} />
+          )}
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden px-4 pb-2">
-        {adjustMode ? (
+      <div className="relative min-h-0 flex-1 overflow-hidden px-3 pb-2">
+        {alignPreview && alignUrl ? (
+          <div className="flex h-full flex-col items-center justify-center">
+            <div
+              className="relative w-full max-w-md overflow-hidden rounded-lg bg-black/40 shadow-2xl"
+              style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(70vh, 32rem)' }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={alignUrl}
+                alt="Lectura OMR sobre el escaneo"
+                className="absolute inset-0 z-0 h-full w-full object-contain"
+                draggable={false}
+              />
+              {orangeFrame ? (
+                <div
+                  className="pointer-events-none absolute z-[1] rounded-md border-2 border-orange-400"
+                  style={{
+                    left: `${orangeFrame.x * 100}%`,
+                    top: `${orangeFrame.y * 100}%`,
+                    width: `${orangeFrame.w * 100}%`,
+                    height: `${orangeFrame.h * 100}%`,
+                  }}
+                  aria-hidden
+                />
+              ) : null}
+              <div className="pointer-events-none absolute inset-0 z-[2]">
+                <CalifacilOmrReviewOverlay
+                  geometry={alignPreview.geometry}
+                  picks={alignPreview.picks}
+                  expectedPicks={alignPreview.expectedPicks}
+                  expectedOpacity={0.45}
+                  rowCount={rowCount}
+                />
+              </div>
+            </div>
+            <div className="mt-3 w-full max-w-md rounded-xl bg-white/8 px-3 py-2 text-center ring-1 ring-white/10">
+              <p className="text-sm font-semibold">
+                <span className="tabular-nums">{alignPreview.score.correct}</span>
+                <span className="text-white/70"> / </span>
+                <span className="tabular-nums">{alignPreview.score.total}</span>
+                <span className="mx-2 text-white/50">·</span>
+                <span className={cn('tabular-nums', getGradeColor(alignPreview.score.pct))}>
+                  {alignPreview.score.pct}%
+                </span>
+              </p>
+              <p className="mt-1 text-[11px] leading-snug text-white/65">
+                Verde = acierto · Rojo = error · Naranja = respuesta correcta · Amarillo = sin lectura
+              </p>
+            </div>
+          </div>
+        ) : adjustMode ? (
           <div
             ref={adjustSurfaceRef}
             className="relative mx-auto h-full max-h-full w-full max-w-lg touch-none"
@@ -349,7 +449,7 @@ export function MobileSheetScanReview({
             ))}
           </div>
         ) : previewUrl ? (
-          <div className="flex h-full w-full items-center justify-center p-3">
+          <div className="flex h-full w-full items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={previewUrl}
@@ -365,85 +465,108 @@ export function MobileSheetScanReview({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-black/10 bg-[#f2f2f7]/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        <div className="mx-auto flex max-w-md items-stretch justify-around gap-1">
-          <button
-            type="button"
-            className={cn(
-              'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
-              adjustMode ? 'bg-amber-100 text-amber-900' : 'text-gray-700'
-            )}
-            disabled={busy}
-            onClick={() => {
-              setAdjustMode((v) => !v);
-              setFilterMenuOpen(false);
-            }}
-          >
-            <Crop className="h-6 w-6" />
-            Ajustar
-          </button>
-          <div className="relative">
+      <div className="shrink-0 border-t border-white/10 bg-[#1c1c1e] px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {alignPreview ? (
+          <div className="mx-auto flex max-w-md gap-2 px-2">
             <button
               type="button"
-              className={cn(
-                'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
-                filter !== 'color' ? 'bg-amber-100 text-amber-900' : 'text-gray-700'
-              )}
+              className="flex-1 rounded-xl bg-white/10 py-3 text-sm font-semibold"
               disabled={busy}
-              onClick={() => setFilterMenuOpen((v) => !v)}
+              onClick={onBackFromAlign}
             >
-              <Palette className="h-6 w-6" />
-              Filtros
+              Ajustar de nuevo
             </button>
-            {filterMenuOpen ? (
-              <div className="absolute bottom-full left-1/2 z-20 mb-2 w-36 -translate-x-1/2 rounded-xl border bg-white p-1 shadow-lg">
-                {(
-                  [
-                    ['color', 'Color'],
-                    ['grayscale', 'Escala grises'],
-                    ['bw', 'Blanco y negro'],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={cn(
-                      'block w-full rounded-lg px-3 py-2 text-left text-sm',
-                      filter === id ? 'bg-amber-100 font-semibold' : 'hover:bg-gray-50'
-                    )}
-                    onClick={() => {
-                      setFilter(id);
-                      setFilterMenuOpen(false);
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+            <button
+              type="button"
+              className="flex-1 rounded-xl bg-amber-400 py-3 text-sm font-semibold text-black"
+              disabled={busy}
+              onClick={onFinalizeGrade}
+            >
+              Calificar
+            </button>
           </div>
-          <button
-            type="button"
-            className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-gray-700"
-            disabled={busy}
-            onClick={() => setRotation((r) => ((r + 90) % 360) as 0 | 90 | 180 | 270)}
-          >
-            <RotateCcw className="h-6 w-6" />
-            Girar
-          </button>
-          <button
-            type="button"
-            className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-red-600"
-            disabled={busy}
-            onClick={onRetake}
-          >
-            <Trash2 className="h-6 w-6" />
-            Eliminar
-          </button>
-        </div>
-        <p className="mt-2 text-center text-[11px] text-gray-500">
-          Documento {CALIFACIL_WARP_LETTER_WIDTH}×{CALIFACIL_WARP_LETTER_HEIGHT}px · Pulsa ✓ para calificar
-        </p>
+        ) : (
+          <>
+            <div className="mx-auto flex max-w-md items-stretch justify-around gap-1">
+              <button
+                type="button"
+                className={cn(
+                  'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
+                  adjustMode ? 'bg-amber-400/20 text-amber-200' : 'text-white/80'
+                )}
+                disabled={busy}
+                onClick={() => {
+                  setAdjustMode((v) => !v);
+                  setFilterMenuOpen(false);
+                }}
+              >
+                <Crop className="h-6 w-6" />
+                Ajustar
+              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  className={cn(
+                    'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
+                    filter !== 'color' ? 'bg-amber-400/20 text-amber-200' : 'text-white/80'
+                  )}
+                  disabled={busy}
+                  onClick={() => setFilterMenuOpen((v) => !v)}
+                >
+                  <Palette className="h-6 w-6" />
+                  Filtros
+                </button>
+                {filterMenuOpen ? (
+                  <div className="absolute bottom-full left-1/2 z-20 mb-2 w-36 -translate-x-1/2 rounded-xl border border-white/15 bg-[#2c2c2e] p-1 shadow-lg">
+                    {(
+                      [
+                        ['color', 'Color'],
+                        ['grayscale', 'Escala grises'],
+                        ['bw', 'Blanco y negro'],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={cn(
+                          'block w-full rounded-lg px-3 py-2 text-left text-sm text-white',
+                          filter === id ? 'bg-white/15 font-semibold' : 'hover:bg-white/10'
+                        )}
+                        onClick={() => {
+                          setFilter(id);
+                          setFilterMenuOpen(false);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-white/80"
+                disabled={busy}
+                onClick={() => setRotation((r) => ((r + 90) % 360) as 0 | 90 | 180 | 270)}
+              >
+                <RotateCcw className="h-6 w-6" />
+                Girar
+              </button>
+              <button
+                type="button"
+                className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-red-400"
+                disabled={busy}
+                onClick={onRetake}
+              >
+                <Trash2 className="h-6 w-6" />
+                Eliminar
+              </button>
+            </div>
+            <p className="mt-2 text-center text-[11px] text-white/50">
+              {CALIFACIL_WARP_LETTER_WIDTH}×{CALIFACIL_WARP_LETTER_HEIGHT}px · Pulsa ✓ para ver las respuestas leídas
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
