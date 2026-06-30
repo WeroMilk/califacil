@@ -4147,6 +4147,98 @@ export function buildAnswerSheetOmrGeometry(
 }
 
 /**
+ * Cuadrícula uniforme dentro de un marco naranja ajustado manualmente (coords. 0–1).
+ */
+export function buildAnswerSheetOmrGeometryInNormRect(
+  frame: OmrNormRect,
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+  const fx = Math.max(0, Math.min(1, frame.x));
+  const fy = Math.max(0, Math.min(1, frame.y));
+  const fw = Math.max(0.05, Math.min(1 - fx, frame.w));
+  const fh = Math.max(0.05, Math.min(1 - fy, frame.h));
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      rowRects.push({
+        x: fx + (c / cols) * fw,
+        y: fy + (row / rows) * fh,
+        w: fw / cols,
+        h: fh / rows,
+      });
+    }
+    cells.push(rowRects);
+  }
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
+/**
+ * Lectura OMR usando un marco de tabla definido manualmente (vista previa móvil).
+ */
+export function scanWarpedWithNormTableFrame(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  tableFrame: OmrNormRect
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const emptyRows = (): OmrScanRowDetail[] =>
+    Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
+    return {
+      picks: Array(rows).fill(null),
+      rows: emptyRows(),
+      needsVisionAssist: false,
+      maxSameColumnCount: 0,
+      geometry: null,
+      reviewSourceCanvas: null,
+      controlNumberDigits: [],
+      controlNumber: null,
+    };
+  }
+  const geometry = buildAnswerSheetOmrGeometryInNormRect(
+    tableFrame,
+    rows,
+    columns,
+    warped.width,
+    warped.height
+  );
+  const thresholds: ScanThresholds = {
+    minMarkDarkness: 0.072,
+    minBestVsSecondGap: 0.038,
+    minBestVsSecondRatio: 1.35,
+    minCenterVsRingDelta: 0.04,
+    minSolidCenterDarkness: 0.24,
+    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+  };
+  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+    warped,
+    geometry,
+    thresholds,
+    rows,
+    columns
+  );
+  return {
+    picks: templateRead.picks,
+    rows: templateRead.rows,
+    needsVisionAssist: false,
+    maxSameColumnCount: templateRead.maxSameColumnCount,
+    geometry,
+    reviewSourceCanvas: warped,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+}
+
+/**
  * Cuadrícula híbrida: plantilla PDF + líneas internas detectadas tras warp refinado.
  */
 export function buildRegisteredAnswerSheetGeometry(

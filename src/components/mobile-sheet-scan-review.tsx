@@ -16,9 +16,11 @@ import {
   CALIFACIL_WARP_LETTER_WIDTH,
   califacilOmrOrangeFrameRect,
   califacilViewfinderNormRect,
+  buildAnswerSheetOmrGeometryInNormRect,
   refineWarpedCalifacilSheet,
   warpCalifacilSheetFromQuad,
   type CalifacilOmrScanGeometry,
+  type OmrNormRect,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -48,11 +50,14 @@ type Props = {
   initialAlignment: WarpAlignmentReport | null;
   initialFilter?: ScanReviewFilter;
   rowCount: number;
+  columnCount: number;
   alignPreview?: MobileAlignPreview | null;
+  alignOrangeFrame?: OmrNormRect | null;
   scanning?: boolean;
   statusMessage?: string | null;
   onRetake: () => void;
   onPreviewAlignment: (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => void;
+  onRealignOrangeFrame?: (frame: OmrNormRect) => void;
   onFinalizeGrade: () => void;
   onBackFromAlign: () => void;
 };
@@ -188,11 +193,68 @@ function sourceQuadToDisplay(
 function orangeFrameForGeometry(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
-): { x: number; y: number; w: number; h: number } | null {
+): OmrNormRect | null {
   return (
     califacilOmrOrangeFrameRect(geometry, rowCount) ??
     califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight)
   );
+}
+
+function clampOrangeFrame(frame: OmrNormRect): OmrNormRect {
+  const minW = 0.1;
+  const minH = 0.06;
+  let { x, y, w, h } = frame;
+  w = Math.max(minW, Math.min(1, w));
+  h = Math.max(minH, Math.min(1, h));
+  x = Math.max(0, Math.min(1 - w, x));
+  y = Math.max(0, Math.min(1 - h, y));
+  return { x, y, w, h };
+}
+
+function updateOrangeFrameCorner(
+  frame: OmrNormRect,
+  corner: number,
+  nx: number,
+  ny: number
+): OmrNormRect {
+  const x0 = frame.x;
+  const y0 = frame.y;
+  const x1 = frame.x + frame.w;
+  const y1 = frame.y + frame.h;
+  let left = x0;
+  let top = y0;
+  let right = x1;
+  let bottom = y1;
+  if (corner === 0) {
+    left = nx;
+    top = ny;
+  } else if (corner === 1) {
+    right = nx;
+    top = ny;
+  } else if (corner === 2) {
+    right = nx;
+    bottom = ny;
+  } else {
+    left = nx;
+    bottom = ny;
+  }
+  return clampOrangeFrame({
+    x: Math.min(left, right),
+    y: Math.min(top, bottom),
+    w: Math.abs(right - left),
+    h: Math.abs(bottom - top),
+  });
+}
+
+function normPointFromPointer(
+  clientX: number,
+  clientY: number,
+  rect: DOMRect
+): { x: number; y: number } {
+  return {
+    x: Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width))),
+    y: Math.max(0, Math.min(1, (clientY - rect.top) / Math.max(1, rect.height))),
+  };
 }
 
 export function MobileSheetScanReview({
@@ -202,11 +264,14 @@ export function MobileSheetScanReview({
   initialAlignment,
   initialFilter = 'color',
   rowCount,
+  columnCount,
   alignPreview = null,
+  alignOrangeFrame = null,
   scanning = false,
   statusMessage = null,
   onRetake,
   onPreviewAlignment,
+  onRealignOrangeFrame,
   onFinalizeGrade,
   onBackFromAlign,
 }: Props) {
@@ -218,8 +283,13 @@ export function MobileSheetScanReview({
   const [warped, setWarped] = useState<HTMLCanvasElement>(initialWarped);
   const [alignment, setAlignment] = useState<WarpAlignmentReport | null>(initialAlignment);
   const adjustSurfaceRef = useRef<HTMLDivElement>(null);
+  const alignSurfaceRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ corner: number; pointerId: number } | null>(null);
+  const orangeDragRef = useRef<{ corner: number; pointerId: number } | null>(null);
   const [displayQuad, setDisplayQuad] = useState<ScanReviewQuad>([] as unknown as ScanReviewQuad);
+  const [orangeFrameNorm, setOrangeFrameNorm] = useState<OmrNormRect | null>(null);
+  const [livePicks, setLivePicks] = useState<(number | null)[] | null>(null);
+  const [liveScore, setLiveScore] = useState<MobileAlignPreview['score'] | null>(null);
 
   const filteredPreview = useMemo(
     () => applyFilterAndRotation(warped, filter, rotation),
@@ -227,6 +297,31 @@ export function MobileSheetScanReview({
   );
   const previewUrl = useCanvasPreviewUrl(filteredPreview, 1280);
   const sourceUrl = useCanvasPreviewUrl(sourceCanvas, 1600);
+
+  useEffect(() => {
+    if (!alignPreview) {
+      setOrangeFrameNorm(null);
+      setLivePicks(null);
+      setLiveScore(null);
+      return;
+    }
+    setOrangeFrameNorm(
+      alignOrangeFrame ?? orangeFrameForGeometry(alignPreview.geometry, rowCount)
+    );
+    setLivePicks([...alignPreview.picks]);
+    setLiveScore(alignPreview.score);
+  }, [alignPreview, alignOrangeFrame, rowCount]);
+
+  const displayGeometry = useMemo(() => {
+    if (!alignPreview || !orangeFrameNorm) return null;
+    return buildAnswerSheetOmrGeometryInNormRect(
+      orangeFrameNorm,
+      rowCount,
+      columnCount,
+      alignPreview.geometry.imageWidth,
+      alignPreview.geometry.imageHeight
+    );
+  }, [alignPreview, orangeFrameNorm, rowCount, columnCount]);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
@@ -308,17 +403,41 @@ export function MobileSheetScanReview({
     onBackFromAlign();
   };
 
+  const handleOrangePointerDown = (corner: number) => (e: React.PointerEvent) => {
+    if (scanning) return;
+    e.preventDefault();
+    e.stopPropagation();
+    orangeDragRef.current = { corner, pointerId: e.pointerId };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleOrangePointerMove = (e: React.PointerEvent) => {
+    const drag = orangeDragRef.current;
+    const el = alignSurfaceRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !el || !orangeFrameNorm) return;
+    const rect = el.getBoundingClientRect();
+    const p = normPointFromPointer(e.clientX, e.clientY, rect);
+    setOrangeFrameNorm(updateOrangeFrameCorner(orangeFrameNorm, drag.corner, p.x, p.y));
+  };
+
+  const handleOrangePointerUp = (e: React.PointerEvent) => {
+    const drag = orangeDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !orangeFrameNorm) return;
+    orangeDragRef.current = null;
+    onRealignOrangeFrame?.(orangeFrameNorm);
+  };
+
   const quadPoints = displayQuad.length === 4 ? displayQuad : [];
   const polyline =
     quadPoints.length === 4
       ? `${quadPoints[0].x},${quadPoints[0].y} ${quadPoints[1].x},${quadPoints[1].y} ${quadPoints[2].x},${quadPoints[2].y} ${quadPoints[3].x},${quadPoints[3].y}`
       : '';
 
-  const orangeFrame = alignPreview
-    ? orangeFrameForGeometry(alignPreview.geometry, rowCount)
-    : null;
+  const orangeFrame = orangeFrameNorm;
   const geoW = alignPreview ? Math.max(1, alignPreview.geometry.imageWidth) : 1;
   const geoH = alignPreview ? Math.max(1, alignPreview.geometry.imageHeight) : 1;
+  const overlayPicks = livePicks ?? alignPreview?.picks ?? [];
+  const overlayScore = liveScore ?? alignPreview?.score;
 
   return (
     <div
@@ -381,52 +500,89 @@ export function MobileSheetScanReview({
         ) : alignPreview ? (
           <div className="flex h-full flex-col items-center justify-center">
             <div
-              className="relative w-full max-w-md overflow-hidden rounded-lg bg-black/40 shadow-2xl"
+              ref={alignSurfaceRef}
+              className="relative w-full max-w-md touch-none overflow-hidden rounded-lg bg-black/40 shadow-2xl"
               style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(70vh, 32rem)' }}
+              onPointerMove={handleOrangePointerMove}
+              onPointerUp={handleOrangePointerUp}
+              onPointerCancel={handleOrangePointerUp}
             >
+              {scanning ? (
+                <div className="absolute inset-0 z-[5] flex items-center justify-center bg-black/40">
+                  <Loader2 className="h-8 w-8 animate-spin text-amber-300" />
+                </div>
+              ) : null}
               {alignPreview.previewUrl ? (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
                   src={alignPreview.previewUrl}
                   alt="Lectura OMR sobre el escaneo"
-                  className="absolute inset-0 z-0 h-full w-full object-contain"
+                  className="pointer-events-none absolute inset-0 z-0 h-full w-full object-contain"
                   draggable={false}
                 />
               ) : null}
-              {orangeFrame ? (
-                <div
-                  className="pointer-events-none absolute z-[1] rounded-md border-2 border-orange-400"
-                  style={{
-                    left: `${orangeFrame.x * 100}%`,
-                    top: `${orangeFrame.y * 100}%`,
-                    width: `${orangeFrame.w * 100}%`,
-                    height: `${orangeFrame.h * 100}%`,
-                  }}
-                  aria-hidden
-                />
+              {displayGeometry ? (
+                <div className="pointer-events-none absolute inset-0 z-[2]">
+                  <CalifacilOmrReviewOverlay
+                    geometry={displayGeometry}
+                    picks={overlayPicks}
+                    expectedPicks={alignPreview.expectedPicks}
+                    expectedOpacity={0.45}
+                    rowCount={rowCount}
+                  />
+                </div>
               ) : null}
-              <div className="pointer-events-none absolute inset-0 z-[2]">
-                <CalifacilOmrReviewOverlay
-                  geometry={alignPreview.geometry}
-                  picks={alignPreview.picks}
-                  expectedPicks={alignPreview.expectedPicks}
-                  expectedOpacity={0.45}
-                  rowCount={rowCount}
-                />
-              </div>
+              {orangeFrame ? (
+                <>
+                  <div
+                    className="absolute z-[3] rounded-md border-2 border-orange-400 bg-orange-400/5"
+                    style={{
+                      left: `${orangeFrame.x * 100}%`,
+                      top: `${orangeFrame.y * 100}%`,
+                      width: `${orangeFrame.w * 100}%`,
+                      height: `${orangeFrame.h * 100}%`,
+                    }}
+                    aria-hidden
+                  />
+                  {(
+                    [
+                      [orangeFrame.x, orangeFrame.y],
+                      [orangeFrame.x + orangeFrame.w, orangeFrame.y],
+                      [orangeFrame.x + orangeFrame.w, orangeFrame.y + orangeFrame.h],
+                      [orangeFrame.x, orangeFrame.y + orangeFrame.h],
+                    ] as const
+                  ).map(([nx, ny], i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="absolute z-[4] h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-orange-500 shadow-lg active:scale-95"
+                      style={{
+                        left: `${nx * 100}%`,
+                        top: `${ny * 100}%`,
+                        touchAction: 'none',
+                      }}
+                      aria-label={`Esquina ${i + 1} del marco naranja`}
+                      disabled={scanning}
+                      onPointerDown={handleOrangePointerDown(i)}
+                    />
+                  ))}
+                </>
+              ) : null}
             </div>
             <div className="mt-3 w-full max-w-md rounded-xl bg-white/8 px-3 py-2 text-center ring-1 ring-white/10">
-              <p className="text-sm font-semibold">
-                <span className="tabular-nums">{alignPreview.score.correct}</span>
-                <span className="text-white/70"> / </span>
-                <span className="tabular-nums">{alignPreview.score.total}</span>
-                <span className="mx-2 text-white/50">·</span>
-                <span className={cn('tabular-nums', getGradeColor(alignPreview.score.pct))}>
-                  {alignPreview.score.pct}%
-                </span>
-              </p>
+              {overlayScore ? (
+                <p className="text-sm font-semibold">
+                  <span className="tabular-nums">{overlayScore.correct}</span>
+                  <span className="text-white/70"> / </span>
+                  <span className="tabular-nums">{overlayScore.total}</span>
+                  <span className="mx-2 text-white/50">·</span>
+                  <span className={cn('tabular-nums', getGradeColor(overlayScore.pct))}>
+                    {overlayScore.pct}%
+                  </span>
+                </p>
+              ) : null}
               <p className="mt-1 text-[11px] leading-snug text-white/65">
-                Verde = acierto · Rojo = error · Naranja = respuesta correcta · Amarillo = sin lectura
+                Arrastra las esquinas naranjas hasta que coincidan con la tabla · Verde = acierto · Rojo = error
               </p>
             </div>
           </div>
