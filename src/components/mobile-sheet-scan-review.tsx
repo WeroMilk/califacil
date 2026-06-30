@@ -37,6 +37,7 @@ export type MobileAlignPreview = {
   picks: (number | null)[];
   expectedPicks: (number | null)[];
   previewCanvas: HTMLCanvasElement;
+  previewUrl: string;
   score: { correct: number; total: number; pct: number };
 };
 
@@ -48,7 +49,8 @@ type Props = {
   initialFilter?: ScanReviewFilter;
   rowCount: number;
   alignPreview?: MobileAlignPreview | null;
-  busy?: boolean;
+  scanning?: boolean;
+  statusMessage?: string | null;
   onRetake: () => void;
   onPreviewAlignment: (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => void;
   onFinalizeGrade: () => void;
@@ -201,7 +203,8 @@ export function MobileSheetScanReview({
   initialFilter = 'color',
   rowCount,
   alignPreview = null,
-  busy = false,
+  scanning = false,
+  statusMessage = null,
   onRetake,
   onPreviewAlignment,
   onFinalizeGrade,
@@ -224,7 +227,6 @@ export function MobileSheetScanReview({
   );
   const previewUrl = useCanvasPreviewUrl(filteredPreview, 1280);
   const sourceUrl = useCanvasPreviewUrl(sourceCanvas, 1600);
-  const alignUrl = useCanvasPreviewUrl(alignPreview?.previewCanvas ?? null, 1280);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
@@ -290,12 +292,20 @@ export function MobileSheetScanReview({
   };
 
   const handleCheck = () => {
-    if (busy) return;
+    if (scanning && !alignPreview) return;
     if (alignPreview) {
       onFinalizeGrade();
       return;
     }
     onPreviewAlignment(filteredPreview, alignment);
+  };
+
+  const handleRetake = () => {
+    onRetake();
+  };
+
+  const handleBackFromAlign = () => {
+    onBackFromAlign();
   };
 
   const quadPoints = displayQuad.length === 4 ? displayQuad : [];
@@ -318,13 +328,13 @@ export function MobileSheetScanReview({
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
-      <div className="flex shrink-0 items-center justify-between px-3 py-2">
+      <div className="relative z-30 flex shrink-0 items-center justify-between px-3 py-2">
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 active:bg-white/20"
+          style={{ touchAction: 'manipulation' }}
           aria-label={alignPreview ? 'Volver a editar' : 'Volver a cámara'}
-          disabled={busy}
-          onClick={alignPreview ? onBackFromAlign : onRetake}
+          onClick={alignPreview ? handleBackFromAlign : handleRetake}
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
@@ -333,21 +343,22 @@ export function MobileSheetScanReview({
         ) : (
           <button
             type="button"
-            className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold"
-            disabled={busy}
-            onClick={onRetake}
+            className="rounded-full bg-white/10 px-4 py-2 text-sm font-semibold active:bg-white/20"
+            style={{ touchAction: 'manipulation' }}
+            onClick={handleRetake}
           >
             Repetir
           </button>
         )}
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-400 text-black shadow-lg disabled:opacity-50"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-400 text-black shadow-lg disabled:opacity-60 active:scale-95"
+          style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
           aria-label={alignPreview ? 'Calificar' : 'Ver lectura de respuestas'}
-          disabled={busy}
+          disabled={scanning && !alignPreview}
           onClick={handleCheck}
         >
-          {busy ? (
+          {scanning ? (
             <Loader2 className="h-5 w-5 animate-spin" />
           ) : (
             <Check className="h-5 w-5" strokeWidth={3} />
@@ -355,20 +366,33 @@ export function MobileSheetScanReview({
         </button>
       </div>
 
+      {statusMessage ? (
+        <p className="shrink-0 px-4 pb-2 text-center text-sm font-medium text-amber-200">
+          {statusMessage}
+        </p>
+      ) : null}
+
       <div className="relative min-h-0 flex-1 overflow-hidden px-3 pb-2">
-        {alignPreview && alignUrl ? (
+        {scanning && !alignPreview ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-white/80">
+            <Loader2 className="h-10 w-10 animate-spin text-amber-300" />
+            <p className="text-sm">{statusMessage ?? 'Procesando…'}</p>
+          </div>
+        ) : alignPreview ? (
           <div className="flex h-full flex-col items-center justify-center">
             <div
               className="relative w-full max-w-md overflow-hidden rounded-lg bg-black/40 shadow-2xl"
               style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(70vh, 32rem)' }}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={alignUrl}
-                alt="Lectura OMR sobre el escaneo"
-                className="absolute inset-0 z-0 h-full w-full object-contain"
-                draggable={false}
-              />
+              {alignPreview.previewUrl ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={alignPreview.previewUrl}
+                  alt="Lectura OMR sobre el escaneo"
+                  className="absolute inset-0 z-0 h-full w-full object-contain"
+                  draggable={false}
+                />
+              ) : null}
               {orangeFrame ? (
                 <div
                   className="pointer-events-none absolute z-[1] rounded-md border-2 border-orange-400"
@@ -465,24 +489,25 @@ export function MobileSheetScanReview({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-white/10 bg-[#1c1c1e] px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div className="relative z-30 shrink-0 border-t border-white/10 bg-[#1c1c1e] px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         {alignPreview ? (
           <div className="mx-auto flex max-w-md gap-2 px-2">
             <button
               type="button"
-              className="flex-1 rounded-xl bg-white/10 py-3 text-sm font-semibold"
-              disabled={busy}
-              onClick={onBackFromAlign}
+              className="flex-1 rounded-xl bg-white/10 py-3 text-sm font-semibold active:bg-white/15"
+              style={{ touchAction: 'manipulation' }}
+              onClick={handleBackFromAlign}
             >
               Ajustar de nuevo
             </button>
             <button
               type="button"
               className="flex-1 rounded-xl bg-amber-400 py-3 text-sm font-semibold text-black"
-              disabled={busy}
+              style={{ touchAction: 'manipulation' }}
+              disabled={scanning}
               onClick={onFinalizeGrade}
             >
-              Calificar
+              {scanning ? 'Calificando…' : 'Calificar'}
             </button>
           </div>
         ) : (
@@ -494,7 +519,7 @@ export function MobileSheetScanReview({
                   'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
                   adjustMode ? 'bg-amber-400/20 text-amber-200' : 'text-white/80'
                 )}
-                disabled={busy}
+                disabled={scanning}
                 onClick={() => {
                   setAdjustMode((v) => !v);
                   setFilterMenuOpen(false);
@@ -510,7 +535,7 @@ export function MobileSheetScanReview({
                     'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium',
                     filter !== 'color' ? 'bg-amber-400/20 text-amber-200' : 'text-white/80'
                   )}
-                  disabled={busy}
+                  disabled={scanning}
                   onClick={() => setFilterMenuOpen((v) => !v)}
                 >
                   <Palette className="h-6 w-6" />
@@ -546,7 +571,7 @@ export function MobileSheetScanReview({
               <button
                 type="button"
                 className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-white/80"
-                disabled={busy}
+                disabled={scanning}
                 onClick={() => setRotation((r) => ((r + 90) % 360) as 0 | 90 | 180 | 270)}
               >
                 <RotateCcw className="h-6 w-6" />
@@ -555,7 +580,7 @@ export function MobileSheetScanReview({
               <button
                 type="button"
                 className="flex min-w-[4.5rem] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-medium text-red-400"
-                disabled={busy}
+                disabled={scanning}
                 onClick={onRetake}
               >
                 <Trash2 className="h-6 w-6" />

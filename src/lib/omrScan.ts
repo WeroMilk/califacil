@@ -5040,6 +5040,81 @@ export function scanCalifacilOmrSheet(
 }
 
 /**
+ * Lectura OMR rápida en hoja ya enderezada (p. ej. 850×1100) para vista previa móvil.
+ * Evita el barrido pesado de {@link scanCalifacilOmrSheetWithMeta}.
+ */
+export function scanWarpedMobileAnswerSheetFast(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const emptyRows = (): OmrScanRowDetail[] =>
+    Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
+    return {
+      picks: Array(rows).fill(null),
+      rows: emptyRows(),
+      needsVisionAssist: false,
+      maxSameColumnCount: 0,
+      geometry: null,
+      reviewSourceCanvas: null,
+      controlNumberDigits: [],
+      controlNumber: null,
+    };
+  }
+  const geometry = buildAnswerSheetOmrGeometry(rows, columns, warped.width, warped.height);
+  const thresholds: ScanThresholds = {
+    minMarkDarkness: 0.072,
+    minBestVsSecondGap: 0.038,
+    minBestVsSecondRatio: 1.35,
+    minCenterVsRingDelta: 0.04,
+    minSolidCenterDarkness: 0.24,
+    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+  };
+  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+    warped,
+    geometry,
+    thresholds,
+    rows,
+    columns
+  );
+  return {
+    picks: templateRead.picks,
+    rows: templateRead.rows,
+    needsVisionAssist: false,
+    maxSameColumnCount: templateRead.maxSameColumnCount,
+    geometry,
+    reviewSourceCanvas: warped,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+}
+
+/** Reduce un canvas para lectura OMR móvil sin bloquear el hilo principal tanto tiempo. */
+export function downscaleCanvasForOmrScan(
+  source: HTMLCanvasElement,
+  maxSide = 960
+): HTMLCanvasElement {
+  return drawSourceToCanvas(source, maxSide) ?? source;
+}
+
+/** JPEG en data URL para vista previa móvil (síncrono, tamaño acotado). */
+export function canvasPreviewDataUrl(
+  source: HTMLCanvasElement,
+  maxSide = 1200,
+  quality = 0.85
+): string | null {
+  const scaled = drawSourceToCanvas(source, maxSide);
+  if (!scaled) return null;
+  try {
+    return scaled.toDataURL('image/jpeg', quality);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Igual que {@link scanCalifacilOmrSheet} pero expone filas, fracción de tinta y si conviene asistencia por visión.
  */
 export function scanCalifacilOmrSheetWithMeta(
