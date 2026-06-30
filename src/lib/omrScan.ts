@@ -6,14 +6,17 @@
 import {
   buildCalifacilAnswerSheetOmrTemplate,
   buildMarkerAnchoredAnswerSheetTemplate,
+  CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT,
   CALIFACIL_FIDUCIAL_CENTERS_NORM,
   CALIFACIL_VIEWFINDER_GUIDE,
   CALIFACIL_WARP_PAGE_FRAME_NORM,
   CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
   califacilAnswerSheetAlignFrameAspect,
   CALIFACIL_PRINT_MAX_QUESTIONS,
+  getControlNumberBlockPageRatios,
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
+import { controlNumberDigitsToString } from '@/lib/controlNumberOmr';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -167,6 +170,10 @@ export type OmrScanMetaResult = {
   reviewSourceCanvas: HTMLCanvasElement | null;
   /** Error de alineación fiducial tras warp (si se solicitó). */
   warpAlignment?: WarpAlignmentReport | null;
+  /** Dígitos leídos del bloque de número de control (8 columnas). */
+  controlNumberDigits: (number | null)[];
+  /** Número de control completo si los 8 dígitos fueron leídos con confianza. */
+  controlNumber: string | null;
 };
 
 /** Máximo error en píxeles entre fiduciales detectados y plantilla tras warp. */
@@ -3311,6 +3318,153 @@ export function buildAnswerSheetOmrGeometry(
   return { imageWidth: width, imageHeight: height, cells };
 }
 
+export type CalifacilControlNumberGeometry = {
+  imageWidth: number;
+  imageHeight: number;
+  digitCount: number;
+  /** cells[column][digitRow 0–9] */
+  cells: OmrNormRect[][];
+};
+
+/** Cuadrícula OMR del número de control alineada con la plantilla impresa. */
+export function buildAnswerSheetControlNumberGeometry(
+  imageWidth: number,
+  imageHeight: number,
+  digitCount = CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT
+): CalifacilControlNumberGeometry {
+  const cols = Math.max(1, Math.min(12, Math.round(digitCount)));
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+  const bounds = getControlNumberBlockPageRatios();
+
+  const blockLeft = width * bounds.left;
+  const blockTop = height * bounds.top;
+  const blockW = width * bounds.width;
+  const blockH = height * bounds.height;
+  const titleH = blockH * bounds.titleFrac;
+  const tableTop = blockTop + titleH;
+  const tableH = blockH - titleH;
+  const headerH = tableH * bounds.headerFrac;
+  const dataTop = tableTop + headerH;
+  const dataH = tableH - headerH;
+  const rowH = dataH / 10;
+  const cornerW = blockW * bounds.cornerColFrac;
+  const dataLeft = blockLeft + cornerW;
+  const dataW = blockW - cornerW;
+  const colW = dataW / cols;
+
+  const cells: OmrNormRect[][] = [];
+  for (let col = 0; col < cols; col++) {
+    const colCells: OmrNormRect[] = [];
+    for (let d = 0; d <= 9; d++) {
+      const x0 = dataLeft + col * colW;
+      const x1 = col === cols - 1 ? dataLeft + dataW : dataLeft + (col + 1) * colW;
+      const y0 = dataTop + d * rowH;
+      const y1 = dataTop + (d + 1) * rowH;
+      colCells.push({
+        x: x0 / width,
+        y: y0 / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (y1 - y0) / height),
+      });
+    }
+    cells.push(colCells);
+  }
+
+  return { imageWidth: width, imageHeight: height, digitCount: cols, cells };
+}
+
+function readControlNumberFromTemplateGeometry(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilControlNumberGeometry,
+  thresholds: ScanThresholds
+): { digits: (number | null)[]; controlNumber: string | null } {
+  const cols = geometry.digitCount;
+  const digits: (number | null)[] = Array(cols).fill(null);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return { digits, controlNumber: null };
+  }
+
+  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const W = Math.max(1, geometry.imageWidth);
+  const H = Math.max(1, geometry.imageHeight);
+  const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
+
+  for (let col = 0; col < cols; col++) {
+    const colCells = geometry.cells[col];
+    if (!colCells?.length) continue;
+
+    let colX0 = W;
+    let colX1 = 0;
+    let colY0 = H;
+    let colY1 = 0;
+    for (const cell of colCells) {
+      colX0 = Math.min(colX0, cell.x * W);
+      colX1 = Math.max(colX1, (cell.x + cell.w) * W);
+      colY0 = Math.min(colY0, cell.y * H);
+      colY1 = Math.max(colY1, (cell.y + cell.h) * H);
+    }
+    const { hist, total } = buildRowGrayHistogram(
+      data,
+      width,
+      height,
+      Math.max(0, Math.floor(colX0)),
+      Math.min(width - 1, Math.ceil(colX1)),
+      Math.max(0, Math.floor(colY0)),
+      Math.min(height - 1, Math.ceil(colY1)),
+      2
+    );
+    const otsuT = otsuThreshold256(hist, Math.max(1, total));
+
+    const fills: number[] = [];
+    const scores: number[] = [];
+    const inkFracs: number[] = [];
+
+    for (let d = 0; d <= 9; d++) {
+      const cell = colCells[d];
+      if (!cell) {
+        fills.push(0);
+        scores.push(0);
+        inkFracs.push(0);
+        continue;
+      }
+      const cellW = Math.max(1, cell.w * W);
+      const cellH = Math.max(1, cell.h * H);
+      const marginX = 0.18;
+      const marginY = 0.14;
+      const xa = cell.x * W + cellW * marginX;
+      const xb = cell.x * W + cellW * (1 - marginX);
+      const ya = cell.y * H + cellH * marginY;
+      const yb = cell.y * H + cellH * (1 - marginY);
+      const cx = cell.x * W + cellW * 0.5;
+      const cy = cell.y * H + cellH * 0.5;
+      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.22);
+
+      const fillDark = sampleRectMeanDarkness(data, width, height, xa, ya, xb, yb);
+      const ringDark = sampleAnnulusDarkness(
+        data,
+        width,
+        height,
+        cx,
+        cy,
+        Math.max(1, Math.round(radiusPx * 0.62)),
+        Math.max(2, Math.round(radiusPx))
+      );
+      fills.push(fillDark);
+      scores.push(fillDark - ringDark * rw);
+      inkFracs.push(
+        sampleRectInkFractionAtThreshold(data, width, height, xa, ya, xb, yb, otsuT, 2)
+      );
+    }
+
+    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols: 10 });
+    digits[col] = abs.pick;
+  }
+
+  return { digits, controlNumber: controlNumberDigitsToString(digits) };
+}
+
 /**
  * Posiciones de burbujas y margen de tabla según la plantilla impresa (sin escanear imagen).
  * Sirve para superponer la guía de 120 círculos en el visor de cámara.
@@ -4471,6 +4625,8 @@ export function scanCalifacilOmrSheetWithMeta(
       maxSameColumnCount: 0,
       geometry: null,
       reviewSourceCanvas: null,
+      controlNumberDigits: [],
+      controlNumber: null,
     };
   }
   let canvas =
@@ -4485,6 +4641,8 @@ export function scanCalifacilOmrSheetWithMeta(
       maxSameColumnCount: 0,
       geometry: null,
       reviewSourceCanvas: null,
+      controlNumberDigits: [],
+      controlNumber: null,
     };
   }
   if (!opts?.skipGuideCrop) {
@@ -4693,6 +4851,16 @@ export function scanCalifacilOmrSheetWithMeta(
     };
   }
 
+  const controlGeom = buildAnswerSheetControlNumberGeometry(
+    reviewCanvas.width,
+    reviewCanvas.height
+  );
+  const controlRead = readControlNumberFromTemplateGeometry(
+    reviewCanvas,
+    controlGeom,
+    thresholds
+  );
+
   return {
     picks: best.picks,
     rows: best.rows,
@@ -4703,6 +4871,8 @@ export function scanCalifacilOmrSheetWithMeta(
     warpAlignment: opts?.includeWarpAlignment
       ? measureWarpedFiducialAlignment(canvas)
       : undefined,
+    controlNumberDigits: controlRead.digits,
+    controlNumber: controlRead.controlNumber,
   };
 }
 
