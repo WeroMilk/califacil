@@ -210,6 +210,25 @@ function clampOrangeFrame(frame: OmrNormRect): OmrNormRect {
   return { x, y, w, h };
 }
 
+function translateOrangeFrame(frame: OmrNormRect, dx: number, dy: number): OmrNormRect {
+  return clampOrangeFrame({
+    x: frame.x + dx,
+    y: frame.y + dy,
+    w: frame.w,
+    h: frame.h,
+  });
+}
+
+type OrangeFrameDrag =
+  | { kind: 'corner'; corner: number; pointerId: number }
+  | {
+      kind: 'move';
+      pointerId: number;
+      startNormX: number;
+      startNormY: number;
+      originFrame: OmrNormRect;
+    };
+
 function updateOrangeFrameCorner(
   frame: OmrNormRect,
   corner: number,
@@ -284,7 +303,7 @@ export function MobileSheetScanReview({
   const adjustSurfaceRef = useRef<HTMLDivElement>(null);
   const alignSurfaceRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ corner: number; pointerId: number } | null>(null);
-  const orangeDragRef = useRef<{ corner: number; pointerId: number } | null>(null);
+  const orangeDragRef = useRef<OrangeFrameDrag | null>(null);
   const [displayQuad, setDisplayQuad] = useState<ScanReviewQuad>([] as unknown as ScanReviewQuad);
   const [orangeFrameNorm, setOrangeFrameNorm] = useState<OmrNormRect | null>(null);
   const [livePicks, setLivePicks] = useState<(number | null)[] | null>(null);
@@ -396,12 +415,29 @@ export function MobileSheetScanReview({
     onBackFromAlign();
   };
 
-  const handleOrangePointerDown = (corner: number) => (e: React.PointerEvent) => {
+  const handleOrangeCornerPointerDown = (corner: number) => (e: React.PointerEvent) => {
     if (scanning) return;
     e.preventDefault();
     e.stopPropagation();
-    orangeDragRef.current = { corner, pointerId: e.pointerId };
+    orangeDragRef.current = { kind: 'corner', corner, pointerId: e.pointerId };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleOrangeFrameMovePointerDown = (e: React.PointerEvent) => {
+    if (scanning || !orangeFrameNorm) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = alignSurfaceRef.current;
+    if (!el) return;
+    const p = normPointFromPointer(e.clientX, e.clientY, el.getBoundingClientRect());
+    orangeDragRef.current = {
+      kind: 'move',
+      pointerId: e.pointerId,
+      startNormX: p.x,
+      startNormY: p.y,
+      originFrame: orangeFrameNorm,
+    };
+    el.setPointerCapture(e.pointerId);
   };
 
   const handleOrangePointerMove = (e: React.PointerEvent) => {
@@ -410,7 +446,17 @@ export function MobileSheetScanReview({
     if (!drag || drag.pointerId !== e.pointerId || !el || !orangeFrameNorm) return;
     const rect = el.getBoundingClientRect();
     const p = normPointFromPointer(e.clientX, e.clientY, rect);
-    setOrangeFrameNorm(updateOrangeFrameCorner(orangeFrameNorm, drag.corner, p.x, p.y));
+    if (drag.kind === 'corner') {
+      setOrangeFrameNorm(updateOrangeFrameCorner(orangeFrameNorm, drag.corner, p.x, p.y));
+      return;
+    }
+    setOrangeFrameNorm(
+      translateOrangeFrame(
+        drag.originFrame,
+        p.x - drag.startNormX,
+        p.y - drag.startNormY
+      )
+    );
   };
 
   const handleOrangePointerUp = (e: React.PointerEvent) => {
@@ -528,7 +574,7 @@ export function MobileSheetScanReview({
               {orangeFrame ? (
                 <>
                   <div
-                    className="absolute z-[3] rounded-md border-2 border-orange-400 bg-orange-400/5"
+                    className="absolute z-[3] cursor-move rounded-md border-2 border-orange-400 bg-orange-400/5 touch-none"
                     style={{
                       left: `${orangeFrame.x * 100}%`,
                       top: `${orangeFrame.y * 100}%`,
@@ -536,6 +582,7 @@ export function MobileSheetScanReview({
                       height: `${orangeFrame.h * 100}%`,
                     }}
                     aria-hidden
+                    onPointerDown={handleOrangeFrameMovePointerDown}
                   />
                   {(
                     [
@@ -548,7 +595,7 @@ export function MobileSheetScanReview({
                     <button
                       key={i}
                       type="button"
-                      className="absolute z-[4] h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-orange-500 shadow-lg active:scale-95"
+                      className="absolute z-[4] h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-white bg-orange-500 shadow-lg active:scale-95"
                       style={{
                         left: `${nx * 100}%`,
                         top: `${ny * 100}%`,
@@ -556,7 +603,7 @@ export function MobileSheetScanReview({
                       }}
                       aria-label={`Esquina ${i + 1} del marco naranja`}
                       disabled={scanning}
-                      onPointerDown={handleOrangePointerDown(i)}
+                      onPointerDown={handleOrangeCornerPointerDown(i)}
                     />
                   ))}
                 </>
@@ -575,7 +622,8 @@ export function MobileSheetScanReview({
                 </p>
               ) : null}
               <p className="mt-1 text-[11px] leading-snug text-white/65">
-                Arrastra las esquinas naranjas hasta que coincidan con la tabla · Verde = acierto · Rojo = error
+                Arrastra el marco naranja o sus esquinas hasta que coincida con la tabla · Verde = acierto · Rojo =
+                error
               </p>
             </div>
           </div>

@@ -72,16 +72,13 @@ import {
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
 import { warpCalifacilMobileCaptureFast } from '@/lib/omr/pipeline';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
-import {
-  CalifacilLiveScanOverlay,
-  type LiveVideoLetterbox,
-} from '@/components/califacil-live-scan-overlay';
+import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
-import { IphoneDocumentScannerOverlay, IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
+import { IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -2076,9 +2073,7 @@ export default function CalificarPage() {
               cornerStableTicksRef.current = 1;
               setMobileStableTicks(1);
               setCornersAlignedView(true);
-              setLiveStatus(
-                `Hoja detectada — alinea los círculos con las burbujas (verde = clave) y pulsa Capturar.`
-              );
+              setLiveStatus('Hoja detectada — pulsa Capturar cuando esté bien encuadrada.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2870,6 +2865,9 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
+      void setTorchEnabled(false);
+      setFlashOn(false);
+
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         toast.error('No se pudo capturar el fotograma. Intenta de nuevo.');
@@ -2933,7 +2931,7 @@ export default function CalificarPage() {
         alignment,
       });
     },
-    []
+    [setTorchEnabled]
   );
 
   const retakeMobileCaptureReview = useCallback(() => {
@@ -3640,11 +3638,6 @@ export default function CalificarPage() {
                         )}
                       />
                     </div>
-                    <IphoneDocumentScannerOverlay
-                      documentPolygon={mobileDocumentPolygon}
-                      detected={cornersAlignedView}
-                      hint="Encuadra la tabla de respuestas dentro del recuadro."
-                    />
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
 
