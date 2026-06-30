@@ -41,7 +41,6 @@ import {
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isValidMobileRoiQuad,
-  mapRoiQuadToFrame,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
   MAX_WARP_ALIGNMENT_ERROR_PX,
@@ -53,16 +52,14 @@ import {
   prepareAnswerSheetDisplayCanvas,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
-  refineWarpedCalifacilSheet,
-  scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
-  warpAndValidateCalifacilSheet,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
   type CalifacilOmrScanGeometry,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
+import { warpCalifacilMobileCapture } from '@/lib/omr/pipeline';
 import {
   CalifacilLiveScanOverlay,
   type LiveVideoLetterbox,
@@ -200,52 +197,19 @@ type RoiQuad = [
 ];
 
 /** Detección en ROI baja resolución → warp/OMR en fotograma completo alta resolución. */
-function warpHighResFromRoiDetection(
-  fullCanvas: HTMLCanvasElement,
-  roiQuad: RoiQuad,
-  roiCapture: MobileGuideRoiCapture
-) {
-  const roiW = roiCapture.roiCanvas.width;
-  const roiH = roiCapture.roiCanvas.height;
-  const frameQuad = mapRoiQuadToFrame(roiQuad, roiCapture.roiRect, roiW, roiH);
-  const scaledQuad = scaleQuadToCanvas(
-    frameQuad,
-    roiCapture.frameW,
-    roiCapture.frameH,
-    fullCanvas.width,
-    fullCanvas.height
-  );
-  return warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, MAX_WARP_ALIGNMENT_ERROR_PX);
-}
-
 function warpMobileCaptureWithFallback(
   fullCanvas: HTMLCanvasElement,
   roiQuad: RoiQuad,
   roiCapture: MobileGuideRoiCapture
 ): { warped: HTMLCanvasElement | null; alignment: WarpAlignmentReport | null } {
-  const primary = warpHighResFromRoiDetection(fullCanvas, roiQuad, roiCapture);
-  if (primary.warped && primary.alignment?.ok) return primary;
-
-  const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
-  if (!warped) return primary;
-
-  const refined = refineWarpedCalifacilSheet(warped, {
-    maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+  const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = MAX_WARP_ALIGNMENT_ERROR_PX + 6;
+  const result = warpCalifacilMobileCapture(fullCanvas, {
+    roiQuad,
+    roiCapture,
+    maxErrorPx: MAX_WARP_ALIGNMENT_ERROR_PX,
+    fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
   });
-  const alignment = refined.alignment;
-  if (alignment.ok) return { warped: refined.canvas, alignment };
-
-  if (primary.warped) {
-    const primaryRefined = refineWarpedCalifacilSheet(primary.warped, {
-      maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-    });
-    return {
-      warped: primaryRefined.canvas,
-      alignment: primaryRefined.alignment,
-    };
-  }
-
-  return { warped: refined.canvas, alignment };
+  return { warped: result.warped, alignment: result.alignment };
 }
 
 /** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */

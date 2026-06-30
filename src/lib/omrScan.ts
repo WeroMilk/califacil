@@ -17,6 +17,8 @@ import {
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
 import { controlNumberDigitsToString } from '@/lib/controlNumberOmr';
+import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
+import { validateAnswerSheetGeometry } from '@/lib/omr/validate-geometry';
 import {
   REFINE_WARP_MAX_ITERATIONS,
   REFINE_WARP_TARGET_MAX_ERROR_PX,
@@ -642,6 +644,7 @@ function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTempla
 }
 
 type Point = { x: number; y: number };
+export type { Point };
 
 type LineXFromY = { m: number; b: number }; // x = m*y + b
 type LineYFromX = { m: number; b: number }; // y = m*x + b
@@ -1973,20 +1976,24 @@ export function detectLargestQuadInRoiCanvas(
   const h = roiCanvas.height;
   if (w < 80 || h < 80) return null;
 
-  const candidates: ([Point, Point, Point, Point] | null)[] = [
-    detectCornerMarkersOnRoiCanvas(roiCanvas),
-    detectLargestQuadViaRoiEdges(roiCanvas),
-    detectCalifacilQuad(roiCanvas),
-  ];
+  const preprocessed = preprocessForSheetDetection(roiCanvas);
+  const sources = preprocessed ? [preprocessed, roiCanvas] : [roiCanvas];
 
   let best: [Point, Point, Point, Point] | null = null;
   let bestArea = 0;
-  for (const quad of candidates) {
-    if (!quad || !isValidMobileRoiQuad(quad, w, h)) continue;
-    const area = quadShoelaceArea(quad);
-    if (area > bestArea) {
-      bestArea = area;
-      best = quad;
+  for (const src of sources) {
+    const candidates: ([Point, Point, Point, Point] | null)[] = [
+      detectCornerMarkersOnRoiCanvas(src),
+      detectLargestQuadViaRoiEdges(src),
+      detectCalifacilQuad(src),
+    ];
+    for (const quad of candidates) {
+      if (!quad || !isValidMobileRoiQuad(quad, w, h)) continue;
+      const area = quadShoelaceArea(quad);
+      if (area > bestArea) {
+        bestArea = area;
+        best = quad;
+      }
     }
   }
   return best;
@@ -2345,6 +2352,25 @@ export type WarpCalifacilSheetResult = {
   alignment: WarpAlignmentReport | null;
 };
 
+/** Micro-rotación ±N° para minimizar error fiducial residual tras warp. */
+export function deskewWarpedCalifacilSheet(
+  warped: HTMLCanvasElement,
+  maxDegrees = 6
+): HTMLCanvasElement {
+  let best = warped;
+  let bestErr = measureWarpedFiducialAlignment(warped, 99).maxErrorPx;
+  for (let deg = -maxDegrees; deg <= maxDegrees; deg++) {
+    if (deg === 0) continue;
+    const rotated = rotateCanvasByDegrees(warped, deg);
+    const err = measureWarpedFiducialAlignment(rotated, 99).maxErrorPx;
+    if (err < bestErr - 0.15) {
+      bestErr = err;
+      best = rotated;
+    }
+  }
+  return best;
+}
+
 /** Warp a carta + validación de homografía por fiduciales + refinamiento iterativo. */
 export function warpAndValidateCalifacilSheet(
   canvas: HTMLCanvasElement,
@@ -2388,10 +2414,29 @@ export function refineWarpedCalifacilSheet(
       maxAllowedPx,
     }
   );
+  const deskewed = deskewWarpedCalifacilSheet(refined.canvas);
+  const deskewRefined = refineWarpedSheetFiducials(
+    deskewed,
+    detectWarpedFiducialCenters,
+    (canvas, maxPx) => {
+      const r = measureWarpedFiducialAlignment(canvas, maxPx);
+      return {
+        ok: r.ok,
+        maxErrorPx: r.maxErrorPx,
+        meanErrorPx: r.meanErrorPx,
+        maxAllowedPx: r.maxAllowedPx,
+      };
+    },
+    {
+      maxIterations: 1,
+      targetMaxErrorPx: opts?.targetMaxErrorPx ?? REFINE_WARP_TARGET_MAX_ERROR_PX,
+      maxAllowedPx,
+    }
+  );
   return {
-    canvas: refined.canvas,
-    alignment: measureWarpedFiducialAlignment(refined.canvas, maxAllowedPx),
-    iterations: refined.iterations,
+    canvas: deskewRefined.canvas,
+    alignment: measureWarpedFiducialAlignment(deskewRefined.canvas, maxAllowedPx),
+    iterations: refined.iterations + deskewRefined.iterations,
   };
 }
 
@@ -2587,21 +2632,7 @@ function getGrayBufferFromCanvas(canvas: HTMLCanvasElement): { gray: Uint8Array;
  * Mejora fotos de cámara con sombras; se combina con el escaneo original y se elige la lectura con mejor puntuación.
  */
 function applyOmrcheckerStylePreprocess(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-  const got = getGrayBufferFromCanvas(canvas);
-  if (!got) return null;
-  let { gray, w, h } = got;
-  normalizeMinMaxInPlaceGray(gray);
-  gray = claheGrayToNewBuffer(
-    gray,
-    w,
-    h,
-    OMRCHECKER_STYLE_PRE.tileW,
-    OMRCHECKER_STYLE_PRE.tileH,
-    OMRCHECKER_STYLE_PRE.claheClipLimit
-  );
-  gammaCorrectGrayInPlace(gray, OMRCHECKER_STYLE_PRE.gammaLow);
-  normalizeMinMaxInPlaceGray(gray);
-  return grayBufferToRgbCanvas(gray, w, h);
+  return preprocessForSheetDetection(canvas);
 }
 
 /**
@@ -3296,7 +3327,29 @@ export function areMobileViewfinderCornersAligned(canvas: HTMLCanvasElement): bo
 export function detectCalifacilSheetCornerQuad(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
-  return detectCalifacilQuadFromCornerMarkers(canvas);
+  return detectCalifacilSheetCornerQuadRobust(canvas);
+}
+
+/** Detección robusta: preprocesado + fiduciales + heurística de papel. */
+export function detectCalifacilSheetCornerQuadRobust(
+  canvas: HTMLCanvasElement,
+  opts?: { skipPreprocess?: boolean }
+): [Point, Point, Point, Point] | null {
+  const sources: HTMLCanvasElement[] = [];
+  if (!opts?.skipPreprocess) {
+    const pre = preprocessForSheetDetection(canvas);
+    if (pre) sources.push(pre);
+  }
+  sources.push(canvas);
+  for (const src of sources) {
+    const quad = detectCalifacilQuadFromCornerMarkers(src);
+    if (quad) return quad;
+  }
+  for (const src of sources) {
+    const quad = detectCalifacilQuad(src);
+    if (quad) return quad;
+  }
+  return null;
 }
 
 /** Salida estándar tras warp por fiduciales (carta vertical 8.5×11). */
@@ -4997,11 +5050,20 @@ export function scanCalifacilOmrSheetWithMeta(
       : (bestReviewCanvas ?? canvas);
 
   if (templateGridOnly) {
-    const geometry = buildRegisteredAnswerSheetGeometry(
+    let geometry = buildRegisteredAnswerSheetGeometry(
       reviewCanvas,
       rowCount,
       columns
     );
+    const gridValidation = validateAnswerSheetGeometry(geometry, rowCount);
+    if (!gridValidation.ok) {
+      geometry = buildAnswerSheetOmrGeometry(
+        rowCount,
+        columns,
+        reviewCanvas.width,
+        reviewCanvas.height
+      );
+    }
     const templateRead = readAnswerSheetPicksFromTemplateGeometry(
       reviewCanvas,
       geometry,

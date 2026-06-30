@@ -1,0 +1,114 @@
+import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
+import type { WarpAlignmentReport } from '@/lib/omrScan';
+import {
+  MAX_WARP_ALIGNMENT_ERROR_PX,
+  detectCalifacilSheetCornerQuadRobust,
+  mapRoiQuadToFrame,
+  refineWarpedCalifacilSheet,
+  scaleQuadToCanvas,
+  warpAndValidateCalifacilSheet,
+  warpCalifacilSheetFromCornerMarkers,
+  type MobileGuideRoiCapture,
+  type Point,
+} from '@/lib/omrScan';
+
+export type RoiQuad = [Point, Point, Point, Point];
+
+export type MobileWarpPipelineResult = {
+  warped: HTMLCanvasElement | null;
+  alignment: WarpAlignmentReport | null;
+  /** Origen del cuadrilátero ganador (diagnóstico). */
+  source: 'roi' | 'full_res' | 'corner_markers' | 'none';
+};
+
+function alignmentScore(alignment: WarpAlignmentReport | null): number {
+  if (!alignment) return Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(alignment.maxErrorPx)) return Number.POSITIVE_INFINITY;
+  return alignment.maxErrorPx;
+}
+
+function finalizeWarpCandidate(
+  warped: HTMLCanvasElement | null,
+  alignment: WarpAlignmentReport | null,
+  maxAllowedPx: number
+): { warped: HTMLCanvasElement | null; alignment: WarpAlignmentReport | null } {
+  if (!warped) return { warped: null, alignment };
+  const refined = refineWarpedCalifacilSheet(warped, { maxAllowedPx });
+  return { warped: refined.canvas, alignment: refined.alignment };
+}
+
+/**
+ * Pipeline móvil: ROI + detección en alta resolución con preprocesado, warp, refinamiento y deskew.
+ */
+export function warpCalifacilMobileCapture(
+  fullCanvas: HTMLCanvasElement,
+  opts?: {
+    roiQuad?: RoiQuad | null;
+    roiCapture?: MobileGuideRoiCapture | null;
+    maxErrorPx?: number;
+    fallbackMaxErrorPx?: number;
+  }
+): MobileWarpPipelineResult {
+  const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+  const fallbackMaxErrorPx = opts?.fallbackMaxErrorPx ?? maxErrorPx + 6;
+
+  let best: MobileWarpPipelineResult = {
+    warped: null,
+    alignment: null,
+    source: 'none',
+  };
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  const consider = (
+    warped: HTMLCanvasElement | null,
+    alignment: WarpAlignmentReport | null,
+    source: MobileWarpPipelineResult['source'],
+    allowPx: number
+  ) => {
+    const finalized = finalizeWarpCandidate(warped, alignment, allowPx);
+    const score = alignmentScore(finalized.alignment);
+    if (finalized.warped && score < bestScore) {
+      bestScore = score;
+      best = { ...finalized, source };
+    }
+  };
+
+  const roiQuad = opts?.roiQuad;
+  const roiCapture = opts?.roiCapture;
+  if (roiQuad && roiCapture) {
+    const roiW = roiCapture.roiCanvas.width;
+    const roiH = roiCapture.roiCanvas.height;
+    const frameQuad = mapRoiQuadToFrame(roiQuad, roiCapture.roiRect, roiW, roiH);
+    const scaledQuad = scaleQuadToCanvas(
+      frameQuad,
+      roiCapture.frameW,
+      roiCapture.frameH,
+      fullCanvas.width,
+      fullCanvas.height
+    );
+    const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
+    consider(roiWarp.warped, roiWarp.alignment, 'roi', maxErrorPx);
+  }
+
+  const preprocessed = preprocessForSheetDetection(fullCanvas);
+  const detectTargets: HTMLCanvasElement[] = preprocessed
+    ? [preprocessed, fullCanvas]
+    : [fullCanvas];
+  for (const target of detectTargets) {
+    const quad = detectCalifacilSheetCornerQuadRobust(target, { skipPreprocess: true });
+    if (!quad) continue;
+    const fullWarp = warpAndValidateCalifacilSheet(fullCanvas, quad, maxErrorPx);
+    consider(fullWarp.warped, fullWarp.alignment, 'full_res', maxErrorPx);
+    if (best.alignment?.ok) break;
+  }
+
+  const cornerWarped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
+  if (cornerWarped) {
+  const cornerRefined = refineWarpedCalifacilSheet(cornerWarped, {
+      maxAllowedPx: fallbackMaxErrorPx,
+    });
+    consider(cornerRefined.canvas, cornerRefined.alignment, 'corner_markers', fallbackMaxErrorPx);
+  }
+
+  return best;
+}
