@@ -4146,10 +4146,177 @@ export function buildAnswerSheetOmrGeometry(
   return { imageWidth: width, imageHeight: height, cells };
 }
 
+const FRAME_GRID_SCAN_THRESHOLDS: ScanThresholds = {
+  minMarkDarkness: 0.072,
+  minBestVsSecondGap: 0.038,
+  minBestVsSecondRatio: 1.35,
+  minCenterVsRingDelta: 0.04,
+  minSolidCenterDarkness: 0.24,
+  ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+};
+
+function uniqueFrameProfiles(values: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const v of values) {
+    const key = Math.round(v * 1000);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+function scoreOmrMetaPicks(meta: OmrScanMetaResult, rowCount: number): number {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const resolved = meta.picks.filter((p) => p !== null).length;
+  const same = meta.maxSameColumnCount ?? 0;
+  const samePenalty =
+    same >= rows * 0.8 ? 520 : same >= rows * 0.6 ? 220 : same >= rows * 0.45 ? 80 : 0;
+  return resolved * 92 - samePenalty + (meta.geometry ? 48 : 0);
+}
+
+/** Marco naranja inicial: tabla completa según plantilla impresa (coords. 0–1). */
+export function califacilOmrTableFrameNormRect(rowCount: number): OmrNormRect {
+  const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  return {
+    x: t.tableLeftRatio,
+    y: t.tableTopRatio,
+    w: t.tableWidthRatio,
+    h: t.tableHeightRatio,
+  };
+}
+
 /**
- * Cuadrícula uniforme dentro de un marco naranja ajustado manualmente (coords. 0–1).
+ * Detecta líneas de la rejilla impresa dentro de un marco naranja (tabla completa o burbujas).
  */
-export function buildAnswerSheetOmrGeometryInNormRect(
+function sweepAnswerSheetGridInNormFrame(
+  data: Uint8ClampedArray,
+  imageWidth: number,
+  imageHeight: number,
+  frame: OmrNormRect,
+  rowCount: number,
+  columns: number,
+  canvas?: HTMLCanvasElement | null
+): { lineYs: number[]; colEdges: number[] } | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+
+  const fx = Math.max(0, Math.min(1, frame.x));
+  const fy = Math.max(0, Math.min(1, frame.y));
+  const fw = Math.max(0.05, Math.min(1 - fx, frame.w));
+  const fh = Math.max(0.05, Math.min(1 - fy, frame.h));
+  const frameLeft = fx * imageWidth;
+  const frameTop = fy * imageHeight;
+  const frameW = fw * imageWidth;
+  const frameH = fh * imageHeight;
+
+  const titleStrips = uniqueFrameProfiles([
+    0,
+    0.035,
+    0.05,
+    0.07,
+    0.09,
+    0.11,
+    template.titleStripRatioOfTable,
+  ]);
+  const qnumFracs = uniqueFrameProfiles([
+    0,
+    0.05,
+    0.07,
+    template.qnumWidthRatio,
+    0.11,
+    0.14,
+  ]);
+
+  let best: { lineYs: number[]; colEdges: number[]; score: number } | null = null;
+
+  for (const titleStrip of titleStrips) {
+    for (const qnumFrac of qnumFracs) {
+      const dataTop = frameTop + frameH * titleStrip;
+      const dataHeight = frameH * (1 - titleStrip);
+      const bubbleAreaLeft = frameLeft + frameW * qnumFrac;
+      const bubbleAreaW = frameW * (1 - qnumFrac - 0.018);
+      if (dataHeight < rows * 2.5 || bubbleAreaW < cols * 6) continue;
+
+      const lineYs = refineOmrRowBoundariesFromTableLines(
+        data,
+        imageWidth,
+        imageHeight,
+        bubbleAreaLeft,
+        dataTop,
+        dataHeight,
+        rows
+      );
+      if (!lineYs || lineYs.length !== rows + 1) continue;
+
+      const rowH = dataHeight / rows;
+      let colEdges =
+        inferColumnEdgesFromVerticalLines(
+          data,
+          imageWidth,
+          imageHeight,
+          bubbleAreaLeft,
+          bubbleAreaW,
+          cols,
+          dataTop,
+          rowH
+        ) ??
+        inferColumnEdgesGlobalFromVerticalLines(
+          data,
+          imageWidth,
+          imageHeight,
+          cols,
+          dataTop,
+          rowH
+        );
+
+      if (!colEdges || colEdges.length !== cols + 1) {
+        colEdges = Array.from({ length: cols + 1 }, (_, c) =>
+          c === cols
+            ? Math.min(imageWidth - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+            : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+        );
+      }
+
+      const span = lineYs[rows]! - lineYs[0]!;
+      const rowUniform = lineYsHaveUniformSpacing(lineYs) ? 95 : 0;
+      const inFrame =
+        lineYs[0]! >= frameTop - 3 && lineYs[rows]! <= frameTop + frameH + 4 ? 55 : 0;
+      const colSpan = colEdges[cols]! - colEdges[0]!;
+      const colFit =
+        colSpan > bubbleAreaW * 0.68 && colSpan < bubbleAreaW * 1.18 ? 60 : -30;
+      let score = span + rowUniform + inFrame + colFit;
+
+      if (canvas) {
+        const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
+        const read = readAnswerSheetPicksFromTemplateGeometry(
+          canvas,
+          geom,
+          FRAME_GRID_SCAN_THRESHOLDS,
+          rows,
+          cols
+        );
+        const samePenalty =
+          read.maxSameColumnCount >= rows * 0.65
+            ? 280
+            : read.maxSameColumnCount >= rows * 0.45
+              ? 90
+              : 0;
+        score += read.resolvedCount * 88 + read.confidenceSum * 6 - samePenalty;
+      }
+
+      if (!best || score > best.score) {
+        best = { lineYs, colEdges, score };
+      }
+    }
+  }
+
+  return best ? { lineYs: best.lineYs, colEdges: best.colEdges } : null;
+}
+
+function buildUniformBubbleGridInNormFrame(
   frame: OmrNormRect,
   rowCount: number,
   columns: number,
@@ -4160,24 +4327,128 @@ export function buildAnswerSheetOmrGeometryInNormRect(
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const width = Math.max(1, imageWidth);
   const height = Math.max(1, imageHeight);
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+
   const fx = Math.max(0, Math.min(1, frame.x));
   const fy = Math.max(0, Math.min(1, frame.y));
   const fw = Math.max(0.05, Math.min(1 - fx, frame.w));
   const fh = Math.max(0.05, Math.min(1 - fy, frame.h));
-  const cells: OmrNormRect[][] = [];
-  for (let row = 0; row < rows; row++) {
-    const rowRects: OmrNormRect[] = [];
-    for (let c = 0; c < cols; c++) {
-      rowRects.push({
-        x: fx + (c / cols) * fw,
-        y: fy + (row / rows) * fh,
-        w: fw / cols,
-        h: fh / rows,
+
+  const dataTop = (fy + fh * template.titleStripRatioOfTable) * height;
+  const dataHeight = fh * height * (1 - template.titleStripRatioOfTable);
+  const bubbleAreaLeft = (fx + fw * template.qnumWidthRatio) * width;
+  const bubbleAreaW = fw * width * (1 - template.qnumWidthRatio - 0.018);
+  const rowH = dataHeight / rows;
+  const cellW = bubbleAreaW / cols;
+
+  const lineYs = Array.from({ length: rows + 1 }, (_, i) => Math.round(dataTop + (i * dataHeight) / rows));
+  const colEdges = Array.from({ length: cols + 1 }, (_, c) =>
+    c === cols
+      ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+      : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+  );
+  return buildCellsFromTableLines(lineYs, colEdges, width, height, cols);
+}
+
+/**
+ * Cuadrícula OMR dentro de un marco naranja: detecta líneas impresas y respeta
+ * franja de título + columna N.º (no divide el marco en una cuadrícula ciega).
+ */
+export function buildAnswerSheetOmrGeometryInNormRect(
+  frame: OmrNormRect,
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number,
+  canvas?: HTMLCanvasElement | null
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+
+  if (canvas && canvas.width === width && canvas.height === height) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx) {
+      const data = ctx.getImageData(0, 0, width, height).data;
+      const swept = sweepAnswerSheetGridInNormFrame(
+        data,
+        width,
+        height,
+        frame,
+        rowCount,
+        columns,
+        canvas
+      );
+      if (swept) {
+        const geom = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+        const validation = validateAnswerSheetGeometry(geom, rows);
+        if (validation.ok || swept.lineYs.length === rows + 1) return geom;
+      }
+    }
+  }
+
+  return buildUniformBubbleGridInNormFrame(frame, rowCount, columns, width, height);
+}
+
+/**
+ * Prueba varios marcos candidatos y elige el que más filas lee con claridad.
+ */
+export function scanWarpedWithBestTableFrame(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount: number
+): { meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect } {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const templateFrame = califacilOmrTableFrameNormRect(rows);
+  const candidates: OmrNormRect[] = [templateFrame];
+  for (const dy of [-0.025, -0.015, 0.015, 0.025]) {
+    for (const dx of [-0.02, 0.02]) {
+      candidates.push({
+        x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
+        y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
+        w: templateFrame.w,
+        h: templateFrame.h,
       });
     }
-    cells.push(rowRects);
   }
-  return { imageWidth: width, imageHeight: height, cells };
+
+  const hybrid = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
+  const bubbleBbox = califacilOmrOrangeFrameRect(hybrid, rows);
+  const tableBbox = califacilGeometryTableBounds(hybrid, rows);
+  if (bubbleBbox) candidates.push(bubbleBbox);
+  if (tableBbox) candidates.push(tableBbox);
+
+  if (bubbleBbox) {
+    const t = buildCalifacilAnswerSheetOmrTemplate(rows);
+    const padTop = bubbleBbox.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
+    const padLeft = bubbleBbox.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
+    const x = Math.max(0, bubbleBbox.x - padLeft);
+    const y = Math.max(0, bubbleBbox.y - padTop);
+    candidates.push({
+      x,
+      y,
+      w: Math.min(1 - x, bubbleBbox.w + padLeft + bubbleBbox.w * 0.025),
+      h: Math.min(1 - y, bubbleBbox.h + padTop + bubbleBbox.h * 0.015),
+    });
+  }
+
+  let bestMeta: OmrScanMetaResult | null = null;
+  let bestFrame = templateFrame;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const frame of candidates) {
+    const meta = scanWarpedWithNormTableFrame(warped, columns, rows, frame);
+    const score = scoreOmrMetaPicks(meta, rows);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMeta = meta;
+      bestFrame = frame;
+    }
+  }
+
+  const meta = bestMeta ?? scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame);
+  return { meta, orangeFrameNorm: bestFrame };
 }
 
 /**
@@ -4209,16 +4480,10 @@ export function scanWarpedWithNormTableFrame(
     rows,
     columns,
     warped.width,
-    warped.height
+    warped.height,
+    warped
   );
-  const thresholds: ScanThresholds = {
-    minMarkDarkness: 0.072,
-    minBestVsSecondGap: 0.038,
-    minBestVsSecondRatio: 1.35,
-    minCenterVsRingDelta: 0.04,
-    minSolidCenterDarkness: 0.24,
-    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
-  };
+  const thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS;
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
     warped,
     geometry,

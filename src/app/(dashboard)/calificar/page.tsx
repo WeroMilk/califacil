@@ -58,7 +58,7 @@ import {
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
   scanCalifacilOmrSheetWithMeta,
-  scanWarpedMobileAnswerSheetFast,
+  scanWarpedWithBestTableFrame,
   scanWarpedWithNormTableFrame,
   canvasPreviewDataUrl,
   downscaleCanvasForOmrScan,
@@ -2976,7 +2976,11 @@ export default function CalificarPage() {
         await yieldForSpinnerPaint();
         if (scanGen !== reviewScanGenRef.current) return;
         const scanCanvas = downscaleCanvasForOmrScan(warped, 1200);
-        const meta = scanWarpedMobileAnswerSheetFast(scanCanvas, omrCols, omrRowCount);
+        const { meta, orangeFrameNorm } = scanWarpedWithBestTableFrame(
+          scanCanvas,
+          omrCols,
+          omrRowCount
+        );
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
@@ -2985,13 +2989,6 @@ export default function CalificarPage() {
           return;
         }
         const previewUrl = canvasPreviewDataUrl(scanCanvas, 1200) ?? '';
-        const orangeFrameNorm =
-          califacilOmrOrangeFrameRect(meta.geometry, omrRowCount) ?? {
-            x: 0.04,
-            y: 0.52,
-            w: 0.92,
-            h: 0.4,
-          };
         setMobileReviewAlign({
           warped,
           alignment,

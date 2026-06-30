@@ -16,7 +16,6 @@ import {
   CALIFACIL_WARP_LETTER_WIDTH,
   califacilOmrOrangeFrameRect,
   califacilViewfinderNormRect,
-  buildAnswerSheetOmrGeometryInNormRect,
   refineWarpedCalifacilSheet,
   warpCalifacilSheetFromQuad,
   type CalifacilOmrScanGeometry,
@@ -313,15 +312,9 @@ export function MobileSheetScanReview({
   }, [alignPreview, alignOrangeFrame, rowCount]);
 
   const displayGeometry = useMemo(() => {
-    if (!alignPreview || !orangeFrameNorm) return null;
-    return buildAnswerSheetOmrGeometryInNormRect(
-      orangeFrameNorm,
-      rowCount,
-      columnCount,
-      alignPreview.geometry.imageWidth,
-      alignPreview.geometry.imageHeight
-    );
-  }, [alignPreview, orangeFrameNorm, rowCount, columnCount]);
+    if (!alignPreview) return null;
+    return alignPreview.geometry;
+  }, [alignPreview]);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
