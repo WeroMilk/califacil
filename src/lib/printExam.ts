@@ -1372,6 +1372,17 @@ export const CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM = {
   h: CALIFACIL_RIGHT_ALIGN_STRIP_NORM.height,
 } as const;
 
+/** Marco naranja de revisión: ancho carta × alto entre franjas negras laterales. */
+export function califacilAnswerSheetOrangeFrameNorm(): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} {
+  const f = CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM;
+  return { x: f.x, y: f.y, w: f.w, h: f.h };
+}
+
 /** Relación ancho÷alto del marco de alineación (franjas negras = alto de referencia). */
 export function califacilAnswerSheetAlignFrameAspect(): number {
   const pageW = CALIFACIL_WARP_PAGE.widthPx;

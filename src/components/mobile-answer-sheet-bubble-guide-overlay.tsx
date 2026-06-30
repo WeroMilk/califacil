@@ -46,9 +46,9 @@ export function MobileAnswerSheetAlignGuideOverlay({
     [guideRect]
   );
 
-  const frameStroke = aligned ? 'rgba(52,211,153,0.92)' : 'rgba(255,255,255,0.6)';
+  const frameStroke = aligned ? 'rgba(251,146,60,0.98)' : 'rgba(251,146,60,0.82)';
   const stripFill = aligned ? 'rgba(0,0,0,0.62)' : 'rgba(0,0,0,0.45)';
-  const stripStroke = aligned ? 'rgba(52,211,153,0.98)' : 'rgba(255,255,255,0.82)';
+  const stripStroke = aligned ? 'rgba(251,146,60,0.98)' : 'rgba(251,146,60,0.75)';
 
   return (
     <svg
