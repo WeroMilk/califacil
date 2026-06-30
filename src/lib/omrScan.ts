@@ -392,6 +392,39 @@ function countDarkCornerPatches(
   return darkCorners;
 }
 
+function isWarpedLetterCanvas(W: number, H: number): boolean {
+  const aspect = W / Math.max(1, H);
+  return aspect > 0.72 && aspect < 0.86;
+}
+
+/** Parches de esquina en coords. de fiduciales impresos (hoja carta enderezada). */
+function printedFiducialCornerPatches(
+  W: number,
+  H: number
+): { corners: { x: number; y: number }[]; patchW: number; patchH: number } {
+  const patchW = Math.max(8, Math.round(W * 0.068));
+  const patchH = Math.max(8, Math.round(H * 0.068));
+  const ids = ['tl', 'tr', 'bl', 'br'] as const;
+  const corners = ids.map((id) => {
+    const c = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
+    return {
+      x: Math.max(0, Math.min(W - patchW, c.x * W - patchW * 0.5)),
+      y: Math.max(0, Math.min(H - patchH, c.y * H - patchH * 0.5)),
+    };
+  });
+  return { corners, patchW, patchH };
+}
+
+function cornerMarkerPatchesForCanvas(
+  W: number,
+  H: number
+): { corners: { x: number; y: number }[]; patchW: number; patchH: number } | null {
+  if (isWarpedLetterCanvas(W, H)) {
+    return printedFiducialCornerPatches(W, H);
+  }
+  return viewfinderGuideCornerPatches(W, H);
+}
+
 /** Cuántos de los 4 cuadros negros de esquina impresos son visibles (0–4). */
 export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -400,14 +433,9 @@ export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
   const H = canvas.height;
   if (W < 80 || H < 80) return 0;
 
-  const guidePatches = viewfinderGuideCornerPatches(W, H);
-  if (guidePatches) {
-    return countDarkCornerPatches(
-      ctx,
-      guidePatches.corners,
-      guidePatches.patchW,
-      guidePatches.patchH
-    );
+  const patches = cornerMarkerPatchesForCanvas(W, H);
+  if (patches) {
+    return countDarkCornerPatches(ctx, patches.corners, patches.patchW, patches.patchH);
   }
 
   const patchW = Math.max(5, Math.round(W * 0.06));
@@ -458,7 +486,7 @@ export function hasCalifacilAlignStrips(canvas: HTMLCanvasElement): boolean {
     const y0 = strip.top * H;
     const sw = Math.max(3, strip.width * W);
     const sh = Math.max(12, strip.height * H);
-    if (meanPatchDarkFraction(ctx, x0, y0, sw, sh) >= 0.28) found++;
+    if (meanPatchDarkFraction(ctx, x0, y0, sw, sh) >= 0.18) found++;
   }
   return found >= 2;
 }
@@ -3398,7 +3426,7 @@ export function hasCalifacilCornerMarkers(
   const H = canvas.height;
   if (W < 80 || H < 80) return false;
 
-  const guidePatches = viewfinderGuideCornerPatches(W, H);
+  const guidePatches = cornerMarkerPatchesForCanvas(W, H);
   if (guidePatches && countDarkCornerPatches(ctx, guidePatches.corners, guidePatches.patchW, guidePatches.patchH) >= 3) {
     return true;
   }
@@ -3906,8 +3934,36 @@ export function isCalifacilExamSheetStrict(
 }
 
 /**
- * Validación estricta antes de calificar captura móvil: evita paredes, mesas o texturas.
- * Exige esquinas impresas, franjas laterales y rejilla OMR detectable.
+ * Diagnóstico de captura móvil (mensajes para UI).
+ */
+export function diagnoseCalifacilAnswerSheetReadiness(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number,
+  warpAlignment?: WarpAlignmentReport | null
+): { ok: boolean; issues: string[] } {
+  const issues: string[] = [];
+  if (warpAlignment && Number.isFinite(warpAlignment.maxErrorPx) && warpAlignment.maxErrorPx > 18) {
+    issues.push('alineación imprecisa');
+  }
+  const corners = countCalifacilCornerMarkers(canvas);
+  if (corners < 3) issues.push('faltan esquinas negras');
+  const strips = hasCalifacilAlignStrips(canvas);
+  if (!strips) issues.push('no se ven las franjas negras laterales');
+  const grid = hasCalifacilPrintedTableGrid(canvas, columns, rowCount);
+  if (!grid) issues.push('no se detecta la tabla de respuestas');
+  const probe = probeCalifacilSheetQuality(canvas, columns);
+  if (!probe.hasRowLines) issues.push('faltan líneas de filas');
+  if (!probe.hasColumnEdges) issues.push('faltan columnas A–D');
+
+  const structureOk = grid && probe.hasRowLines && probe.hasColumnEdges;
+  const finalOk = structureOk && corners >= 3 && (strips || corners >= 4);
+
+  return { ok: finalOk, issues };
+}
+
+/**
+ * Validación antes de calificar captura móvil: evita paredes sin bloquear hojas reales.
  */
 export function isCalifacilAnswerSheetReadyForGrading(
   canvas: HTMLCanvasElement,
@@ -3915,14 +3971,7 @@ export function isCalifacilAnswerSheetReadyForGrading(
   rowCount?: number,
   warpAlignment?: WarpAlignmentReport | null
 ): boolean {
-  if (warpAlignment && Number.isFinite(warpAlignment.maxErrorPx) && warpAlignment.maxErrorPx > 14) {
-    return false;
-  }
-  if (countCalifacilCornerMarkers(canvas) < 4) return false;
-  if (!hasCalifacilAlignStrips(canvas)) return false;
-  if (!hasCalifacilPrintedTableGrid(canvas, columns, rowCount)) return false;
-  const probe = probeCalifacilSheetQuality(canvas, columns);
-  return probe.hasRowLines && probe.hasColumnEdges && probe.hasCornerMarkers;
+  return diagnoseCalifacilAnswerSheetReadiness(canvas, columns, rowCount, warpAlignment).ok;
 }
 
 function scanCalifacilOmrCanvasDetailed(

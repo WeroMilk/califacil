@@ -41,6 +41,7 @@ import {
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isCalifacilAnswerSheetReadyForGrading,
+  diagnoseCalifacilAnswerSheetReadiness,
   isValidMobileRoiQuad,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -872,14 +873,27 @@ export default function CalificarPage() {
         : false;
       const sheetStrict = examCanvas ? isCalifacilExamSheetStrict(examCanvas, omrCols) : false;
       if (!examCanvas || !sheetLikely) {
+        const mobileDiag =
+          isMobileCamera && preWarped && examCanvas
+            ? diagnoseCalifacilAnswerSheetReadiness(
+                examCanvas,
+                omrCols,
+                omrRowCount,
+                opts?.warpAlignment
+              ).issues
+            : [];
+        const detail =
+          mobileDiag.length > 0
+            ? mobileDiag.slice(0, 2).join('; ')
+            : 'Encuadra la hoja impresa con las esquinas y franjas negras.';
         setLiveStatus(
           isMobile
-            ? 'No se detectó una hoja CaliFacil válida. Encuadra la hoja impresa con las esquinas y franjas negras.'
+            ? `No se detectó una hoja CaliFacil válida. ${detail}`
             : 'No se detecta la tabla CaliFacil. Prueba una foto más nítida de la hoja completa o del pie con la tabla N.º / A–D.'
         );
         toast.error(
           isMobileCamera
-            ? 'No es una hoja CaliFacil válida. Apunta a la hoja impresa (esquinas negras y tabla de respuestas).'
+            ? `No es una hoja CaliFacil válida. ${detail}`
             : isMobile
               ? 'No se reconoce el examen CaliFacil. Incluye la hoja impresa completa y que se vea el pie con las casillas A–D.'
               : 'No se reconoce el examen CaliFacil. Incluye bien la tabla del pie (página completa o solo el recuadro), buena luz y sin cortes.'
@@ -2656,10 +2670,18 @@ export default function CalificarPage() {
       }
 
       if (!isCalifacilAnswerSheetReadyForGrading(warped, omrCols, omrRowCount, alignment)) {
-        toast.error(
-          'No es una hoja CaliFacil válida. Apunta a la hoja impresa con esquinas y franjas negras.'
+        const { issues } = diagnoseCalifacilAnswerSheetReadiness(
+          warped,
+          omrCols,
+          omrRowCount,
+          alignment
         );
-        setLiveStatus('Sin hoja válida. Encuadra el examen impreso e intenta de nuevo.');
+        const detail =
+          issues.length > 0
+            ? issues.slice(0, 2).join('; ')
+            : 'Apunta a la hoja impresa con esquinas y franjas negras.';
+        toast.error(`No es una hoja CaliFacil válida. ${detail}`);
+        setLiveStatus(`Sin hoja válida: ${detail}`);
         return;
       }
 
@@ -2683,7 +2705,10 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      if (mobileCaptureBusyRef.current) return;
+      if (mobileCaptureBusyRef.current) {
+        setLiveStatus('Captura en curso…');
+        return;
+      }
       mobileCaptureBusyRef.current = true;
       setScanBusy(true);
       setLiveStatus('Capturando y calificando…');
