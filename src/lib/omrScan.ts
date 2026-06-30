@@ -1262,6 +1262,13 @@ function computeHomographyFromRectToQuad(
   return sol; // [a,b,c,d,e,f,g,h]
 }
 
+function applyHomography8ToPoint(h: number[], u: number, v: number): Point | null {
+  const [a, b, c, d, e, f, g, hh] = h;
+  const den = g * u + hh * v + 1;
+  if (Math.abs(den) < 1e-9) return null;
+  return { x: (a * u + b * v + c) / den, y: (d * u + e * v + f) / den };
+}
+
 function sampleBilinear(data: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
   const x0 = Math.floor(x);
   const y0 = Math.floor(y);
@@ -2399,6 +2406,90 @@ export function mapRoiQuadCornersToViewportPx(
   });
   const [tl, tr, br, bl] = frameQuad;
   return [toViewport(tl), toViewport(tr), toViewport(bl), toViewport(br)];
+}
+
+export type ViewportAnswerBubble = {
+  x: number;
+  y: number;
+  r: number;
+  row: number;
+  col: number;
+  /** Columna de la clave del examen para esta fila (resaltada en verde). */
+  isKeyColumn: boolean;
+};
+
+/**
+ * Proyecta las burbujas de la plantilla CaliFacil (850×1100) al visor de cámara
+ * usando el cuadrilátero detectado — guía de alineación en vivo.
+ */
+export function mapAnswerSheetBubblesToViewport(
+  quad: [Point, Point, Point, Point],
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox,
+  rowCount: number,
+  columns: number,
+  expectedColByRow?: (number | null)[]
+): ViewportAnswerBubble[] | null {
+  const roiW = roiCapture.roiCanvas.width;
+  const roiH = roiCapture.roiCanvas.height;
+  const frameQuad = mapRoiQuadToFrame(quad, roiCapture.roiRect, roiW, roiH);
+  const h = computeHomographyFromRectToQuad(
+    CALIFACIL_WARP_LETTER_WIDTH,
+    CALIFACIL_WARP_LETTER_HEIGHT,
+    frameQuad
+  );
+  if (!h) return null;
+
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const geometry = buildAnswerSheetOmrGeometry(
+    rows,
+    cols,
+    CALIFACIL_WARP_LETTER_WIDTH,
+    CALIFACIL_WARP_LETTER_HEIGHT
+  );
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    roiCapture.frameW,
+    roiCapture.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  const frameToViewport = (fx: number, fy: number) => ({
+    x: letterbox.offsetX + fx * scale - cropX,
+    y: letterbox.offsetY + fy * scale - cropY,
+  });
+
+  const bubbles: ViewportAnswerBubble[] = [];
+  const W = geometry.imageWidth;
+  const H = geometry.imageHeight;
+
+  for (let row = 0; row < rows; row++) {
+    const expectedCol = expectedColByRow?.[row] ?? null;
+    const rowCells = geometry.cells[row];
+    if (!rowCells) continue;
+    for (let col = 0; col < cols; col++) {
+      const cell = rowCells[col];
+      if (!cell) continue;
+      const cx = (cell.x + cell.w * 0.5) * W;
+      const cy = (cell.y + cell.h * 0.5) * H;
+      const frameCenter = applyHomography8ToPoint(h, cx, cy);
+      if (!frameCenter) continue;
+      const vp = frameToViewport(frameCenter.x, frameCenter.y);
+      const cxEdge = (cell.x + cell.w) * W;
+      const frameEdge = applyHomography8ToPoint(h, cxEdge, cy);
+      const vpEdge = frameEdge ? frameToViewport(frameEdge.x, frameEdge.y) : null;
+      const r = vpEdge ? Math.max(5, Math.min(24, Math.abs(vpEdge.x - vp.x) * 0.4)) : 9;
+      bubbles.push({
+        x: vp.x,
+        y: vp.y,
+        r,
+        row,
+        col,
+        isKeyColumn: expectedCol !== null && expectedCol === col,
+      });
+    }
+  }
+  return bubbles.length > 0 ? bubbles : null;
 }
 
 /** Cuadrilátero detectado → polígono en píxeles de pantalla (object-cover). */

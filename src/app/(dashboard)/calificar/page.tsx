@@ -44,6 +44,8 @@ import {
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
   mapRoiQuadPolygonToViewportPx,
+  mapAnswerSheetBubblesToViewport,
+  type ViewportAnswerBubble,
   scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -80,6 +82,7 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { IphoneDocumentScannerOverlay, IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
+import { MobileAnswerSheetCameraOverlay } from '@/components/mobile-answer-sheet-camera-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -493,6 +496,9 @@ export default function CalificarPage() {
   const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
     Array<{ x: number; y: number }> | null
   >(null);
+  const [mobileAlignBubbles, setMobileAlignBubbles] = useState<ViewportAnswerBubble[] | null>(
+    null
+  );
   const [cameraFullscreenMode, setCameraFullscreenMode] = useState<ExamFullscreenMode>('none');
   const [liveScanGeometry, setLiveScanGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [liveScanPicks, setLiveScanPicks] = useState<(number | null)[]>([]);
@@ -641,6 +647,10 @@ export default function CalificarPage() {
     () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
     [currentChunk, examVirtualKeyByQuestionId]
   );
+  const expectedChunkPicksRef = useRef(expectedChunkPicks);
+  useEffect(() => {
+    expectedChunkPicksRef.current = expectedChunkPicks;
+  }, [expectedChunkPicks]);
   const mobileAlignPreviewProp = useMemo(() => {
     if (!mobileReviewAlign) return null;
     const stats = gradeMcDraftAgainstKey(
@@ -827,6 +837,7 @@ export default function CalificarPage() {
     setMobileShadowWarning(false);
     setMobileStableTicks(0);
     setMobileDocumentPolygon(null);
+    setMobileAlignBubbles(null);
     setLiveFilterMenuOpen(false);
     setLiveStatus(
       isMobile
@@ -869,6 +880,7 @@ export default function CalificarPage() {
     setFlashMode('auto');
     flashModeRef.current = 'auto';
     setMobileDocumentPolygon(null);
+    setMobileAlignBubbles(null);
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     clearAutoSnapshot();
@@ -1898,17 +1910,35 @@ export default function CalificarPage() {
               lastRoiCaptureMetaRef.current = roiCapture;
             }
             const layout = liveVideoLayoutRef.current;
-            if (quadValid && roiQuad && roiCapture && layout) {
-              setMobileDocumentPolygon(
-                mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
-              );
-            } else {
-              setMobileDocumentPolygon(null);
-            }
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
+            if (quadValid && roiQuad && roiCapture && layout) {
+              setMobileDocumentPolygon(
+                mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
+              );
+              if (
+                fillRatio >= MOBILE_MIN_ROI_FILL_RATIO * 0.82 &&
+                fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
+              ) {
+                setMobileAlignBubbles(
+                  mapAnswerSheetBubblesToViewport(
+                    roiQuad,
+                    roiCapture,
+                    layout,
+                    omrRowCount,
+                    omrCols,
+                    expectedChunkPicksRef.current
+                  )
+                );
+              } else {
+                setMobileAlignBubbles(null);
+              }
+            } else {
+              setMobileDocumentPolygon(null);
+              setMobileAlignBubbles(null);
+            }
             const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
             const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
 
@@ -1989,7 +2019,9 @@ export default function CalificarPage() {
               cornerStableTicksRef.current = 1;
               setMobileStableTicks(1);
               setCornersAlignedView(true);
-              setLiveStatus('Hoja detectada — pulsa Capturar o mantén quieta un momento.');
+              setLiveStatus(
+                `Hoja detectada — alinea los círculos con las burbujas (verde = clave) y pulsa Capturar.`
+              );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2383,6 +2415,7 @@ export default function CalificarPage() {
     isMobile,
     mapRawToDraft,
     omrCols,
+    omrRowCount,
     resetLiveReadings,
     setTorchEnabled,
     showAutoCaptureSnapshot,
@@ -3503,6 +3536,11 @@ export default function CalificarPage() {
                     <IphoneDocumentScannerOverlay
                       documentPolygon={mobileDocumentPolygon}
                       detected={cornersAlignedView}
+                      hint="Encuadra la hoja; verás círculos sobre cada burbuja para alinear."
+                    />
+                    <MobileAnswerSheetCameraOverlay
+                      bubbles={mobileAlignBubbles}
+                      visible={cornersAlignedView}
                     />
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
