@@ -53,6 +53,7 @@ import {
   prepareAnswerSheetDisplayCanvas,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
+  refineWarpedCalifacilSheet,
   scaleQuadToCanvas,
   scanCalifacilOmrSheetWithMeta,
   warpAndValidateCalifacilSheet,
@@ -228,9 +229,23 @@ function warpMobileCaptureWithFallback(
   const warped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
   if (!warped) return primary;
 
-  const alignment = measureWarpedFiducialAlignment(warped, MOBILE_WARP_FALLBACK_MAX_ERROR_PX);
-  if (alignment.ok) return { warped, alignment };
-  return { warped: primary.warped ?? warped, alignment: primary.alignment ?? alignment };
+  const refined = refineWarpedCalifacilSheet(warped, {
+    maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+  });
+  const alignment = refined.alignment;
+  if (alignment.ok) return { warped: refined.canvas, alignment };
+
+  if (primary.warped) {
+    const primaryRefined = refineWarpedCalifacilSheet(primary.warped, {
+      maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+    });
+    return {
+      warped: primaryRefined.canvas,
+      alignment: primaryRefined.alignment,
+    };
+  }
+
+  return { warped: refined.canvas, alignment };
 }
 
 /** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */
@@ -364,21 +379,20 @@ function califacilReviewOrangeFrameRect(
   rowCount: number,
   answerSheetLayout = false
 ): { x: number; y: number; w: number; h: number } | null {
+  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
+  if (cellBounds) {
+    const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
+    const t = useTemplate ? buildCalifacilAnswerSheetOmrTemplate(rowCount) : null;
+    const headerFrac = t ? t.titleStripRatioOfTable * t.tableHeightRatio : cellBounds.h * 0.12;
+    const tableLeft = t ? t.tableLeftRatio : cellBounds.x;
+    const tableWidth = t ? t.tableWidthRatio : cellBounds.w;
+    const y = Math.max(0, cellBounds.y - headerFrac);
+    const h = Math.min(1 - y, cellBounds.h + headerFrac + 0.003);
+    return { x: tableLeft, y, w: tableWidth, h };
+  }
   const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
   if (useTemplate) {
     const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-    const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
-    if (cellBounds) {
-      const headerH = t.tableHeightRatio * t.titleStripRatioOfTable;
-      const y = Math.max(0, cellBounds.y - headerH);
-      const h = Math.min(1 - y, cellBounds.h + headerH + 0.003);
-      return {
-        x: t.tableLeftRatio,
-        y,
-        w: t.tableWidthRatio,
-        h,
-      };
-    }
     return {
       x: t.tableLeftRatio,
       y: t.tableTopRatio,
@@ -386,8 +400,7 @@ function califacilReviewOrangeFrameRect(
       h: t.tableHeightRatio,
     };
   }
-  const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
-  return cellBounds ?? califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
+  return califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
 }
 
 /** Imagen + overlay: mismo aspecto que `geometry` para que el SVG no se estire respecto al JPEG. */
@@ -928,6 +941,23 @@ export default function CalificarPage() {
         includeWarpAlignment: OMR_DEBUG_ENABLED || Boolean(opts?.warpAlignment),
       });
       const warpAlignment = opts?.warpAlignment ?? meta.warpAlignment ?? null;
+
+      if (
+        isMobileCamera &&
+        preWarped &&
+        warpAlignment &&
+        !warpAlignment.ok &&
+        warpAlignment.maxErrorPx > MAX_WARP_ALIGNMENT_ERROR_PX
+      ) {
+        setLiveStatus(
+          'No se pudo alinear la hoja con precisión. Alinea las cuatro esquinas negras y mejora la luz.'
+        );
+        toast.error(
+          `Alineación insuficiente (${warpAlignment.maxErrorPx.toFixed(1)} px de error). Vuelve a capturar con la hoja completa visible.`
+        );
+        return { success: false };
+      }
+
       let raw = [...meta.picks];
       let mapped = mapRawToDraft(raw, chunk);
       const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));

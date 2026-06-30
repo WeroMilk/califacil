@@ -17,6 +17,11 @@ import {
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
 import { controlNumberDigitsToString } from '@/lib/controlNumberOmr';
+import {
+  REFINE_WARP_MAX_ITERATIONS,
+  REFINE_WARP_TARGET_MAX_ERROR_PX,
+  refineWarpedSheetFiducials,
+} from '@/lib/omr/refine-warp';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -2340,7 +2345,7 @@ export type WarpCalifacilSheetResult = {
   alignment: WarpAlignmentReport | null;
 };
 
-/** Warp a carta + validación de homografía por fiduciales. */
+/** Warp a carta + validación de homografía por fiduciales + refinamiento iterativo. */
 export function warpAndValidateCalifacilSheet(
   canvas: HTMLCanvasElement,
   quad: [Point, Point, Point, Point],
@@ -2348,8 +2353,46 @@ export function warpAndValidateCalifacilSheet(
 ): WarpCalifacilSheetResult {
   const warped = warpCalifacilSheetFromQuad(canvas, quad);
   if (!warped) return { warped: null, alignment: null };
-  const alignment = measureWarpedFiducialAlignment(warped, maxErrorPx);
-  return { warped, alignment };
+  const refined = refineWarpedCalifacilSheet(warped, { maxAllowedPx: maxErrorPx });
+  return { warped: refined.canvas, alignment: refined.alignment };
+}
+
+/**
+ * Refina una hoja ya enderezada (850×1100) alineando fiduciales con la plantilla impresa.
+ * Aplica hasta {@link REFINE_WARP_MAX_ITERATIONS} homografías de corrección.
+ */
+export function refineWarpedCalifacilSheet(
+  warped: HTMLCanvasElement,
+  opts?: {
+    maxIterations?: number;
+    targetMaxErrorPx?: number;
+    maxAllowedPx?: number;
+  }
+): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport; iterations: number } {
+  const maxAllowedPx = opts?.maxAllowedPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+  const refined = refineWarpedSheetFiducials(
+    warped,
+    detectWarpedFiducialCenters,
+    (canvas, maxPx) => {
+      const r = measureWarpedFiducialAlignment(canvas, maxPx);
+      return {
+        ok: r.ok,
+        maxErrorPx: r.maxErrorPx,
+        meanErrorPx: r.meanErrorPx,
+        maxAllowedPx: r.maxAllowedPx,
+      };
+    },
+    {
+      maxIterations: opts?.maxIterations ?? REFINE_WARP_MAX_ITERATIONS,
+      targetMaxErrorPx: opts?.targetMaxErrorPx ?? REFINE_WARP_TARGET_MAX_ERROR_PX,
+      maxAllowedPx,
+    }
+  );
+  return {
+    canvas: refined.canvas,
+    alignment: measureWarpedFiducialAlignment(refined.canvas, maxAllowedPx),
+    iterations: refined.iterations,
+  };
 }
 
 export type PrepareMobileCameraScanOptions = {
@@ -3318,6 +3361,131 @@ export function buildAnswerSheetOmrGeometry(
   return { imageWidth: width, imageHeight: height, cells };
 }
 
+/**
+ * Cuadrícula híbrida: plantilla PDF + líneas internas detectadas tras warp refinado.
+ */
+export function buildRegisteredAnswerSheetGeometry(
+  canvas: HTMLCanvasElement,
+  rowCount: number,
+  columns: number
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, canvas.width);
+  const height = Math.max(1, canvas.height);
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+
+  const tableLeft = width * template.tableLeftRatio;
+  const tableTop = height * template.tableTopRatio;
+  const tableW = width * template.tableWidthRatio;
+  const tableH = height * template.tableHeightRatio;
+  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
+  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
+  const rowH = dataHeight / rows;
+  const qNumW = tableW * template.qnumWidthRatio;
+  const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
+  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const cellW = bubbleAreaW / cols;
+
+  const uniformColEdges: number[] = [];
+  for (let c = 0; c <= cols; c++) {
+    uniformColEdges.push(
+      c === cols
+        ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+        : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+    );
+  }
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let lineYs: number[] | null = null;
+  let colEdges: number[] | null = null;
+  if (ctx) {
+    const { data } = ctx.getImageData(0, 0, width, height);
+    lineYs = refineOmrRowBoundariesFromTableLines(
+      data,
+      width,
+      height,
+      bubbleAreaLeft,
+      dataTop,
+      dataHeight,
+      rows
+    );
+    colEdges = inferColumnEdgesFromVerticalLines(
+      data,
+      width,
+      height,
+      bubbleAreaLeft,
+      bubbleAreaW,
+      cols,
+      dataTop,
+      rowH
+    );
+  }
+
+  if (lineYs && lineYs.length === rows + 1) {
+    let rowAligned = true;
+    let avgDev = 0;
+    for (let i = 0; i < rows + 1; i++) {
+      const expected = dataTop + i * rowH;
+      const dev = Math.abs(lineYs[i]! - expected);
+      avgDev += dev;
+      if (dev > rowH * 0.92) rowAligned = false;
+    }
+    avgDev /= rows + 1;
+    if (!rowAligned) {
+      lineYs = null;
+    } else {
+      const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
+      lineYs = lineYs.map((y, i) => {
+        const expected = dataTop + i * rowH;
+        return Math.round(y * detectedWeight + expected * (1 - detectedWeight));
+      });
+    }
+  } else {
+    lineYs = null;
+  }
+
+  if (colEdges && colEdges.length === cols + 1) {
+    let maxEdgeDev = 0;
+    for (let i = 0; i <= cols; i++) {
+      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(colEdges[i]! - uniformColEdges[i]!));
+    }
+    const span = colEdges[cols]! - colEdges[0]!;
+    if (span < bubbleAreaW * 0.62 || span > bubbleAreaW * 1.38 || maxEdgeDev > cellW * 0.62) {
+      colEdges = null;
+    } else {
+      colEdges = colEdges.map((x, i) => Math.round(x * 0.72 + uniformColEdges[i]! * 0.28));
+    }
+  } else {
+    colEdges = null;
+  }
+
+  if (!lineYs) {
+    return buildAnswerSheetOmrGeometry(rowCount, columns, width, height);
+  }
+
+  const columnEdges = colEdges ?? uniformColEdges;
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const yRowTop = lineYs[row]!;
+    const yRowBot = lineYs[row + 1]!;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = columnEdges[c]!;
+      const x1 = columnEdges[c + 1]!;
+      rowRects.push({
+        x: x0 / width,
+        y: yRowTop / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (yRowBot - yRowTop) / height),
+      });
+    }
+    cells.push(rowRects);
+  }
+
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
 export type CalifacilControlNumberGeometry = {
   imageWidth: number;
   imageHeight: number;
@@ -3509,18 +3677,20 @@ export function sheetCornerGuidesToViewportQuad(
   };
 }
 
-/** Endereza la hoja usando los cuatro marcadores negros de esquina. */
+/** Endereza la hoja usando los cuatro marcadores negros de esquina y refina fiduciales. */
 export function warpCalifacilSheetFromCornerMarkers(
   canvas: HTMLCanvasElement
 ): HTMLCanvasElement | null {
   const quad = detectCalifacilQuadFromCornerMarkers(canvas);
   if (!quad) return null;
-  return warpPerspectiveToRect(
+  const warped = warpPerspectiveToRect(
     canvas,
     quad,
     CALIFACIL_WARP_LETTER_WIDTH,
     CALIFACIL_WARP_LETTER_HEIGHT
   );
+  if (!warped) return null;
+  return refineWarpedCalifacilSheet(warped).canvas;
 }
 
 export type CalifacilSheetQualityProbe = {
@@ -4827,11 +4997,10 @@ export function scanCalifacilOmrSheetWithMeta(
       : (bestReviewCanvas ?? canvas);
 
   if (templateGridOnly) {
-    const geometry = buildAnswerSheetOmrGeometry(
+    const geometry = buildRegisteredAnswerSheetGeometry(
+      reviewCanvas,
       rowCount,
-      columns,
-      reviewCanvas.width,
-      reviewCanvas.height
+      columns
     );
     const templateRead = readAnswerSheetPicksFromTemplateGeometry(
       reviewCanvas,
