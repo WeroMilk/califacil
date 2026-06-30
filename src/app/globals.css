@@ -253,6 +253,15 @@ select:-webkit-autofill:focus {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
+@keyframes iosShutterFlash {
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 /* QR Code styles */
 .qr-container {
   background: white;

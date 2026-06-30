@@ -42,8 +42,56 @@ function cloneQuad(quad: ScanReviewQuad): ScanReviewQuad {
   return quad.map((p) => ({ ...p })) as ScanReviewQuad;
 }
 
-function canvasToObjectUrl(canvas: HTMLCanvasElement): string {
-  return canvas.toDataURL('image/jpeg', 0.92);
+function downscaleCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
+  const sw = canvas.width;
+  const sh = canvas.height;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  if (scale >= 1) return canvas;
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(sw * scale));
+  out.height = Math.max(1, Math.round(sh * scale));
+  const ctx = out.getContext('2d');
+  if (!ctx) return canvas;
+  ctx.drawImage(canvas, 0, 0, out.width, out.height);
+  return out;
+}
+
+function useCanvasPreviewUrl(canvas: HTMLCanvasElement | null, maxSide: number): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  const tokenRef = useRef(0);
+
+  useEffect(() => {
+    if (!canvas) {
+      setUrl(null);
+      return;
+    }
+    const token = ++tokenRef.current;
+    const preview = downscaleCanvas(canvas, maxSide);
+    preview.toBlob(
+      (blob) => {
+        if (!blob || token !== tokenRef.current) return;
+        const next = URL.createObjectURL(blob);
+        setUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return next;
+        });
+      },
+      'image/jpeg',
+      0.86
+    );
+    return () => {
+      tokenRef.current += 1;
+    };
+  }, [canvas, maxSide, canvas?.width, canvas?.height]);
+
+  useEffect(
+    () => () => {
+      if (url) URL.revokeObjectURL(url);
+    },
+    [url]
+  );
+
+  return url;
 }
 
 function warpFromQuad(source: HTMLCanvasElement, quad: ScanReviewQuad): HTMLCanvasElement | null {
@@ -139,11 +187,12 @@ export function MobileSheetScanReview({
   const dragRef = useRef<{ corner: number; pointerId: number } | null>(null);
   const [displayQuad, setDisplayQuad] = useState<ScanReviewQuad>([] as unknown as ScanReviewQuad);
 
-  const previewUrl = useMemo(
-    () => canvasToObjectUrl(applyFilterAndRotation(warped, filter, rotation)),
+  const filteredPreview = useMemo(
+    () => applyFilterAndRotation(warped, filter, rotation),
     [warped, filter, rotation]
   );
-  const sourceUrl = useMemo(() => canvasToObjectUrl(sourceCanvas), [sourceCanvas]);
+  const previewUrl = useCanvasPreviewUrl(filteredPreview, 1280);
+  const sourceUrl = useCanvasPreviewUrl(sourceCanvas, 1600);
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
@@ -221,7 +270,7 @@ export function MobileSheetScanReview({
 
   return (
     <div
-      className="fixed inset-0 z-[260] flex flex-col bg-[#f2f2f7] text-gray-900"
+      className="fixed inset-0 z-[260] flex animate-fade-in flex-col bg-[#1c1c1e] text-gray-900"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
@@ -265,13 +314,19 @@ export function MobileSheetScanReview({
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={sourceUrl}
-              alt="Ajustar esquinas del documento"
-              className="h-full w-full object-contain"
-              draggable={false}
-            />
+            {sourceUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={sourceUrl}
+                alt="Ajustar esquinas del documento"
+                className="h-full w-full object-contain"
+                draggable={false}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-white/60">
+                Cargando…
+              </div>
+            )}
             {quadPoints.length === 4 ? (
               <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
                 <polygon
@@ -293,15 +348,19 @@ export function MobileSheetScanReview({
               />
             ))}
           </div>
-        ) : (
-          <div className="flex h-full w-full items-center justify-center">
+        ) : previewUrl ? (
+          <div className="flex h-full w-full items-center justify-center p-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={previewUrl}
               alt="Vista previa del escaneo"
-              className="max-h-full max-w-full rounded-md shadow-lg"
+              className="max-h-full max-w-full rounded-lg shadow-2xl"
               draggable={false}
             />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-white/70">
+            Procesando escaneo…
           </div>
         )}
       </div>

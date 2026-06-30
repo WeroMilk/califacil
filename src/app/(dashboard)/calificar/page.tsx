@@ -76,7 +76,7 @@ import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
-import { IphoneDocumentScannerOverlay } from '@/components/iphone-document-scanner-overlay';
+import { IphoneDocumentScannerOverlay, IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -475,6 +475,7 @@ export default function CalificarPage() {
   const [autoShutterEnabled, setAutoShutterEnabled] = useState(true);
   const [liveColorMode, setLiveColorMode] = useState<LiveColorMode>('color');
   const [liveFilterMenuOpen, setLiveFilterMenuOpen] = useState(false);
+  const [shutterFlash, setShutterFlash] = useState(false);
   const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
     Array<{ x: number; y: number }> | null
   >(null);
@@ -2782,9 +2783,8 @@ export default function CalificarPage() {
         warped,
         alignment,
       });
-      setLiveStatus('Ajusta el escaneo y pulsa ✓ para calificar');
     },
-    [omrCols, omrRowCount]
+    []
   );
 
   const retakeMobileCaptureReview = useCallback(() => {
@@ -2832,22 +2832,17 @@ export default function CalificarPage() {
   const triggerMobileSheetCapture = useCallback(
     (
       video: HTMLVideoElement,
-      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null; force?: boolean }
     ) => {
-      if (mobileCaptureBusyRef.current) {
-        setLiveStatus('Captura en curso…');
-        return;
-      }
+      if (mobileCaptureBusyRef.current && !opts?.force) return;
       mobileCaptureBusyRef.current = true;
       setScanBusy(true);
-      setLiveStatus('Capturando y calificando…');
+      setLiveFilterMenuOpen(false);
       void (async () => {
         try {
-          await yieldForSpinnerPaint();
           await processMobileSheetCapture(video, opts);
         } catch {
           toast.error('Error al capturar. Intenta de nuevo.');
-          setLiveStatus('Error al capturar. Pulsa Capturar de nuevo.');
         } finally {
           mobileCaptureBusyRef.current = false;
           setScanBusy(false);
@@ -2875,11 +2870,24 @@ export default function CalificarPage() {
   const captureMobilePhotoManually = useCallback(() => {
     if (!isMobile) return;
     const video = videoRef.current;
-    if (!video || video.readyState < 2 || video.videoWidth < 40) {
-      toast.error('La cámara no está lista. Espera un segundo e intenta de nuevo.');
+    if (!video) {
+      toast.error('Cámara no disponible.');
       return;
     }
-    triggerMobileSheetCapture(video);
+    if (video.readyState < 2 || video.videoWidth < 40) {
+      toast.error('La cámara está iniciando. Espera un segundo.');
+      return;
+    }
+    setShutterFlash(true);
+    window.setTimeout(() => setShutterFlash(false), 220);
+    playAutoCaptureClickSound();
+    mobileCaptureBusyRef.current = false;
+    setScanBusy(false);
+    triggerMobileSheetCapture(video, {
+      roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
+      roiCapture: lastRoiCaptureMetaRef.current,
+      force: true,
+    });
   }, [isMobile, triggerMobileSheetCapture]);
 
   const switchToAnotherStudentScan = useCallback(() => {
@@ -3310,6 +3318,7 @@ export default function CalificarPage() {
 
       {useLiveCameraUi &&
         phase === 'capturar' &&
+        !mobileCaptureReview &&
         exam &&
         cameraPortalReady &&
         typeof document !== 'undefined' &&
@@ -3378,6 +3387,7 @@ export default function CalificarPage() {
                       documentPolygon={mobileDocumentPolygon}
                       detected={cornersAlignedView}
                     />
+                    <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
 
                   <button
@@ -3404,29 +3414,29 @@ export default function CalificarPage() {
                   ) : null}
 
                   <div
-                    className="absolute inset-x-0 bottom-0 z-[70] flex flex-col items-center pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-8"
+                    className="absolute inset-x-0 bottom-0 z-[70] flex flex-col items-center pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] pt-10"
                     style={{
                       background:
-                        'linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.35) 55%, transparent 100%)',
+                        'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 50%, transparent 100%)',
                     }}
                   >
-                    <div className="mb-3 flex w-full max-w-sm items-end justify-around px-6">
+                    <div className="mb-4 flex w-full max-w-xs items-end justify-between px-8">
                       <button
                         type="button"
-                        className="relative flex flex-col items-center gap-1 text-[11px] font-medium text-white"
-                        disabled={scanBusy || Boolean(mobileCaptureReview)}
+                        className="relative flex flex-col items-center gap-1.5 text-[11px] font-medium text-white active:scale-95 transition-transform"
+                        disabled={scanBusy}
                         aria-label="Flash"
                         onClick={() => cycleFlashMode()}
                       >
-                        <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
+                        <span className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/12 ring-1 ring-white/20 backdrop-blur-md">
                           <Zap
                             className={cn(
-                              'h-5 w-5',
-                              (flashOn || flashMode === 'on') && 'fill-amber-300 text-amber-300'
+                              'h-[1.35rem] w-[1.35rem]',
+                              (flashOn || flashMode === 'on') && 'fill-yellow-300 text-yellow-300'
                             )}
                           />
                           {flashMode === 'auto' ? (
-                            <span className="absolute -bottom-0.5 -right-0.5 rounded bg-black/80 px-1 text-[9px] font-bold">
+                            <span className="absolute bottom-0.5 right-0.5 text-[10px] font-bold leading-none text-white/90">
                               A
                             </span>
                           ) : null}
@@ -3436,18 +3446,18 @@ export default function CalificarPage() {
                       <div className="relative">
                         <button
                           type="button"
-                          className="flex flex-col items-center gap-1 text-[11px] font-medium text-white"
-                          disabled={scanBusy || Boolean(mobileCaptureReview)}
+                          className="flex flex-col items-center gap-1.5 text-[11px] font-medium text-white active:scale-95 transition-transform"
+                          disabled={scanBusy}
                           aria-label="Filtros"
                           onClick={() => setLiveFilterMenuOpen((v) => !v)}
                         >
-                          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
-                            <Palette className="h-5 w-5" />
+                          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/12 ring-1 ring-white/20 backdrop-blur-md">
+                            <Palette className="h-[1.35rem] w-[1.35rem]" />
                           </span>
                           Filtros
                         </button>
                         {liveFilterMenuOpen ? (
-                          <div className="absolute bottom-full left-1/2 z-20 mb-2 w-36 -translate-x-1/2 rounded-xl border border-white/10 bg-black/90 p-1 shadow-lg">
+                          <div className="absolute bottom-full left-1/2 z-20 mb-2 w-40 -translate-x-1/2 rounded-2xl border border-white/15 bg-black/80 p-1.5 shadow-2xl backdrop-blur-xl">
                             {(
                               [
                                 ['color', 'Color'],
@@ -3459,8 +3469,8 @@ export default function CalificarPage() {
                                 key={id}
                                 type="button"
                                 className={cn(
-                                  'block w-full rounded-lg px-3 py-2 text-left text-sm text-white',
-                                  liveColorMode === id ? 'bg-white/15 font-semibold' : 'hover:bg-white/10'
+                                  'block w-full rounded-xl px-3 py-2.5 text-left text-sm text-white',
+                                  liveColorMode === id ? 'bg-white/20 font-semibold' : 'active:bg-white/10'
                                 )}
                                 onClick={() => {
                                   setLiveColorMode(id);
@@ -3475,15 +3485,15 @@ export default function CalificarPage() {
                       </div>
                       <button
                         type="button"
-                        className="relative flex flex-col items-center gap-1 text-[11px] font-medium text-white"
-                        disabled={scanBusy || Boolean(mobileCaptureReview)}
+                        className="relative flex flex-col items-center gap-1.5 text-[11px] font-medium text-white active:scale-95 transition-transform"
+                        disabled={scanBusy}
                         aria-label="Obturador automático"
                         onClick={() => setAutoShutterEnabled((v) => !v)}
                       >
-                        <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
-                          <Camera className="h-5 w-5" />
+                        <span className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/12 ring-1 ring-white/20 backdrop-blur-md">
+                          <Camera className="h-[1.35rem] w-[1.35rem]" />
                           {autoShutterEnabled ? (
-                            <span className="absolute -bottom-0.5 -right-0.5 rounded bg-black/80 px-1 text-[9px] font-bold">
+                            <span className="absolute bottom-0.5 right-0.5 text-[10px] font-bold leading-none text-white/90">
                               A
                             </span>
                           ) : null}
@@ -3492,7 +3502,7 @@ export default function CalificarPage() {
                       </button>
                     </div>
 
-                    <p className="mb-3 rounded-full bg-black/45 px-3 py-1 text-xs font-medium text-white/95 backdrop-blur-sm">
+                    <p className="mb-4 rounded-full bg-black/50 px-4 py-1 text-xs font-medium text-white/90 backdrop-blur-md">
                       {liveColorMode === 'color'
                         ? 'Color'
                         : liveColorMode === 'grayscale'
@@ -3502,17 +3512,19 @@ export default function CalificarPage() {
 
                     <button
                       type="button"
-                      className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full bg-white shadow-[0_2px_16px_rgba(0,0,0,0.45)] disabled:opacity-60"
+                      className={cn(
+                        'flex h-[4.75rem] w-[4.75rem] items-center justify-center rounded-full bg-white shadow-[0_0_0_4px_rgba(255,255,255,0.35)] transition-transform active:scale-90 disabled:opacity-50',
+                        scanBusy && 'scale-95 opacity-70'
+                      )}
                       style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-                      disabled={scanBusy || Boolean(mobileCaptureReview)}
+                      disabled={scanBusy}
                       aria-label="Capturar"
-                      onPointerUp={(e) => {
-                        if (e.pointerType === 'mouse' && e.button !== 0) return;
+                      onClick={(e) => {
                         e.preventDefault();
                         captureMobilePhotoManually();
                       }}
                     >
-                      <span className="block h-[3.85rem] w-[3.85rem] rounded-full bg-white" />
+                      <span className="block h-[4rem] w-[4rem] rounded-full border-[3px] border-black/10 bg-white" />
                     </button>
                   </div>
                 </>
