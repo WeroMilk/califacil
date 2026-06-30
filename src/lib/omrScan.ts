@@ -2522,8 +2522,9 @@ function buildAnswerSheetOmrGeometryFromTemplate(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
-  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
   const cellW = bubbleAreaW / cols;
 
   const cells: OmrNormRect[][] = [];
@@ -2566,18 +2567,17 @@ function detectTableGridWithTemplate(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
-  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
   const cellW = bubbleAreaW / cols;
 
-  const uniformColEdges: number[] = [];
-  for (let c = 0; c <= cols; c++) {
-    uniformColEdges.push(
-      c === cols
-        ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
-        : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
-    );
-  }
+  const uniformColEdges = buildUniformBubbleColumnEdges(
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    width
+  );
 
   let lineYs = refineOmrRowBoundariesFromTableLines(
     imageData,
@@ -3795,7 +3795,8 @@ function sweepAnswerSheetTableGrid(
     const qNumW = width * profile.qnumWidthRatio;
     for (const colShift of shifts) {
       const bubbleAreaLeft = Math.max(2, Math.min(width * 0.48, Math.round(qNumW + colShift)));
-      const bubbleAreaW = Math.max(24, width - bubbleAreaLeft - Math.round(width * 0.035));
+      const rightMargin = Math.round(width * (CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO + 0.035));
+      const bubbleAreaW = Math.max(24, width - bubbleAreaLeft - rightMargin);
       const lineYs = refineOmrRowBoundariesFromTableLines(
         data,
         width,
@@ -3806,33 +3807,7 @@ function sweepAnswerSheetTableGrid(
         rows
       );
       if (!lineYs || lineYs.length !== rows + 1) continue;
-      const rowH = (lineYs[rows]! - lineYs[0]!) / rows;
-      let colEdges =
-        inferColumnEdgesFromVerticalLines(
-          data,
-          width,
-          height,
-          bubbleAreaLeft,
-          bubbleAreaW,
-          cols,
-          lineYs[0]!,
-          rowH
-        ) ??
-        inferColumnEdgesGlobalFromVerticalLines(
-          data,
-          width,
-          height,
-          cols,
-          lineYs[0]!,
-          rowH
-        );
-      if (!colEdges || colEdges.length !== cols + 1) {
-        colEdges = Array.from({ length: cols + 1 }, (_, c) =>
-          c === cols
-            ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
-            : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
-        );
-      }
+      const colEdges = buildUniformBubbleColumnEdges(bubbleAreaLeft, bubbleAreaW, cols, width);
       const span = lineYs[rows]! - lineYs[0]!;
       const score = span + (lineYsHaveUniformSpacing(lineYs) ? 120 : 0);
       if (score > bestScore) {
@@ -4121,8 +4096,9 @@ export function buildAnswerSheetOmrGeometry(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
-  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
   const cellW = bubbleAreaW / cols;
 
   const cells: OmrNormRect[][] = [];
@@ -4144,6 +4120,22 @@ export function buildAnswerSheetOmrGeometry(
   }
 
   return { imageWidth: width, imageHeight: height, cells };
+}
+
+/** Franja negra derecha del recuadro impreso (no forma parte del área de burbujas). */
+const CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO = 0.1;
+
+function buildUniformBubbleColumnEdges(
+  bubbleAreaLeft: number,
+  bubbleAreaW: number,
+  cols: number,
+  imageWidth: number
+): number[] {
+  return Array.from({ length: cols + 1 }, (_, c) =>
+    c === cols
+      ? Math.min(imageWidth - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+      : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+  );
 }
 
 const FRAME_GRID_SCAN_THRESHOLDS: ScanThresholds = {
@@ -4173,7 +4165,10 @@ function scoreOmrMetaPicks(meta: OmrScanMetaResult, rowCount: number): number {
   const same = meta.maxSameColumnCount ?? 0;
   const samePenalty =
     same >= rows * 0.8 ? 520 : same >= rows * 0.6 ? 220 : same >= rows * 0.45 ? 80 : 0;
-  return resolved * 92 - samePenalty + (meta.geometry ? 48 : 0);
+  const geomPenalty =
+    meta.geometry && !validateAnswerSheetGeometry(meta.geometry, rows).ok ? 420 : 0;
+  const unresolvedPenalty = (rows - resolved) * 18;
+  return resolved * 92 - samePenalty - geomPenalty - unresolvedPenalty + (meta.geometry ? 48 : 0);
 }
 
 /** Marco naranja inicial: tabla completa según plantilla impresa (coords. 0–1). */
@@ -4222,93 +4217,77 @@ function sweepAnswerSheetGridInNormFrame(
     template.titleStripRatioOfTable,
   ]);
   const qnumFracs = uniqueFrameProfiles([
-    0,
-    0.05,
-    0.07,
     template.qnumWidthRatio,
+    template.qnumWidthRatio + 0.02,
+    template.qnumWidthRatio - 0.02,
+    0.07,
     0.11,
     0.14,
+    0.16,
   ]);
+  const rightStripFracs = uniqueFrameProfiles([0.08, 0.1, 0.12, 0.14]);
 
   let best: { lineYs: number[]; colEdges: number[]; score: number } | null = null;
 
   for (const titleStrip of titleStrips) {
     for (const qnumFrac of qnumFracs) {
-      const dataTop = frameTop + frameH * titleStrip;
-      const dataHeight = frameH * (1 - titleStrip);
-      const bubbleAreaLeft = frameLeft + frameW * qnumFrac;
-      const bubbleAreaW = frameW * (1 - qnumFrac - 0.018);
-      if (dataHeight < rows * 2.5 || bubbleAreaW < cols * 6) continue;
+      for (const rightStrip of rightStripFracs) {
+        const dataTop = frameTop + frameH * titleStrip;
+        const dataHeight = frameH * (1 - titleStrip);
+        const bubbleAreaLeft = frameLeft + frameW * qnumFrac;
+        const bubbleAreaW = frameW * (1 - qnumFrac - rightStrip - 0.015);
+        if (dataHeight < rows * 2.5 || bubbleAreaW < cols * 6) continue;
 
-      const lineYs = refineOmrRowBoundariesFromTableLines(
-        data,
-        imageWidth,
-        imageHeight,
-        bubbleAreaLeft,
-        dataTop,
-        dataHeight,
-        rows
-      );
-      if (!lineYs || lineYs.length !== rows + 1) continue;
-
-      const rowH = dataHeight / rows;
-      let colEdges =
-        inferColumnEdgesFromVerticalLines(
+        const lineYs = refineOmrRowBoundariesFromTableLines(
           data,
           imageWidth,
           imageHeight,
           bubbleAreaLeft,
+          dataTop,
+          dataHeight,
+          rows
+        );
+        if (!lineYs || lineYs.length !== rows + 1) continue;
+
+        const colEdges = buildUniformBubbleColumnEdges(
+          bubbleAreaLeft,
           bubbleAreaW,
           cols,
-          dataTop,
-          rowH
-        ) ??
-        inferColumnEdgesGlobalFromVerticalLines(
-          data,
-          imageWidth,
-          imageHeight,
-          cols,
-          dataTop,
-          rowH
+          imageWidth
         );
 
-      if (!colEdges || colEdges.length !== cols + 1) {
-        colEdges = Array.from({ length: cols + 1 }, (_, c) =>
-          c === cols
-            ? Math.min(imageWidth - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
-            : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
-        );
-      }
+        const span = lineYs[rows]! - lineYs[0]!;
+        const rowUniform = lineYsHaveUniformSpacing(lineYs) ? 95 : 0;
+        const inFrame =
+          lineYs[0]! >= frameTop - 3 && lineYs[rows]! <= frameTop + frameH + 4 ? 55 : 0;
+        const colSpan = colEdges[cols]! - colEdges[0]!;
+        const colFit =
+          colSpan > bubbleAreaW * 0.68 && colSpan < bubbleAreaW * 1.18 ? 60 : -30;
+        const qnumFit =
+          Math.abs(qnumFrac - template.qnumWidthRatio) < 0.025 ? 40 : 0;
+        let score = span + rowUniform + inFrame + colFit + qnumFit;
 
-      const span = lineYs[rows]! - lineYs[0]!;
-      const rowUniform = lineYsHaveUniformSpacing(lineYs) ? 95 : 0;
-      const inFrame =
-        lineYs[0]! >= frameTop - 3 && lineYs[rows]! <= frameTop + frameH + 4 ? 55 : 0;
-      const colSpan = colEdges[cols]! - colEdges[0]!;
-      const colFit =
-        colSpan > bubbleAreaW * 0.68 && colSpan < bubbleAreaW * 1.18 ? 60 : -30;
-      let score = span + rowUniform + inFrame + colFit;
+        if (canvas) {
+          const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
+          const read = readAnswerSheetPicksFromTemplateGeometry(
+            canvas,
+            tightenGeometryCellsForSampling(geom),
+            FRAME_GRID_SCAN_THRESHOLDS,
+            rows,
+            cols
+          );
+          const samePenalty =
+            read.maxSameColumnCount >= rows * 0.65
+              ? 280
+              : read.maxSameColumnCount >= rows * 0.45
+                ? 90
+                : 0;
+          score += read.resolvedCount * 88 + read.confidenceSum * 6 - samePenalty;
+        }
 
-      if (canvas) {
-        const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
-        const read = readAnswerSheetPicksFromTemplateGeometry(
-          canvas,
-          geom,
-          FRAME_GRID_SCAN_THRESHOLDS,
-          rows,
-          cols
-        );
-        const samePenalty =
-          read.maxSameColumnCount >= rows * 0.65
-            ? 280
-            : read.maxSameColumnCount >= rows * 0.45
-              ? 90
-              : 0;
-        score += read.resolvedCount * 88 + read.confidenceSum * 6 - samePenalty;
-      }
-
-      if (!best || score > best.score) {
-        best = { lineYs, colEdges, score };
+        if (!best || score > best.score) {
+          best = { lineYs, colEdges, score };
+        }
       }
     }
   }
@@ -4336,18 +4315,79 @@ function buildUniformBubbleGridInNormFrame(
 
   const dataTop = (fy + fh * template.titleStripRatioOfTable) * height;
   const dataHeight = fh * height * (1 - template.titleStripRatioOfTable);
+  const rightStrip = CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
   const bubbleAreaLeft = (fx + fw * template.qnumWidthRatio) * width;
-  const bubbleAreaW = fw * width * (1 - template.qnumWidthRatio - 0.018);
-  const rowH = dataHeight / rows;
-  const cellW = bubbleAreaW / cols;
+  const bubbleAreaW = fw * width * (1 - template.qnumWidthRatio - rightStrip - 0.018);
 
   const lineYs = Array.from({ length: rows + 1 }, (_, i) => Math.round(dataTop + (i * dataHeight) / rows));
-  const colEdges = Array.from({ length: cols + 1 }, (_, c) =>
-    c === cols
-      ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
-      : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
-  );
+  const colEdges = buildUniformBubbleColumnEdges(bubbleAreaLeft, bubbleAreaW, cols, width);
   return buildCellsFromTableLines(lineYs, colEdges, width, height, cols);
+}
+
+/**
+ * Cuadrícula alineada a la plantilla dentro del marco naranja (columnas uniformes).
+ */
+function buildTemplateAlignedGeometryInNormFrame(
+  frame: OmrNormRect,
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number,
+  data: Uint8ClampedArray,
+  canvas: HTMLCanvasElement
+): CalifacilOmrScanGeometry | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+
+  const fx = Math.max(0, Math.min(1, frame.x));
+  const fy = Math.max(0, Math.min(1, frame.y));
+  const fw = Math.max(0.05, Math.min(1 - fx, frame.w));
+  const fh = Math.max(0.05, Math.min(1 - fy, frame.h));
+  const frameLeft = fx * imageWidth;
+  const frameTop = fy * imageHeight;
+  const frameW = fw * imageWidth;
+  const frameH = fh * imageHeight;
+
+  const titleStrip = template.titleStripRatioOfTable;
+  const qnum = template.qnumWidthRatio;
+  const rightStrip = CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
+  const dataTop = frameTop + frameH * titleStrip;
+  const dataHeight = frameH * (1 - titleStrip);
+  const bubbleAreaLeft = frameLeft + frameW * qnum;
+  const bubbleAreaW = frameW * (1 - qnum - rightStrip - 0.015);
+  if (dataHeight < rows * 2 || bubbleAreaW < cols * 8) return null;
+
+  const detected = refineOmrRowBoundariesFromTableLines(
+    data,
+    imageWidth,
+    imageHeight,
+    bubbleAreaLeft,
+    dataTop,
+    dataHeight,
+    rows
+  );
+  const lineYs =
+    detected && detected.length === rows + 1
+      ? detected
+      : Array.from({ length: rows + 1 }, (_, i) => Math.round(dataTop + (i * dataHeight) / rows));
+
+  const colEdges = buildUniformBubbleColumnEdges(bubbleAreaLeft, bubbleAreaW, cols, imageWidth);
+  const geom = buildCellsFromTableLines(lineYs, colEdges, imageWidth, imageHeight, cols);
+  const read = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    tightenGeometryCellsForSampling(geom),
+    FRAME_GRID_SCAN_THRESHOLDS,
+    rows,
+    cols
+  );
+  if (read.resolvedCount >= rows * 0.35 && read.maxSameColumnCount < rows * 0.75) {
+    return geom;
+  }
+  if (validateAnswerSheetGeometry(geom, rows).ok && read.resolvedCount >= rows * 0.2) {
+    return geom;
+  }
+  return null;
 }
 
 /**
@@ -4371,6 +4411,17 @@ export function buildAnswerSheetOmrGeometryInNormRect(
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (ctx) {
       const data = ctx.getImageData(0, 0, width, height).data;
+      const templateAligned = buildTemplateAlignedGeometryInNormFrame(
+        frame,
+        rowCount,
+        columns,
+        width,
+        height,
+        data,
+        canvas
+      );
+      if (templateAligned) return templateAligned;
+
       const swept = sweepAnswerSheetGridInNormFrame(
         data,
         width,
@@ -4384,9 +4435,7 @@ export function buildAnswerSheetOmrGeometryInNormRect(
         const geom = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
         const validation = validateAnswerSheetGeometry(geom, rows);
         if (validation.ok || swept.lineYs.length === rows + 1) {
-          return canvas
-            ? refineAnswerSheetGeometryBubbleCenters(canvas, geom)
-            : geom;
+          return geom;
         }
       }
     }
@@ -4397,37 +4446,27 @@ export function buildAnswerSheetOmrGeometryInNormRect(
       ? sweepFullCanvasTableGeometry(canvas, rowCount, columns)
       : null;
   if (fullFallback) {
-    return refineAnswerSheetGeometryBubbleCenters(canvas!, fullFallback.geometry);
+    return fullFallback.geometry;
   }
 
   return buildUniformBubbleGridInNormFrame(frame, rowCount, columns, width, height);
 }
 
-/** Centra cada celda en la burbuja impresa (mejor lectura y overlay). */
-function refineAnswerSheetGeometryBubbleCenters(
-  canvas: HTMLCanvasElement,
-  geometry: CalifacilOmrScanGeometry
+/** Reduce celdas al centro (muestreo de burbuja) sin buscar píxeles oscuros en franjas. */
+function tightenGeometryCellsForSampling(
+  geometry: CalifacilOmrScanGeometry,
+  shrink = 0.44
 ): CalifacilOmrScanGeometry {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return geometry;
-  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const W = Math.max(1, geometry.imageWidth);
-  const H = Math.max(1, geometry.imageHeight);
+  const pad = (1 - shrink) / 2;
   const cells = geometry.cells.map((row) =>
-    row.map((cell) => {
-      const center = refineBubbleCenterInCell(data, width, height, cell);
-      const cellW = cell.w * W;
-      const cellH = cell.h * H;
-      const r = Math.max(2, Math.min(cellW, cellH) * 0.24);
-      return {
-        x: Math.max(0, Math.min(1, (center.x - r) / W)),
-        y: Math.max(0, Math.min(1, (center.y - r) / H)),
-        w: Math.max(0.004, Math.min(1, (2 * r) / W)),
-        h: Math.max(0.004, Math.min(1, (2 * r) / H)),
-      };
-    })
+    row.map((cell) => ({
+      x: cell.x + cell.w * pad,
+      y: cell.y + cell.h * pad,
+      w: cell.w * shrink,
+      h: cell.h * shrink,
+    }))
   );
-  return { imageWidth: W, imageHeight: H, cells };
+  return { ...geometry, cells };
 }
 
 function tableFrameFromBubbleGeometry(
@@ -4456,10 +4495,10 @@ function omrMetaFromGeometry(
   columns: number
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
-  const refined = refineAnswerSheetGeometryBubbleCenters(canvas, geometry);
+  const readGeometry = tightenGeometryCellsForSampling(geometry);
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
-    refined,
+    readGeometry,
     FRAME_GRID_SCAN_THRESHOLDS,
     rows,
     columns
@@ -4469,7 +4508,7 @@ function omrMetaFromGeometry(
     rows: templateRead.rows,
     needsVisionAssist: false,
     maxSameColumnCount: templateRead.maxSameColumnCount,
-    geometry: refined,
+    geometry,
     reviewSourceCanvas: canvas,
     controlNumberDigits: [],
     controlNumber: null,
@@ -4647,22 +4686,19 @@ export function buildRegisteredAnswerSheetGeometry(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
-  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
-  const cellW = bubbleAreaW / cols;
+  const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
 
-  const uniformColEdges: number[] = [];
-  for (let c = 0; c <= cols; c++) {
-    uniformColEdges.push(
-      c === cols
-        ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
-        : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
-    );
-  }
+  const uniformColEdges = buildUniformBubbleColumnEdges(
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    width
+  );
 
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   let lineYs: number[] | null = null;
-  let colEdges: number[] | null = null;
   let imageData: Uint8ClampedArray | null = null;
   if (ctx) {
     imageData = ctx.getImageData(0, 0, width, height).data;
@@ -4674,16 +4710,6 @@ export function buildRegisteredAnswerSheetGeometry(
       dataTop,
       dataHeight,
       rows
-    );
-    colEdges = inferColumnEdgesFromVerticalLines(
-      imageData,
-      width,
-      height,
-      bubbleAreaLeft,
-      bubbleAreaW,
-      cols,
-      dataTop,
-      rowH
     );
   }
 
@@ -4718,26 +4744,11 @@ export function buildRegisteredAnswerSheetGeometry(
     }
   }
 
-  if (colEdges && colEdges.length === cols + 1) {
-    let maxEdgeDev = 0;
-    for (let i = 0; i <= cols; i++) {
-      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(colEdges[i]! - uniformColEdges[i]!));
-    }
-    const span = colEdges[cols]! - colEdges[0]!;
-    if (span < bubbleAreaW * 0.62 || span > bubbleAreaW * 1.38 || maxEdgeDev > cellW * 0.62) {
-      colEdges = null;
-    } else {
-      colEdges = colEdges.map((x, i) => Math.round(x * 0.72 + uniformColEdges[i]! * 0.28));
-    }
-  } else {
-    colEdges = null;
-  }
-
   if (!lineYs) {
     return buildAnswerSheetOmrGeometry(rowCount, columns, width, height);
   }
 
-  const columnEdges = colEdges ?? uniformColEdges;
+  const columnEdges = uniformColEdges;
   const cells: OmrNormRect[][] = [];
   for (let row = 0; row < rows; row++) {
     const yRowTop = lineYs[row]!;
@@ -5383,8 +5394,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     Math.min(maxRight, Math.round((fixedTemplate ? tableLeft : 0) + qNumW + columnShiftPx))
   );
   const bubbleAreaW = fixedTemplate
-    ? Math.max(18, tableLeft + tableW - bubbleAreaLeft)
-    : width - bubbleAreaLeft;
+    ? Math.max(18, tableW - qNumW - tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO)
+    : width - bubbleAreaLeft - Math.round(width * (CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO + 0.035));
   const cellW = bubbleAreaW / cols;
 
   const uniformColEdges: number[] = [];
