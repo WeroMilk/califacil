@@ -2227,7 +2227,7 @@ export function mobileRoiQuadsAreStable(
   next: [Point, Point, Point, Point],
   roiW: number,
   roiH: number,
-  maxCornerShiftFrac = 0.09
+  maxCornerShiftFrac = 0.12
 ): boolean {
   if (!prev) return false;
   const maxShift = Math.max(roiW, roiH) * maxCornerShiftFrac;

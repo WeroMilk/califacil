@@ -532,6 +532,12 @@ export default function CalificarPage() {
   const [mobileResultsDraft, setMobileResultsDraft] = useState<Record<string, string>>({});
   const [resultsSheetIdx, setResultsSheetIdx] = useState(0);
   const mobileCaptureBusyRef = useRef(false);
+  const triggerMobileSheetCaptureRef = useRef<
+    (
+      video: HTMLVideoElement,
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+    ) => void
+  >(() => {});
   const phaseRef = useRef<Phase>('elegir');
   const presentInstantCaptureGradeRef = useRef<
     (draft: Record<string, string>, studentIdOverride?: string) => Promise<void>
@@ -1818,9 +1824,19 @@ export default function CalificarPage() {
               setCornersAlignedView(false);
               setLiveStatus(
                 fillRatio < 0.12
-                  ? 'Acerca un poco el teléfono o pulsa el botón blanco para capturar.'
-                  : 'Centra la hoja en el marco o pulsa capturar.'
+                  ? 'Acerca un poco el teléfono o pulsa Capturar.'
+                  : 'Centra la hoja en el marco o pulsa Capturar.'
               );
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
+
+            if (!lastRoiQuadRef.current) {
+              lastRoiQuadRef.current = roiQuad;
+              cornerStableTicksRef.current = 1;
+              setMobileStableTicks(1);
+              setCornersAlignedView(true);
+              setLiveStatus('Hoja detectada — pulsa Capturar o mantén quieta un momento.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -1850,73 +1866,21 @@ export default function CalificarPage() {
                 )
               );
               setLiveStatus(
-                `Hoja detectada — pulsa el botón blanco o espera ~${secsLeft} s para auto-captura.`
+                `Hoja detectada — pulsa Capturar o espera ~${secsLeft} s`
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
 
-            if (mobileCaptureBusyRef.current) {
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            const captureQuad = lastRoiQuadRef.current ?? smoothedRoiQuadRef.current;
-            const captureRoi = lastRoiCaptureMetaRef.current;
-            cornerStableTicksRef.current = 0;
-            setMobileStableTicks(0);
-            lastRoiQuadRef.current = null;
-            smoothedRoiQuadRef.current = null;
-            lastRoiCaptureMetaRef.current = null;
-            mobileCaptureBusyRef.current = true;
-            setLiveStatus('Capturando y calificando…');
-            setScanBusy(true);
-            try {
-              const fullCanvas = captureVideoFullFrame(video, {
-                maxSide: MOBILE_CAPTURE_MAX_SIDE,
+            if (!mobileCaptureBusyRef.current) {
+              const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
+              const captureRoi = lastRoiCaptureMetaRef.current;
+              cornerStableTicksRef.current = 0;
+              setMobileStableTicks(0);
+              triggerMobileSheetCaptureRef.current(video, {
+                roiQuad: captureQuad,
+                roiCapture: captureRoi,
               });
-              if (!fullCanvas) return;
-
-              let warped: HTMLCanvasElement | null = null;
-              let alignment: WarpAlignmentReport | null = null;
-              if (captureQuad && captureRoi) {
-                ({ warped, alignment } = warpMobileCaptureWithFallback(
-                  fullCanvas,
-                  captureQuad,
-                  captureRoi
-                ));
-              }
-              if (!warped) {
-                const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
-                if (warpedOnly) {
-                  const refined = refineWarpedCalifacilSheet(warpedOnly, {
-                    maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-                    fast: true,
-                  });
-                  warped = refined.canvas;
-                  alignment = refined.alignment;
-                }
-              }
-              if (!warped) {
-                setLiveStatus('No se detectó la hoja. Pulsa capturar de nuevo.');
-                toast.error('No se detectó la hoja. Encuadra la página completa.');
-                return;
-              }
-
-              playAutoCaptureClickSound();
-              const result = await finalizeCapturedSheetRef.current(warped, undefined, {
-                preWarped: true,
-                warpAlignment: alignment,
-              });
-              if (result.success) {
-                playScanCompleteChime();
-                stopLiveCamera();
-              } else {
-                setLiveStatus('No se pudo calificar. Pulsa el botón blanco e intenta de nuevo.');
-              }
-            } finally {
-              mobileCaptureBusyRef.current = false;
-              setScanBusy(false);
             }
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
@@ -2652,31 +2616,29 @@ export default function CalificarPage() {
     }
   };
 
-  const captureMobilePhotoManually = async () => {
-    if (!isMobile || scanBusy || mobileCaptureBusyRef.current) return;
-    const video = videoRef.current;
-    if (!video || video.readyState < 2 || video.videoWidth < 40) {
-      toast.error('La cámara no está lista.');
-      return;
-    }
-    mobileCaptureBusyRef.current = true;
-    setScanBusy(true);
-    setLiveStatus('Capturando y calificando…');
-    await yieldForSpinnerPaint();
-    try {
+  const processMobileSheetCapture = useCallback(
+    async (
+      video: HTMLVideoElement,
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+    ) => {
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
-        toast.error('No se pudo capturar. Intenta de nuevo.');
+        toast.error('No se pudo capturar el fotograma. Intenta de nuevo.');
+        setLiveStatus('Error de cámara. Pulsa Capturar de nuevo.');
         return;
       }
-      let roiCapture = lastRoiCaptureMetaRef.current;
-      let roiQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
+
+      let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
+      let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
       if (!roiCapture) {
         roiCapture = captureVideoGuideRoiFrame(video, { maxSide: MOBILE_ROI_DETECT_MAX_SIDE });
       }
       if (!roiQuad && roiCapture) {
         const detected = detectLargestQuadInRoiCanvas(roiCapture.roiCanvas);
-        if (detected && isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)) {
+        if (
+          detected &&
+          isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)
+        ) {
           roiQuad = smoothMobileRoiQuad(null, detected, 0.5);
         }
       }
@@ -2690,6 +2652,7 @@ export default function CalificarPage() {
         const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
         if (!warpedOnly) {
           toast.error('No se detectó la hoja. Encuadra la página completa e intenta de nuevo.');
+          setLiveStatus('No se detectó la hoja. Ajusta el encuadre y pulsa Capturar.');
           return;
         }
         const refined = refineWarpedCalifacilSheet(warpedOnly, {
@@ -2705,12 +2668,65 @@ export default function CalificarPage() {
         preWarped: true,
         warpAlignment: alignment,
       });
-      if (result.success) playScanCompleteChime();
-    } finally {
-      mobileCaptureBusyRef.current = false;
-      setScanBusy(false);
+      if (result.success) {
+        playScanCompleteChime();
+        stopLiveCamera();
+      } else {
+        setLiveStatus('No se pudo calificar. Pulsa Capturar e intenta de nuevo.');
+      }
+    },
+    [finalizeCapturedSheet, stopLiveCamera]
+  );
+
+  const triggerMobileSheetCapture = useCallback(
+    (
+      video: HTMLVideoElement,
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+    ) => {
+      if (mobileCaptureBusyRef.current) return;
+      mobileCaptureBusyRef.current = true;
+      setScanBusy(true);
+      setLiveStatus('Capturando y calificando…');
+      void (async () => {
+        try {
+          await yieldForSpinnerPaint();
+          await processMobileSheetCapture(video, opts);
+        } catch {
+          toast.error('Error al capturar. Intenta de nuevo.');
+          setLiveStatus('Error al capturar. Pulsa Capturar de nuevo.');
+        } finally {
+          mobileCaptureBusyRef.current = false;
+          setScanBusy(false);
+        }
+      })();
+    },
+    [processMobileSheetCapture]
+  );
+
+  triggerMobileSheetCaptureRef.current = triggerMobileSheetCapture;
+
+  useEffect(() => {
+    if (!scanBusy) return;
+    const timeout = window.setTimeout(() => {
+      if (mobileCaptureBusyRef.current) {
+        mobileCaptureBusyRef.current = false;
+        setScanBusy(false);
+        toast.error('La captura tardó demasiado. Pulsa Capturar de nuevo.');
+        setLiveStatus('Tiempo agotado. Pulsa Capturar de nuevo.');
+      }
+    }, 45000);
+    return () => window.clearTimeout(timeout);
+  }, [scanBusy]);
+
+  const captureMobilePhotoManually = useCallback(() => {
+    if (!isMobile) return;
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth < 40) {
+      toast.error('La cámara no está lista. Espera un segundo e intenta de nuevo.');
+      return;
     }
-  };
+    triggerMobileSheetCapture(video);
+  }, [isMobile, triggerMobileSheetCapture]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -3170,6 +3186,20 @@ export default function CalificarPage() {
                 {isMobile ? (
                   <Button
                     type="button"
+                    size="sm"
+                    className="h-9 shrink-0 bg-orange-500 px-3 text-white hover:bg-orange-600"
+                    disabled={scanBusy || !cameraOpen}
+                    onClick={() => {
+                      const video = videoRef.current;
+                      if (video) triggerMobileSheetCapture(video);
+                    }}
+                  >
+                    Capturar
+                  </Button>
+                ) : null}
+                {isMobile ? (
+                  <Button
+                    type="button"
                     variant="ghost"
                     size="icon"
                     className={cn(
@@ -3285,13 +3315,18 @@ export default function CalificarPage() {
                   ) : null}
                   <button
                     type="button"
-                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-30 flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-orange-400 bg-white shadow-[0_4px_24px_rgba(0,0,0,0.45)] disabled:opacity-60"
+                    className="absolute bottom-[max(5.5rem,calc(env(safe-area-inset-bottom,0px)+4.5rem))] left-1/2 z-[60] flex h-[4.25rem] w-[4.25rem] -translate-x-1/2 items-center justify-center rounded-full border-[3px] border-orange-400 bg-white shadow-[0_4px_24px_rgba(0,0,0,0.45)] disabled:opacity-60"
+                    style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                     disabled={scanBusy}
                     aria-label="Capturar y calificar"
                     title="Capturar y calificar ahora"
-                    onClick={() => void captureMobilePhotoManually()}
+                    onPointerUp={(e) => {
+                      if (e.pointerType === 'mouse' && e.button !== 0) return;
+                      e.preventDefault();
+                      captureMobilePhotoManually();
+                    }}
                   >
-                    <span className="block h-[3.25rem] w-[3.25rem] rounded-full bg-white ring-2 ring-orange-500/80" />
+                    <span className="pointer-events-none block h-[3.25rem] w-[3.25rem] rounded-full bg-white ring-2 ring-orange-500/80" />
                   </button>
                 </>
               )}
