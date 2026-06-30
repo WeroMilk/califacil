@@ -11,6 +11,7 @@ import {
   CALIFACIL_VIEWFINDER_GUIDE,
   CALIFACIL_WARP_PAGE_FRAME_NORM,
   CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
+  CALIFACIL_ALIGN_STRIPS_NORM,
   califacilAnswerSheetAlignFrameAspect,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   getControlNumberBlockPageRatios,
@@ -389,6 +390,77 @@ function countDarkCornerPatches(
     if (darkCount / total >= 0.07) darkCorners++;
   }
   return darkCorners;
+}
+
+/** Cuántos de los 4 cuadros negros de esquina impresos son visibles (0–4). */
+export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return 0;
+
+  const guidePatches = viewfinderGuideCornerPatches(W, H);
+  if (guidePatches) {
+    return countDarkCornerPatches(
+      ctx,
+      guidePatches.corners,
+      guidePatches.patchW,
+      guidePatches.patchH
+    );
+  }
+
+  const patchW = Math.max(5, Math.round(W * 0.06));
+  const patchH = Math.max(5, Math.round(H * 0.06));
+  const ix = Math.round(W * 0.028);
+  const iy = Math.round(H * 0.028);
+  const corners = [
+    { x: ix, y: iy },
+    { x: W - patchW - ix, y: iy },
+    { x: ix, y: H - patchH - iy },
+    { x: W - patchW - ix, y: H - patchH - iy },
+  ];
+  return countDarkCornerPatches(ctx, corners, patchW, patchH);
+}
+
+function meanPatchDarkFraction(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): number {
+  const px = Math.max(0, Math.round(x));
+  const py = Math.max(0, Math.round(y));
+  const pw = Math.max(1, Math.min(Math.round(w), ctx.canvas.width - px));
+  const ph = Math.max(1, Math.min(Math.round(h), ctx.canvas.height - py));
+  const id = ctx.getImageData(px, py, pw, ph);
+  let dark = 0;
+  const total = pw * ph;
+  for (let i = 0; i < id.data.length; i += 4) {
+    const lum = id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
+    if (lum < 95) dark++;
+  }
+  return dark / Math.max(1, total);
+}
+
+/** Franjas negras verticales impresas a izquierda y derecha de la tabla OMR. */
+export function hasCalifacilAlignStrips(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return false;
+
+  let found = 0;
+  for (const strip of CALIFACIL_ALIGN_STRIPS_NORM) {
+    const x0 = strip.left * W;
+    const y0 = strip.top * H;
+    const sw = Math.max(3, strip.width * W);
+    const sh = Math.max(12, strip.height * H);
+    if (meanPatchDarkFraction(ctx, x0, y0, sw, sh) >= 0.28) found++;
+  }
+  return found >= 2;
 }
 
 function viewfinderGuideCornerPatches(
@@ -2023,8 +2095,8 @@ export function detectLargestQuadInRoiCanvas(
 
 /** Mínimo de área de hoja dentro del ROI (0–1) para permitir captura automática. */
 export const MOBILE_MIN_ROI_FILL_RATIO = 0.15;
-/** Mínimo de esquinas negras fiduciales visibles (de 4). */
-export const MOBILE_MIN_FIDUCIAL_CORNERS = 2;
+/** Mínimo de esquinas negras fiduciales visibles (de 4) para considerar hoja alineada en vivo. */
+export const MOBILE_MIN_FIDUCIAL_CORNERS = 3;
 
 export function measureRoiSheetFillRatio(
   quad: [Point, Point, Point, Point],
@@ -3831,6 +3903,26 @@ export function isCalifacilExamSheetStrict(
   if (!hasCalifacilCornerMarkers(canvas)) return false;
   const probe = probeCalifacilSheetQuality(canvas, columns);
   return probe.hasRowLines && probe.hasColumnEdges;
+}
+
+/**
+ * Validación estricta antes de calificar captura móvil: evita paredes, mesas o texturas.
+ * Exige esquinas impresas, franjas laterales y rejilla OMR detectable.
+ */
+export function isCalifacilAnswerSheetReadyForGrading(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number,
+  warpAlignment?: WarpAlignmentReport | null
+): boolean {
+  if (warpAlignment && Number.isFinite(warpAlignment.maxErrorPx) && warpAlignment.maxErrorPx > 14) {
+    return false;
+  }
+  if (countCalifacilCornerMarkers(canvas) < 4) return false;
+  if (!hasCalifacilAlignStrips(canvas)) return false;
+  if (!hasCalifacilPrintedTableGrid(canvas, columns, rowCount)) return false;
+  const probe = probeCalifacilSheetQuality(canvas, columns);
+  return probe.hasRowLines && probe.hasColumnEdges && probe.hasCornerMarkers;
 }
 
 function scanCalifacilOmrCanvasDetailed(
