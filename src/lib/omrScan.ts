@@ -1941,7 +1941,7 @@ export function captureCalifacilGuideFrame(
 }
 
 /** Resolución máxima del lado largo al analizar el ROI en vivo (velocidad móvil). */
-export const MOBILE_ROI_DETECT_MAX_SIDE = 640;
+export const MOBILE_ROI_DETECT_MAX_SIDE = 800;
 
 export type MobileGuideRoiCapture = {
   roiCanvas: HTMLCanvasElement;
@@ -2421,8 +2421,9 @@ export type ViewportAnswerBubble = {
 /**
  * Proyecta las burbujas de la plantilla CaliFacil (850×1100) al visor de cámara
  * usando el cuadrilátero detectado — guía de alineación en vivo.
+ * @deprecated Usar detección en ROI vía {@link mapAnswerSheetBubblesToViewport} con roiCanvas.
  */
-export function mapAnswerSheetBubblesToViewport(
+export function mapTemplateAnswerSheetBubblesToViewport(
   quad: [Point, Point, Point, Point],
   roiCapture: MobileGuideRoiCapture,
   letterbox: CalifacilVideoLetterbox,
@@ -2479,6 +2480,348 @@ export function mapAnswerSheetBubblesToViewport(
       const frameEdge = applyHomography8ToPoint(h, cxEdge, cy);
       const vpEdge = frameEdge ? frameToViewport(frameEdge.x, frameEdge.y) : null;
       const r = vpEdge ? Math.max(5, Math.min(24, Math.abs(vpEdge.x - vp.x) * 0.4)) : 9;
+      bubbles.push({
+        x: vp.x,
+        y: vp.y,
+        r,
+        row,
+        col,
+        isKeyColumn: expectedCol !== null && expectedCol === col,
+      });
+    }
+  }
+  return bubbles.length > 0 ? bubbles : null;
+}
+
+type AnswerSheetTableTemplate = {
+  tableLeftRatio: number;
+  tableTopRatio: number;
+  tableWidthRatio: number;
+  tableHeightRatio: number;
+  titleStripRatioOfTable: number;
+  qnumWidthRatio: number;
+};
+
+function buildAnswerSheetOmrGeometryFromTemplate(
+  template: AnswerSheetTableTemplate,
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+
+  const tableLeft = width * template.tableLeftRatio;
+  const tableTop = height * template.tableTopRatio;
+  const tableW = width * template.tableWidthRatio;
+  const tableH = height * template.tableHeightRatio;
+  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
+  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
+  const rowH = dataHeight / rows;
+  const qNumW = tableW * template.qnumWidthRatio;
+  const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
+  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const cellW = bubbleAreaW / cols;
+
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const yRowTop = dataTop + row * rowH;
+    const yRowBot = dataTop + (row + 1) * rowH;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = bubbleAreaLeft + c * cellW;
+      const x1 = c === cols - 1 ? bubbleAreaLeft + bubbleAreaW : bubbleAreaLeft + (c + 1) * cellW;
+      rowRects.push({
+        x: x0 / width,
+        y: yRowTop / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (yRowBot - yRowTop) / height),
+      });
+    }
+    cells.push(rowRects);
+  }
+
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
+function detectTableGridWithTemplate(
+  imageData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  rowCount: number,
+  columns: number,
+  template: AnswerSheetTableTemplate
+): CalifacilOmrScanGeometry | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+
+  const tableLeft = width * template.tableLeftRatio;
+  const tableTop = height * template.tableTopRatio;
+  const tableW = width * template.tableWidthRatio;
+  const tableH = height * template.tableHeightRatio;
+  const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
+  const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
+  const rowH = dataHeight / rows;
+  const qNumW = tableW * template.qnumWidthRatio;
+  const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
+  const bubbleAreaW = Math.max(18, tableLeft + tableW - bubbleAreaLeft);
+  const cellW = bubbleAreaW / cols;
+
+  const uniformColEdges: number[] = [];
+  for (let c = 0; c <= cols; c++) {
+    uniformColEdges.push(
+      c === cols
+        ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+        : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+    );
+  }
+
+  let lineYs = refineOmrRowBoundariesFromTableLines(
+    imageData,
+    width,
+    height,
+    bubbleAreaLeft,
+    dataTop,
+    dataHeight,
+    rows
+  );
+  let colEdges = inferColumnEdgesFromVerticalLines(
+    imageData,
+    width,
+    height,
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    dataTop,
+    rowH
+  );
+
+  if (lineYs && lineYs.length === rows + 1) {
+    let rowAligned = true;
+    let avgDev = 0;
+    for (let i = 0; i < rows + 1; i++) {
+      const expected = dataTop + i * rowH;
+      const dev = Math.abs(lineYs[i]! - expected);
+      avgDev += dev;
+      if (dev > rowH * 0.92) rowAligned = false;
+    }
+    avgDev /= rows + 1;
+    const uniformRows = lineYsHaveUniformSpacing(lineYs);
+    if (!rowAligned && !uniformRows) {
+      lineYs = null;
+    } else if (rowAligned) {
+      const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
+      lineYs = lineYs.map((y, i) => {
+        const expected = dataTop + i * rowH;
+        return Math.round(y * detectedWeight + expected * (1 - detectedWeight));
+      });
+    }
+  } else {
+    lineYs = null;
+  }
+
+  if (colEdges && colEdges.length === cols + 1) {
+    let maxEdgeDev = 0;
+    for (let i = 0; i <= cols; i++) {
+      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(colEdges[i]! - uniformColEdges[i]!));
+    }
+    const span = colEdges[cols]! - colEdges[0]!;
+    if (span < bubbleAreaW * 0.62 || span > bubbleAreaW * 1.38 || maxEdgeDev > cellW * 0.62) {
+      colEdges = null;
+    } else {
+      colEdges = colEdges.map((x, i) => Math.round(x * 0.72 + uniformColEdges[i]! * 0.28));
+    }
+  } else {
+    colEdges = null;
+  }
+
+  if (!lineYs) return null;
+
+  const columnEdges = colEdges ?? uniformColEdges;
+  return buildCellsFromTableLines(lineYs, columnEdges, width, height, cols);
+}
+
+/** Detecta la rejilla impresa en el ROI de cámara (líneas horizontales/verticales de la tabla). */
+export function detectLiveAnswerSheetGridGeometry(
+  canvas: HTMLCanvasElement,
+  rowCount: number,
+  columns: number
+): CalifacilOmrScanGeometry | null {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width < 40 || height < 40) return null;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const imageData = ctx.getImageData(0, 0, width, height).data;
+
+  const swept = sweepAnswerSheetTableGrid(imageData, width, height, rowCount, columns);
+  let sweptGeom: CalifacilOmrScanGeometry | null = null;
+  if (swept) {
+    sweptGeom = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+    if (validateAnswerSheetGeometry(sweptGeom, rows).ok) return sweptGeom;
+    if (swept.lineYs.length === rows + 1) return sweptGeom;
+  }
+
+  const anchored = buildMarkerAnchoredAnswerSheetTemplate(rowCount);
+  const anchoredGeom = detectTableGridWithTemplate(
+    imageData,
+    width,
+    height,
+    rowCount,
+    columns,
+    anchored
+  );
+  if (anchoredGeom && validateAnswerSheetGeometry(anchoredGeom, rows).ok) return anchoredGeom;
+
+  const pageTemplate = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const pageGeom = detectTableGridWithTemplate(
+    imageData,
+    width,
+    height,
+    rowCount,
+    columns,
+    pageTemplate
+  );
+  if (pageGeom && validateAnswerSheetGeometry(pageGeom, rows).ok) return pageGeom;
+
+  return (
+    sweptGeom ??
+    anchoredGeom ??
+    pageGeom ??
+    buildAnswerSheetOmrGeometryFromTemplate(anchored, rowCount, columns, width, height)
+  );
+}
+
+function pixelLuminance(data: Uint8ClampedArray, width: number, height: number, x: number, y: number): number {
+  const ix = Math.max(0, Math.min(width - 1, x));
+  const iy = Math.max(0, Math.min(height - 1, y));
+  const i = (iy * width + ix) * 4;
+  return 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
+}
+
+function meanDiskLuminance(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  radius: number
+): number {
+  let sum = 0;
+  let n = 0;
+  const r2 = radius * radius;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > r2) continue;
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      sum += pixelLuminance(data, width, height, x, y);
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 255;
+}
+
+/** Busca el centro más oscuro (burbuja impresa) dentro de la celda detectada. */
+function refineBubbleCenterInCell(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cell: OmrNormRect
+): Point {
+  const cx0 = (cell.x + cell.w * 0.5) * width;
+  const cy0 = (cell.y + cell.h * 0.5) * height;
+  const cellW = cell.w * width;
+  const cellH = cell.h * height;
+  const searchR = Math.max(2, Math.round(Math.min(cellW, cellH) * 0.44));
+  const diskR = Math.max(1, Math.round(Math.min(cellW, cellH) * 0.24));
+  const step = Math.max(1, Math.round(searchR / 5));
+  let bestX = cx0;
+  let bestY = cy0;
+  let bestLum = 255;
+  for (let dy = -searchR; dy <= searchR; dy += step) {
+    for (let dx = -searchR; dx <= searchR; dx += step) {
+      const px = Math.round(cx0 + dx);
+      const py = Math.round(cy0 + dy);
+      const lum = meanDiskLuminance(data, width, height, px, py, diskR);
+      if (lum < bestLum) {
+        bestLum = lum;
+        bestX = px;
+        bestY = py;
+      }
+    }
+  }
+  return { x: bestX, y: bestY };
+}
+
+export function mapRoiCanvasPointToViewport(
+  roiX: number,
+  roiY: number,
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox
+): { x: number; y: number } {
+  const roiW = roiCapture.roiCanvas.width;
+  const roiH = roiCapture.roiCanvas.height;
+  const fx = roiCapture.roiRect.left + (roiX / Math.max(1, roiW)) * roiCapture.roiRect.width;
+  const fy = roiCapture.roiRect.top + (roiY / Math.max(1, roiH)) * roiCapture.roiRect.height;
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    roiCapture.frameW,
+    roiCapture.frameH,
+    letterbox.displayW,
+    letterbox.displayH
+  );
+  return {
+    x: letterbox.offsetX + fx * scale - cropX,
+    y: letterbox.offsetY + fy * scale - cropY,
+  };
+}
+
+/**
+ * Detecta la rejilla impresa en el ROI de cámara y proyecta cada burbuja al visor.
+ */
+export function mapAnswerSheetBubblesToViewport(
+  roiCanvas: HTMLCanvasElement,
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox,
+  rowCount: number,
+  columns: number,
+  expectedColByRow?: (number | null)[]
+): ViewportAnswerBubble[] | null {
+  const geometry = detectLiveAnswerSheetGridGeometry(roiCanvas, rowCount, columns);
+  if (!geometry) return null;
+
+  const ctx = roiCanvas.getContext('2d', { willReadFrequently: true });
+  const imageData = ctx?.getImageData(0, 0, roiCanvas.width, roiCanvas.height).data ?? null;
+  const roiW = roiCanvas.width;
+  const roiH = roiCanvas.height;
+  const rows = Math.min(clampCalifacilOmrRowCount(rowCount), geometry.cells.length);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const bubbles: ViewportAnswerBubble[] = [];
+
+  for (let row = 0; row < rows; row++) {
+    const expectedCol = expectedColByRow?.[row] ?? null;
+    const rowCells = geometry.cells[row];
+    if (!rowCells) continue;
+    for (let col = 0; col < cols; col++) {
+      const cell = rowCells[col];
+      if (!cell) continue;
+      const center = imageData
+        ? refineBubbleCenterInCell(imageData, roiW, roiH, cell)
+        : { x: (cell.x + cell.w * 0.5) * roiW, y: (cell.y + cell.h * 0.5) * roiH };
+      const vp = mapRoiCanvasPointToViewport(center.x, center.y, roiCapture, letterbox);
+      const vpEdge = mapRoiCanvasPointToViewport(
+        (cell.x + cell.w) * roiW,
+        center.y,
+        roiCapture,
+        letterbox
+      );
+      const r = Math.max(5, Math.min(24, Math.abs(vpEdge.x - vp.x) * 0.4));
       bubbles.push({
         x: vp.x,
         y: vp.y,

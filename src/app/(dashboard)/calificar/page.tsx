@@ -1914,17 +1914,18 @@ export default function CalificarPage() {
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
-            if (quadValid && roiQuad && roiCapture && layout) {
-              setMobileDocumentPolygon(
-                mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
-              );
-              if (
-                fillRatio >= MOBILE_MIN_ROI_FILL_RATIO * 0.82 &&
-                fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
-              ) {
+            if (roiCapture && layout) {
+              if (quadValid && roiQuad) {
+                setMobileDocumentPolygon(
+                  mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
+                );
+              } else {
+                setMobileDocumentPolygon(null);
+              }
+              if (fillRatio >= MOBILE_MIN_ROI_FILL_RATIO * 0.75) {
                 setMobileAlignBubbles(
                   mapAnswerSheetBubblesToViewport(
-                    roiQuad,
+                    roiCanvas,
                     roiCapture,
                     layout,
                     omrRowCount,
@@ -3536,11 +3537,11 @@ export default function CalificarPage() {
                     <IphoneDocumentScannerOverlay
                       documentPolygon={mobileDocumentPolygon}
                       detected={cornersAlignedView}
-                      hint="Encuadra la hoja; verás círculos sobre cada burbuja para alinear."
+                      hint="Encuadra la tabla; los círculos se ajustan a las burbujas impresas."
                     />
                     <MobileAnswerSheetCameraOverlay
                       bubbles={mobileAlignBubbles}
-                      visible={cornersAlignedView}
+                      visible={Boolean(mobileAlignBubbles?.length)}
                     />
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>

@@ -8,7 +8,7 @@ type Props = {
 };
 
 /**
- * Círculos de alineación en la cámara: burbujas de la plantilla proyectadas sobre el documento.
+ * Círculos de alineación en la cámara: burbujas detectadas en la rejilla impresa.
  * Verde = columna de la respuesta correcta (clave); ámbar = resto de opciones.
  */
 export function MobileAnswerSheetCameraOverlay({ bubbles, visible = true }: Props) {
