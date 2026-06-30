@@ -21,8 +21,6 @@ import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
   buildCalifacilAnswerSheetOmrTemplate,
-  CALIFACIL_ALIGN_STRIPS_NORM,
-  califacilAnswerSheetOrangeFrameNorm,
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
@@ -334,22 +332,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function answerSheetTableClipRect(rowCount: number): {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-} {
-  const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-  return {
-    x: t.tableLeftRatio,
-    y: t.tableTopRatio,
-    w: t.tableWidthRatio,
-    h: t.tableHeightRatio,
-  };
-}
-
-/** Marco naranja de referencia: franjas negras laterales en hoja carta; tabla en exámenes antiguos. */
+/** Marco naranja de revisión: envuelve la tabla OMR (como la cuadrícula azul de celdas). */
 function isLetterPageGeometry(geometry: CalifacilOmrScanGeometry): boolean {
   const aspect = geometry.imageWidth / Math.max(1, geometry.imageHeight);
   return aspect > 0.72 && aspect < 0.84;
@@ -360,18 +343,26 @@ function califacilReviewOrangeFrameRect(
   rowCount: number,
   answerSheetLayout = false
 ): { x: number; y: number; w: number; h: number } | null {
-  if (answerSheetLayout || isLetterPageGeometry(geometry)) {
-    return califacilAnswerSheetOrangeFrameNorm();
-  }
   const cellBounds = califacilGeometryTableBounds(geometry, rowCount);
   if (cellBounds) {
-    const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-    const headerFrac = t.titleStripRatioOfTable * t.tableHeightRatio;
-    const tableLeft = t.tableLeftRatio;
-    const tableWidth = t.tableWidthRatio;
+    const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
+    const t = useTemplate ? buildCalifacilAnswerSheetOmrTemplate(rowCount) : null;
+    const headerFrac = t ? t.titleStripRatioOfTable * t.tableHeightRatio : cellBounds.h * 0.12;
+    const tableLeft = t ? t.tableLeftRatio : cellBounds.x;
+    const tableWidth = t ? t.tableWidthRatio : cellBounds.w;
     const y = Math.max(0, cellBounds.y - headerFrac);
     const h = Math.min(1 - y, cellBounds.h + headerFrac + 0.003);
     return { x: tableLeft, y, w: tableWidth, h };
+  }
+  const useTemplate = answerSheetLayout || isLetterPageGeometry(geometry);
+  if (useTemplate) {
+    const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+    return {
+      x: t.tableLeftRatio,
+      y: t.tableTopRatio,
+      w: t.tableWidthRatio,
+      h: t.tableHeightRatio,
+    };
   }
   return califacilViewfinderNormRect(geometry.imageWidth, geometry.imageHeight);
 }
@@ -382,14 +373,12 @@ function CalifacilReviewImageStack({
   alt,
   geometry,
   orangeFrameRect,
-  showAlignStrips = false,
   overlay,
 }: {
   previewUrl: string;
   alt: string;
   geometry: CalifacilOmrScanGeometry;
   orangeFrameRect: { x: number; y: number; w: number; h: number } | null;
-  showAlignStrips?: boolean;
   overlay: ReactNode;
 }) {
   const W = Math.max(1, geometry.imageWidth);
@@ -422,21 +411,6 @@ function CalifacilReviewImageStack({
             aria-hidden
           />
         ) : null}
-        {showAlignStrips
-          ? CALIFACIL_ALIGN_STRIPS_NORM.map((strip, index) => (
-              <div
-                key={index}
-                className="pointer-events-none absolute z-[1] bg-black/55"
-                style={{
-                  left: `${strip.left * 100}%`,
-                  top: `${strip.top * 100}%`,
-                  width: `${strip.width * 100}%`,
-                  height: `${strip.height * 100}%`,
-                }}
-                aria-hidden
-              />
-            ))
-          : null}
         <div className="pointer-events-none absolute inset-0 z-[2]">{overlay}</div>
       </div>
     </div>
@@ -3452,7 +3426,6 @@ export default function CalificarPage() {
                     alt="Vista previa del examen escaneado"
                     geometry={reviewOmrGeometry}
                     orangeFrameRect={reviewOrangeFrameRect}
-                    showAlignStrips={isMobile}
                     overlay={
                       <CalifacilOmrReviewOverlay
                         geometry={reviewOmrGeometry}
@@ -3460,7 +3433,7 @@ export default function CalificarPage() {
                         expectedPicks={expectedChunkPicks}
                         expectedOpacity={overlayOpacity / 100}
                         rowCount={currentChunk.length}
-                        clipRect={isMobile ? answerSheetTableClipRect(currentChunk.length) : null}
+                        clipRect={null}
                       />
                     }
                   />
@@ -3641,7 +3614,6 @@ export default function CalificarPage() {
                       alt={`Hoja ${snap.sheetIndex + 1}`}
                       geometry={snap.geometry}
                       orangeFrameRect={orangeFrameRect}
-                      showAlignStrips={snap.answerSheetLayout ?? true}
                       overlay={
                         <>
                           <CalifacilOmrReviewOverlay
@@ -3650,11 +3622,7 @@ export default function CalificarPage() {
                             expectedPicks={tabExpectedPicks}
                             expectedOpacity={overlayOpacity / 100}
                             rowCount={chunk.length}
-                            clipRect={
-                              snap.answerSheetLayout ?? true
-                                ? answerSheetTableClipRect(chunk.length)
-                                : null
-                            }
+                            clipRect={null}
                           />
                           {OMR_DEBUG_ENABLED && snap.warpAlignment ? (
                             <CalifacilOmrDebugOverlay
