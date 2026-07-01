@@ -28,12 +28,11 @@ import {
   autoOrientCalifacilSheet,
   califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
-  califacilMobileAnswerSheetGuideInViewportPx,
   califacilViewfinderNormRect,
   captureVideoFullFrame,
+  captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
   estimateCanvasShadowAsymmetry,
-  captureVideoGuideRoiFrame,
   detectLargestQuadInRoiCanvas,
   estimateCanvasMeanLuminance,
   fileToImage,
@@ -80,8 +79,10 @@ import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
-import { IosCaptureFlashOverlay } from '@/components/iphone-document-scanner-overlay';
-import { MobileAnswerSheetAlignGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
+import {
+  IphoneDocumentScannerOverlay,
+  IosCaptureFlashOverlay,
+} from '@/components/iphone-document-scanner-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   type ExamFullscreenMode,
@@ -201,10 +202,12 @@ const SHADOW_ASYMMETRY_TORCH = 0.14;
 const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Fotogramas estables antes de auto-captura (~0,5 s). Captura manual no espera. */
-const CORNER_ALIGN_STABLE_TICKS = 6;
-/** Intervalo del loop de detección de esquinas en móvil (ms). */
-const MOBILE_CORNER_LOOP_MS = 80;
+/** Fotogramas estables antes de auto-captura (~0,35 s con loop a 50 ms). */
+const CORNER_ALIGN_STABLE_TICKS = 7;
+/** Intervalo del loop de detección de documento en móvil (ms). */
+const MOBILE_CORNER_LOOP_MS = 50;
+/** Mantiene el polígono visible un instante si la detección parpadea (fluidez iOS). */
+const DOCUMENT_POLYGON_HOLD_MS = 420;
 /** Tiempo mínimo de espera con hoja alineada antes de auto-captura. */
 const MOBILE_ALIGN_HOLD_MS = CORNER_ALIGN_STABLE_TICKS * MOBILE_CORNER_LOOP_MS;
 /** Tolerancia de alineación fiducial en captura móvil (más permisivo que escritorio). */
@@ -543,6 +546,11 @@ export default function CalificarPage() {
   const smoothedRoiQuadRef = useRef<RoiQuad | null>(null);
   /** Metadatos del último ROI válido (para warp en alta resolución). */
   const lastRoiCaptureMetaRef = useRef<MobileGuideRoiCapture | null>(null);
+  /** Polígono en pantalla retenido brevemente si la detección falla un frame. */
+  const documentPolygonHoldRef = useRef<{
+    polygon: Array<{ x: number; y: number }>;
+    until: number;
+  } | null>(null);
   /** Último sondeo de calidad OMR del loop en vivo (líneas/columnas detectadas). */
   const lastQualityProbeRef = useRef<CalifacilSheetQualityProbe | null>(null);
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
@@ -767,11 +775,6 @@ export default function CalificarPage() {
     liveVideoLayoutRef.current = liveVideoLayout;
   }, [liveVideoLayout]);
 
-  const mobileAnswerSheetGuideRect = useMemo(() => {
-    if (!liveVideoLayout) return null;
-    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
-  }, [liveVideoLayout]);
-
   useEffect(() => {
     autoShutterEnabledRef.current = autoShutterEnabled;
   }, [autoShutterEnabled]);
@@ -871,6 +874,7 @@ export default function CalificarPage() {
     lastRoiQuadRef.current = null;
     smoothedRoiQuadRef.current = null;
     lastRoiCaptureMetaRef.current = null;
+    documentPolygonHoldRef.current = null;
     lastQualityProbeRef.current = null;
     liveDraftDisplaySigRef.current = '';
     liveResolvedDisplayedRef.current = -1;
@@ -1961,7 +1965,7 @@ export default function CalificarPage() {
           let oriented: HTMLCanvasElement | null = null;
           let sheetLikely = false;
           if (isMobile) {
-            const roiCapture = captureVideoGuideRoiFrame(video, {
+            const roiCapture = captureVideoFrameForDocumentDetect(video, {
               maxSide: MOBILE_ROI_DETECT_MAX_SIDE,
             });
             if (!roiCapture) {
@@ -1997,7 +2001,7 @@ export default function CalificarPage() {
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
-                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.48)
+                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.34)
                 : null;
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
@@ -2008,16 +2012,22 @@ export default function CalificarPage() {
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
-            if (roiCapture && layout) {
-              if (quadValid && roiQuad) {
-                setMobileDocumentPolygon(
-                  mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout)
-                );
+            const now = performance.now();
+            if (roiCapture && layout && quadValid && roiQuad && fillRatio >= 0.08) {
+              const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
+              documentPolygonHoldRef.current = {
+                polygon: viewportPoly,
+                until: now + DOCUMENT_POLYGON_HOLD_MS,
+              };
+              setMobileDocumentPolygon(viewportPoly);
+            } else {
+              const hold = documentPolygonHoldRef.current;
+              if (hold && now < hold.until) {
+                setMobileDocumentPolygon(hold.polygon);
               } else {
+                documentPolygonHoldRef.current = null;
                 setMobileDocumentPolygon(null);
               }
-            } else {
-              setMobileDocumentPolygon(null);
             }
             const shadowAsym = estimateCanvasShadowAsymmetry(roiCanvas);
             const shadowStrong = shadowAsym >= SHADOW_ASYMMETRY_TORCH;
@@ -2046,9 +2056,9 @@ export default function CalificarPage() {
             if (!quadValid || !roiQuad) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
-              lastRoiQuadRef.current = null;
-              smoothedRoiQuadRef.current = null;
-              lastRoiCaptureMetaRef.current = null;
+              if (!documentPolygonHoldRef.current) {
+                lastRoiQuadRef.current = null;
+              }
               setCornersAlignedView(false);
               lowVisibilityTicksRef.current += 1;
               if (
@@ -2060,9 +2070,9 @@ export default function CalificarPage() {
               ) {
                 autotorchTriedRef.current = true;
                 void setTorchEnabled(true);
-                setLiveStatus('Activé el flash. Encuadra la hoja dentro del rectángulo.');
+                setLiveStatus('Activé el flash. Coloca la hoja en el visor.');
               } else {
-                setLiveStatus('Encuadra la tabla dentro del marco naranja.');
+                setLiveStatus('Coloca el documento en el visor.');
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2074,9 +2084,9 @@ export default function CalificarPage() {
               lastRoiQuadRef.current = roiQuad;
               setCornersAlignedView(false);
               setLiveStatus(
-                fillRatio < 0.12
-                  ? 'Acerca un poco el teléfono o pulsa Capturar.'
-                  : 'Centra la hoja en el marco o pulsa Capturar.'
+                fillRatio < 0.1
+                  ? 'Acerca un poco el teléfono.'
+                  : 'Centra la hoja en el visor.'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2087,9 +2097,7 @@ export default function CalificarPage() {
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
               setCornersAlignedView(false);
-              setLiveStatus(
-                'Coloca la hoja impresa: deben verse las esquinas negras y las franjas laterales.'
-              );
+              setLiveStatus('Asegúrate de que se vean las esquinas negras de la hoja.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2099,18 +2107,24 @@ export default function CalificarPage() {
               cornerStableTicksRef.current = 1;
               setMobileStableTicks(1);
               setCornersAlignedView(true);
-              setLiveStatus('Hoja detectada — pulsa Capturar cuando esté bien encuadrada.');
+              setLiveStatus('Documento detectado — pulsa Capturar o espera.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
 
-            const stable = mobileRoiQuadsAreStable(lastRoiQuadRef.current, roiQuad, roiW, roiH);
+            const stable = mobileRoiQuadsAreStable(
+              lastRoiQuadRef.current,
+              roiQuad,
+              roiW,
+              roiH,
+              0.09
+            );
             lastRoiQuadRef.current = roiQuad;
             if (!stable) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               setCornersAlignedView(false);
-              setLiveStatus('Mantén la hoja quieta dentro del rectángulo…');
+              setLiveStatus('Mantén la hoja quieta…');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -2129,7 +2143,9 @@ export default function CalificarPage() {
                 )
               );
               setLiveStatus(
-                `Hoja detectada — pulsa Capturar o espera ~${secsLeft} s`
+                autoShutterEnabledRef.current
+                  ? `Captura automática en ~${secsLeft} s`
+                  : 'Documento detectado — pulsa Capturar'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2904,7 +2920,9 @@ export default function CalificarPage() {
       let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
       let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
       if (!roiCapture) {
-        roiCapture = captureVideoGuideRoiFrame(video, { maxSide: MOBILE_ROI_DETECT_MAX_SIDE });
+        roiCapture = captureVideoFrameForDocumentDetect(video, {
+          maxSide: MOBILE_ROI_DETECT_MAX_SIDE,
+        });
       }
       if (!roiQuad && roiCapture) {
         const detected = detectLargestQuadInRoiCanvas(roiCapture.roiCanvas);
@@ -2967,7 +2985,7 @@ export default function CalificarPage() {
     setMobileReviewAlign(null);
     setReviewScanning(false);
     setReviewStatus(null);
-    setLiveStatus('Encuadra la hoja y pulsa el botón blanco para calificar');
+    setLiveStatus('Coloca el documento en el visor y pulsa el botón blanco');
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         if (streamRef.current) {
@@ -3685,23 +3703,11 @@ export default function CalificarPage() {
                         )}
                       />
                     </div>
-                    {mobileAnswerSheetGuideRect ? (
-                      <>
-                        <div className="pointer-events-none absolute inset-0 z-[10] bg-black/32" aria-hidden />
-                        <MobileAnswerSheetAlignGuideOverlay
-                          guideRect={mobileAnswerSheetGuideRect}
-                          aligned={cornersAlignedView}
-                        />
-                        <p
-                          className="pointer-events-none absolute left-1/2 z-[20] w-[min(92%,18rem)] -translate-x-1/2 rounded-lg bg-black/55 px-3 py-2 text-center text-[13px] font-medium leading-snug text-white/95 backdrop-blur-sm"
-                          style={{ top: Math.max(56, mobileAnswerSheetGuideRect.top - 52) }}
-                        >
-                          {cornersAlignedView
-                            ? 'Hoja detectada — pulsa el botón blanco para capturar'
-                            : 'Encuadra la tabla dentro del marco naranja'}
-                        </p>
-                      </>
-                    ) : null}
+                    <IphoneDocumentScannerOverlay
+                      documentPolygon={mobileDocumentPolygon}
+                      detected={cornersAlignedView}
+                      hint={liveStatus ?? 'Coloca el documento en el visor.'}
+                    />
                     <IosCaptureFlashOverlay active={shutterFlash} />
                   </div>
 

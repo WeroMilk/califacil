@@ -34,11 +34,11 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
     const from = fromRef.current ?? target;
     fromRef.current = target;
     startRef.current = performance.now();
-    const duration = 120;
+    const duration = 210;
 
     const tick = (now: number) => {
       const t = Math.min(1, (now - startRef.current) / duration);
-      const eased = 1 - (1 - t) ** 3;
+      const eased = 1 - (1 - t) ** 4;
       setDisplay(
         target.map((p, i) => lerpPoint(from[i] ?? p, p, eased)) as ViewportPoint[]
       );
@@ -59,9 +59,9 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
 
 function cornerBrackets(
   poly: ViewportPoint[],
-  len = 22,
+  len = 26,
   stroke = 'rgb(255, 214, 10)',
-  sw = 3.5
+  sw = 3.75
 ) {
   const [tl, tr, br, bl] = poly;
   return (
@@ -85,9 +85,7 @@ export function IphoneDocumentScannerOverlay({
   const smoothPoly = useSmoothedPolygon(poly);
   const points = smoothPoly ? smoothPoly.map((p) => `${p.x},${p.y}`).join(' ') : '';
 
-  const bannerText = detected
-    ? 'Documento detectado'
-    : hint;
+  const bannerText = detected ? 'Documento detectado' : hint;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
@@ -103,32 +101,32 @@ export function IphoneDocumentScannerOverlay({
             <rect
               width="100%"
               height="100%"
-              fill="rgba(0,0,0,0.5)"
+              fill="rgba(0,0,0,0.52)"
               mask={`url(#${maskId})`}
             />
             <polygon
               points={points}
-              fill="rgba(255, 214, 10, 0.18)"
-              stroke="rgba(255, 214, 10, 0.55)"
-              strokeWidth={1.5}
+              fill={detected ? 'rgba(255, 214, 10, 0.22)' : 'rgba(255, 214, 10, 0.14)'}
+              stroke={detected ? 'rgba(255, 214, 10, 0.72)' : 'rgba(255, 214, 10, 0.48)'}
+              strokeWidth={detected ? 2 : 1.5}
             />
-            {cornerBrackets(smoothPoly)}
+            {cornerBrackets(smoothPoly, detected ? 28 : 24, 'rgb(255, 214, 10)', detected ? 4 : 3.5)}
           </>
         ) : (
-          <rect width="100%" height="100%" fill="rgba(0,0,0,0.38)" />
+          <rect width="100%" height="100%" fill="rgba(0,0,0,0.35)" />
         )}
       </svg>
 
       <div
         className={cn(
-          'absolute left-1/2 z-20 -translate-x-1/2 rounded-full px-5 py-2 text-center shadow-lg backdrop-blur-xl transition-all duration-300',
+          'absolute left-1/2 z-20 max-w-[min(92%,20rem)] -translate-x-1/2 rounded-full px-5 py-2 text-center shadow-lg backdrop-blur-xl transition-all duration-300',
           detected
-            ? 'bg-emerald-500/25 text-white ring-1 ring-emerald-300/40'
-            : 'bg-black/55 text-white/95 ring-1 ring-white/10'
+            ? 'bg-emerald-500/28 text-white ring-1 ring-emerald-300/45'
+            : 'bg-black/58 text-white/95 ring-1 ring-white/12'
         )}
         style={{ top: 'max(3.25rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' }}
       >
-        <p className="text-[13px] font-medium tracking-tight">{bannerText}</p>
+        <p className="text-[13px] font-medium leading-snug tracking-tight">{bannerText}</p>
       </div>
     </div>
   );

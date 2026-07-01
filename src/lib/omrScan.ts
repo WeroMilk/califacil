@@ -1942,6 +1942,8 @@ export function captureCalifacilGuideFrame(
 
 /** Resolución máxima del lado largo al analizar el ROI en vivo (velocidad móvil). */
 export const MOBILE_ROI_DETECT_MAX_SIDE = 800;
+/** Resolución del fotograma completo para detección estilo Escáner de documentos (iOS). */
+export const MOBILE_FULL_FRAME_DETECT_MAX_SIDE = 720;
 
 export type MobileGuideRoiCapture = {
   roiCanvas: HTMLCanvasElement;
@@ -1988,6 +1990,39 @@ export function captureVideoGuideRoiFrame(
   return {
     roiCanvas,
     roiRect: { left: sx, top: sy, width: sw, height: sh },
+    frameW: fw,
+    frameH: fh,
+  };
+}
+
+/**
+ * Fotograma completo del sensor a baja resolución (como Escáner de documentos en iOS).
+ * El cuadrilátero detectado vive en coords. del canvas escalado y se mapea al sensor vía roiRect.
+ */
+export function captureVideoFrameForDocumentDetect(
+  video: HTMLVideoElement,
+  opts?: { maxSide?: number }
+): MobileGuideRoiCapture | null {
+  if (typeof document === 'undefined') return null;
+  const fw = video.videoWidth;
+  const fh = video.videoHeight;
+  if (fw < 40 || fh < 40) return null;
+
+  const maxSide = opts?.maxSide ?? MOBILE_FULL_FRAME_DETECT_MAX_SIDE;
+  const scale = Math.min(1, maxSide / Math.max(fw, fh));
+  const outW = Math.max(1, Math.round(fw * scale));
+  const outH = Math.max(1, Math.round(fh * scale));
+
+  const roiCanvas = document.createElement('canvas');
+  roiCanvas.width = outW;
+  roiCanvas.height = outH;
+  const ctx = roiCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, outW, outH);
+
+  return {
+    roiCanvas,
+    roiRect: { left: 0, top: 0, width: fw, height: fh },
     frameW: fw,
     frameH: fh,
   };
@@ -2340,10 +2375,10 @@ export function isValidMobileRoiQuad(
 export function smoothMobileRoiQuad(
   prev: [Point, Point, Point, Point] | null,
   next: [Point, Point, Point, Point],
-  alpha = 0.5
+  alpha = 0.34
 ): [Point, Point, Point, Point] {
   if (!prev) return next;
-  const t = Math.max(0.12, Math.min(0.88, alpha));
+  const t = Math.max(0.1, Math.min(0.72, alpha));
   return next.map((p, i) => ({
     x: prev[i]!.x * (1 - t) + p.x * t,
     y: prev[i]!.y * (1 - t) + p.y * t,
