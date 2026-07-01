@@ -629,8 +629,8 @@ export function MobileSheetScanReview({
                 </p>
               ) : null}
               <p className="mt-1 text-[11px] leading-snug text-white/65">
-                Arrastra el marco naranja o sus esquinas hasta que coincida con la tabla · Verde = acierto · Rojo =
-                error
+                Arrastra el marco naranja hasta alinear los círculos naranjas con las burbujas de la clave · Verde =
+                acierto · Rojo = error
               </p>
             </div>
           </div>

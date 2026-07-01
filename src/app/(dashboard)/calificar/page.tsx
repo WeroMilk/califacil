@@ -3939,8 +3939,8 @@ export default function CalificarPage() {
                       Coincidencias con la clave del examen en esta hoja. En la foto:{' '}
                       <span className="font-medium text-green-700">verde</span> = acierto,{' '}
                       <span className="font-medium text-red-600">rojo</span> = opción leída incorrecta,{' '}
-                      <span className="font-medium text-orange-700">naranja</span> = respuesta correcta esperada,
-                      <span className="font-medium text-amber-600"> amarillo punteado</span> = sin lectura (incorrecta).
+                      <span className="font-medium text-orange-700">naranja</span> = burbuja correcta esperada,
+                      <span className="font-medium text-red-600"> rojo punteado</span> = sin lectura en esa fila.
                     </p>
                     {isMobile ? (
                       <Button
@@ -4124,7 +4124,7 @@ export default function CalificarPage() {
                           <span className={`tabular-nums ${getGradeColor(rPct)}`}>{rPct}%</span>
                         </div>
                         <p className="mt-1 text-[11px] leading-snug text-emerald-900/85">
-                          Verde = acierto, rojo = opción leída incorrecta, naranja = respuesta correcta esperada, amarillo punteado = sin lectura (incorrecta).
+                          Verde = acierto, rojo = opción leída incorrecta, círculo naranja = respuesta correcta esperada, rojo punteado = sin lectura.
                         </p>
                         <Button
                           type="button"
