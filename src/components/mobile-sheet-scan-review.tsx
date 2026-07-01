@@ -18,6 +18,7 @@ import {
   califacilOmrOrangeFrameRect,
   califacilViewfinderNormRect,
   downscaleCanvasForOmrScan,
+  refineAnswerSheetGeometryToBubblePeaks,
   refineWarpedCalifacilSheet,
   scanWarpedWithNormTableFrame,
   warpCalifacilSheetFromQuad,
@@ -371,13 +372,15 @@ export function MobileSheetScanReview({
 
   const displayGeometry = useMemo(() => {
     if (!alignPreview || !orangeFrameNorm) return null;
-    return buildAnswerSheetGradingGeometryFromNormFrame(
+    const scanCanvas = downscaleCanvasForOmrScan(alignPreview.previewCanvas, 1200);
+    const base = buildAnswerSheetGradingGeometryFromNormFrame(
       orangeFrameNorm,
       rowCount,
       columnCount,
-      alignPreview.geometry.imageWidth,
-      alignPreview.geometry.imageHeight
+      scanCanvas.width,
+      scanCanvas.height
     );
+    return refineAnswerSheetGeometryToBubblePeaks(scanCanvas, base);
   }, [alignPreview, orangeFrameNorm, rowCount, columnCount]);
 
   const recomputeWarp = useCallback(

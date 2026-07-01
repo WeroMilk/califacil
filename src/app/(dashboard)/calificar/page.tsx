@@ -3006,7 +3006,7 @@ export default function CalificarPage() {
           omrRowCount
         );
         if (scanGen !== reviewScanGenRef.current) return;
-        const controlRead = readAnswerSheetControlNumberFromCanvas(scanCanvas, omrRowCount);
+        const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         if (controlRead.controlNumber) {
           setDetectedControlNumber(controlRead.controlNumber);
           const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
@@ -3061,7 +3061,7 @@ export default function CalificarPage() {
         await yieldForSpinnerPaint();
         if (scanGen !== reviewScanGenRef.current) return;
         const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, 1200);
-        const controlRead = readAnswerSheetControlNumberFromCanvas(scanCanvas, omrRowCount);
+        const controlRead = readAnswerSheetControlNumberFromCanvas(mobileReviewAlign.warped, omrRowCount);
         if (controlRead.controlNumber) {
           setDetectedControlNumber(controlRead.controlNumber);
           const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
