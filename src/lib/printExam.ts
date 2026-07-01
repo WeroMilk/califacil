@@ -1446,7 +1446,10 @@ export type CalifacilControlNumberBlockRatios = {
 };
 
 /** Rectángulo del bloque de número de control en coords. normalizadas 0–1 (canvas carta 850×1100). */
-export function getControlNumberBlockPageRatios(): CalifacilControlNumberBlockRatios {
+export function getControlNumberBlockPageRatios(
+  rowCount = CALIFACIL_PRINT_MAX_QUESTIONS
+): CalifacilControlNumberBlockRatios {
+  const denseOmr = rowCount > 15;
   const pageW = CALIFACIL_WARP_PAGE.widthPx;
   const pageH = CALIFACIL_WARP_PAGE.heightPx;
   const { cornerSizePt, cornerGapPt, alignStripWidthPt } = ANSWER_SHEET_LAYOUT;
@@ -1454,17 +1457,21 @@ export function getControlNumberBlockPageRatios(): CalifacilControlNumberBlockRa
   const stripPx = ptToWarpPx(alignStripWidthPt);
   const sideMarginPx = bodyInsetPx + stripPx + ptToWarpPx(cornerGapPt);
   const padH = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.blockPadHorizPt);
-  const padTop = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.blockPadTopPt);
-  const padBot = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.blockPadBottomPt);
+  const padTop = ptToWarpPx(denseOmr ? 1 : CALIFACIL_CONTROL_NUMBER_LAYOUT.blockPadTopPt);
+  const padBot = ptToWarpPx(denseOmr ? 2 : CALIFACIL_CONTROL_NUMBER_LAYOUT.blockPadBottomPt);
   const chromeTopPx = ptToWarpPx(answerSheetChromeAboveControlPt());
-  const blockOuterPx = ptToWarpPx(answerSheetControlBlockTotalPt(false));
-  const marginBottomPx = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.blockMarginBottomPt);
+  const blockOuterPx = ptToWarpPx(answerSheetControlBlockTotalPt(denseOmr));
+  const marginBottomPx = ptToWarpPx(
+    denseOmr ? 2 : CALIFACIL_CONTROL_NUMBER_LAYOUT.blockMarginBottomPt
+  );
 
   const blockLeft = sideMarginPx + padH;
   const blockTop = bodyInsetPx + chromeTopPx;
   const blockW = pageW - 2 * sideMarginPx - 2 * padH;
   const blockContentH = blockOuterPx - marginBottomPx - padTop - padBot;
-  const titleH = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.titleHeightPt);
+  const titleH = ptToWarpPx(
+    denseOmr ? 6.4 : CALIFACIL_CONTROL_NUMBER_LAYOUT.titleHeightPt
+  );
   const tableH = Math.max(1, blockContentH - titleH);
   const headerH = ptToWarpPx(CALIFACIL_CONTROL_NUMBER_LAYOUT.tableHeaderPt);
 

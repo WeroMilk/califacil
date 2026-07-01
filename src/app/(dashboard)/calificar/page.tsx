@@ -61,6 +61,7 @@ import {
   scanCalifacilOmrSheetWithMeta,
   scanWarpedWithBestTableFrame,
   scanWarpedWithNormTableFrame,
+  readAnswerSheetControlNumberFromCanvas,
   canvasPreviewDataUrl,
   downscaleCanvasForOmrScan,
   smoothMobileRoiQuad,
@@ -1074,7 +1075,25 @@ export default function CalificarPage() {
           opts.precomputedPicks ??
           draftSelectionsToColumnPicks(chunk, mergedDraft).slice(0, chunk.length);
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
-        const gradeStudentId = selectedStudentId;
+        let gradeStudentId = selectedStudentId;
+        const controlRead = readAnswerSheetControlNumberFromCanvas(examCanvas, omrRowCount);
+        if (controlRead.controlNumber) {
+          setDetectedControlNumber(controlRead.controlNumber);
+          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
+          if (matched) {
+            gradeStudentId = matched.id;
+            setSelectedStudentId(matched.id);
+            if (!skipReviewUi) {
+              toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
+            }
+          } else if (!skipReviewUi) {
+            toast.error(
+              `El control ${controlRead.controlNumber} no coincide con ningún alumno del examen. Elige al alumno manualmente.`
+            );
+          }
+        } else {
+          setDetectedControlNumber(null);
+        }
         let snapUrl: string | null = null;
         const snapSource = prepareAnswerSheetDisplayCanvas(examCanvas) ?? examCanvas;
         if (snapSource instanceof HTMLCanvasElement) {

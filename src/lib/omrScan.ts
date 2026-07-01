@@ -4496,6 +4496,38 @@ function geometryCellsForBubbleSampling(
   return { ...geometry, cells };
 }
 
+function expandControlNumberGeometryForSampling(
+  geometry: CalifacilControlNumberGeometry
+): CalifacilControlNumberGeometry {
+  const expandX = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_X;
+  const expandY = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y;
+  const cells = geometry.cells.map((col) =>
+    col.map((cell) => {
+      const x = Math.max(0, cell.x - cell.w * (expandX / 2));
+      const y = Math.max(0, cell.y - cell.h * (expandY / 2));
+      const w = Math.min(1 - x, cell.w * (1 + expandX));
+      const h = Math.min(1 - y, cell.h * (1 + expandY));
+      return { x, y, w, h };
+    })
+  );
+  return { ...geometry, cells };
+}
+
+/** Lee el número de control OMR (8 dígitos) en hoja enderezada 850×1100. */
+export function readAnswerSheetControlNumberFromCanvas(
+  canvas: HTMLCanvasElement,
+  rowCount = CALIFACIL_OMR_DEFAULT_ROWS,
+  thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS
+): { digits: (number | null)[]; controlNumber: string | null } {
+  if (canvas.width < 40 || canvas.height < 40) {
+    return { digits: [], controlNumber: null };
+  }
+  const geom = expandControlNumberGeometryForSampling(
+    buildAnswerSheetControlNumberGeometry(canvas.width, canvas.height, CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT, rowCount)
+  );
+  return readControlNumberFromTemplateGeometry(canvas, geom, thresholds);
+}
+
 function tableFrameFromBubbleGeometry(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
@@ -4530,6 +4562,7 @@ function omrMetaFromGeometry(
     rows,
     columns
   );
+  const controlRead = readAnswerSheetControlNumberFromCanvas(canvas, rows);
   return {
     picks: templateRead.picks,
     rows: templateRead.rows,
@@ -4537,8 +4570,8 @@ function omrMetaFromGeometry(
     maxSameColumnCount: templateRead.maxSameColumnCount,
     geometry: readGeometry,
     reviewSourceCanvas: canvas,
-    controlNumberDigits: [],
-    controlNumber: null,
+    controlNumberDigits: controlRead.digits,
+    controlNumber: controlRead.controlNumber,
   };
 }
 
@@ -4680,14 +4713,15 @@ export function scanWarpedWithNormTableFrame(
       controlNumber: null,
     };
   }
-  const baseGeometry = buildUniformBubbleGridInNormFrame(
+  const geometry = buildAnswerSheetOmrGeometryInNormRect(
     tableFrame,
     rows,
     columns,
     warped.width,
-    warped.height
+    warped.height,
+    warped
   );
-  return omrMetaFromGeometry(warped, baseGeometry, rows, columns);
+  return omrMetaFromGeometry(warped, geometry, rows, columns);
 }
 
 /**
@@ -4808,12 +4842,13 @@ export type CalifacilControlNumberGeometry = {
 export function buildAnswerSheetControlNumberGeometry(
   imageWidth: number,
   imageHeight: number,
-  digitCount = CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT
+  digitCount = CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT,
+  rowCount = CALIFACIL_OMR_DEFAULT_ROWS
 ): CalifacilControlNumberGeometry {
   const cols = Math.max(1, Math.min(12, Math.round(digitCount)));
   const width = Math.max(1, imageWidth);
   const height = Math.max(1, imageHeight);
-  const bounds = getControlNumberBlockPageRatios();
+  const bounds = getControlNumberBlockPageRatios(rowCount);
 
   const blockLeft = width * bounds.left;
   const blockTop = height * bounds.top;
@@ -4909,15 +4944,15 @@ function readControlNumberFromTemplateGeometry(
       }
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
-      const marginX = 0.18;
-      const marginY = 0.14;
+      const marginX = 0.08;
+      const marginY = 0.04;
       const xa = cell.x * W + cellW * marginX;
       const xb = cell.x * W + cellW * (1 - marginX);
       const ya = cell.y * H + cellH * marginY;
       const yb = cell.y * H + cellH * (1 - marginY);
       const cx = cell.x * W + cellW * 0.5;
       const cy = cell.y * H + cellH * 0.5;
-      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.22);
+      const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.34);
 
       const fillDark = sampleRectMeanDarkness(data, width, height, xa, ya, xb, yb);
       const ringDark = sampleAnnulusDarkness(
@@ -6459,15 +6494,7 @@ export function scanCalifacilOmrSheetWithMeta(
     };
   }
 
-  const controlGeom = buildAnswerSheetControlNumberGeometry(
-    reviewCanvas.width,
-    reviewCanvas.height
-  );
-  const controlRead = readControlNumberFromTemplateGeometry(
-    reviewCanvas,
-    controlGeom,
-    thresholds
-  );
+  const controlRead = readAnswerSheetControlNumberFromCanvas(reviewCanvas, rowCount, thresholds);
 
   return {
     picks: best.picks,
