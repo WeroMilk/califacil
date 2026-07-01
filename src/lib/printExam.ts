@@ -1577,6 +1577,88 @@ ${pagesHtml}
 /**
  * Abre ventana de impresión con examen en formato carta (US Letter).
  */
+function printHtmlDocument(html: string): boolean {
+  if (typeof document === 'undefined') return false;
+
+  const printFromWindow = (win: Window, onDone: () => void): void => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      onDone();
+    };
+
+    const triggerPrint = () => {
+      try {
+        win.document.title = '\u00A0';
+        win.focus();
+        win.print();
+      } catch {
+        finish();
+        return;
+      }
+      win.addEventListener('afterprint', finish, { once: true });
+      // Safari / móvil a veces no dispara afterprint.
+      window.setTimeout(finish, 120_000);
+    };
+
+    if (win.document.readyState === 'complete') {
+      window.setTimeout(triggerPrint, 50);
+    } else {
+      win.addEventListener('load', () => window.setTimeout(triggerPrint, 50), { once: true });
+    }
+  };
+
+  const tryIframe = (): boolean => {
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.cssText =
+        'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+      document.body.appendChild(iframe);
+      const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+      const win = iframe.contentWindow;
+      if (!doc || !win) {
+        iframe.remove();
+        return false;
+      }
+      doc.open();
+      doc.write(html);
+      doc.close();
+      const cleanup = () => {
+        iframe.remove();
+      };
+      printFromWindow(win, cleanup);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  let blobUrl: string | null = null;
+  try {
+    blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  } catch {
+    return tryIframe();
+  }
+
+  const win = window.open(blobUrl, '_blank');
+  if (!win) {
+    URL.revokeObjectURL(blobUrl);
+    return tryIframe();
+  }
+
+  printFromWindow(win, () => {
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    try {
+      if (!win.closed) win.close();
+    } catch {
+      /* ignore */
+    }
+  });
+  return true;
+}
+
 export function printExamDocument(
   exam: ExamWithQuestions,
   options?: { includeAnswerKey?: boolean }
@@ -1587,20 +1669,8 @@ export function printExamDocument(
     includeAnswerKey,
     baseUrl: window.location.origin,
   });
-
-  const win = window.open('', '_blank');
-  if (!win) {
+  if (!html.includes('print-page')) {
     return false;
   }
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
-  win.document.title = '\u00A0';
-  win.focus();
-  setTimeout(() => {
-    win.document.title = '\u00A0';
-    win.print();
-    win.close();
-  }, 250);
-  return true;
+  return printHtmlDocument(html);
 }
