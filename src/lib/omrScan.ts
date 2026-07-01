@@ -4629,32 +4629,15 @@ export function scanWarpedWithBestTableFrame(
     }
   }
 
-  let bestMeta: OmrScanMetaResult | null = null;
   let bestFrame = templateFrame;
   let bestScore = Number.NEGATIVE_INFINITY;
 
   const fullSweep = sweepFullCanvasTableGeometry(warped, rows, columns);
   if (fullSweep) {
-    const meta = omrMetaFromGeometry(warped, fullSweep.geometry, rows, columns);
-    const score = scoreOmrMetaPicks(meta, rows);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMeta = meta;
-      bestFrame = fullSweep.tableFrame;
-    }
     candidates.push(fullSweep.tableFrame);
   }
 
   const hybrid = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
-  if (validateAnswerSheetGeometry(hybrid, rows).ok) {
-    const meta = omrMetaFromGeometry(warped, hybrid, rows, columns);
-    const score = scoreOmrMetaPicks(meta, rows);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMeta = meta;
-      bestFrame = tableFrameFromBubbleGeometry(hybrid, rows) ?? templateFrame;
-    }
-  }
 
   const bubbleBbox = califacilOmrOrangeFrameRect(hybrid, rows);
   const tableBbox = califacilGeometryTableBounds(hybrid, rows);
@@ -4680,12 +4663,11 @@ export function scanWarpedWithBestTableFrame(
     const score = scoreOmrMetaPicks(meta, rows);
     if (score > bestScore) {
       bestScore = score;
-      bestMeta = meta;
       bestFrame = frame;
     }
   }
 
-  const meta = bestMeta ?? scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame);
+  const meta = scanWarpedWithNormTableFrame(warped, columns, rows, bestFrame);
   return { meta, orangeFrameNorm: bestFrame };
 }
 
@@ -4713,13 +4695,12 @@ export function scanWarpedWithNormTableFrame(
       controlNumber: null,
     };
   }
-  const geometry = buildAnswerSheetOmrGeometryInNormRect(
+  const geometry = buildUniformBubbleGridInNormFrame(
     tableFrame,
     rows,
     columns,
     warped.width,
-    warped.height,
-    warped
+    warped.height
   );
   return omrMetaFromGeometry(warped, geometry, rows, columns);
 }

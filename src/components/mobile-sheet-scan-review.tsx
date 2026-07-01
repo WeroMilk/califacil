@@ -17,7 +17,9 @@ import {
   CALIFACIL_WARP_LETTER_WIDTH,
   califacilOmrOrangeFrameRect,
   califacilViewfinderNormRect,
+  downscaleCanvasForOmrScan,
   refineWarpedCalifacilSheet,
+  scanWarpedWithNormTableFrame,
   warpCalifacilSheetFromQuad,
   type CalifacilOmrScanGeometry,
   type OmrNormRect,
@@ -60,6 +62,8 @@ type Props = {
   onRealignOrangeFrame?: (frame: OmrNormRect) => void;
   onFinalizeGrade: () => void;
   onBackFromAlign: () => void;
+  detectedControlNumber?: string | null;
+  identifiedStudentName?: string | null;
 };
 
 function cloneQuad(quad: ScanReviewQuad): ScanReviewQuad {
@@ -276,6 +280,22 @@ function normPointFromPointer(
   };
 }
 
+function scorePicksAgainstExpected(
+  picks: (number | null)[],
+  expected: (number | null)[]
+): { correct: number; total: number; pct: number } {
+  let correct = 0;
+  let total = 0;
+  const n = Math.min(picks.length, expected.length);
+  for (let i = 0; i < n; i++) {
+    const key = expected[i];
+    if (key === null || key === undefined) continue;
+    total++;
+    if (picks[i] === key) correct++;
+  }
+  return { correct, total, pct: total > 0 ? Math.round((100 * correct) / total) : 0 };
+}
+
 export function MobileSheetScanReview({
   sourceCanvas,
   frameQuad,
@@ -293,6 +313,8 @@ export function MobileSheetScanReview({
   onRealignOrangeFrame,
   onFinalizeGrade,
   onBackFromAlign,
+  detectedControlNumber = null,
+  identifiedStudentName = null,
 }: Props) {
   const [adjustMode, setAdjustMode] = useState(false);
   const [filter, setFilter] = useState<ScanReviewFilter>(initialFilter);
@@ -330,6 +352,22 @@ export function MobileSheetScanReview({
     setLivePicks([...alignPreview.picks]);
     setLiveScore(alignPreview.score);
   }, [alignPreview, alignOrangeFrame, rowCount]);
+
+  useEffect(() => {
+    if (!alignPreview?.previewCanvas || !orangeFrameNorm || scanning) return;
+    const timer = window.setTimeout(() => {
+      const scanCanvas = downscaleCanvasForOmrScan(alignPreview.previewCanvas, 1200);
+      const meta = scanWarpedWithNormTableFrame(
+        scanCanvas,
+        columnCount,
+        rowCount,
+        orangeFrameNorm
+      );
+      setLivePicks([...meta.picks]);
+      setLiveScore(scorePicksAgainstExpected(meta.picks, alignPreview.expectedPicks));
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [alignPreview, orangeFrameNorm, columnCount, rowCount, scanning]);
 
   const displayGeometry = useMemo(() => {
     if (!alignPreview || !orangeFrameNorm) return null;
@@ -617,6 +655,14 @@ export function MobileSheetScanReview({
               ) : null}
             </div>
             <div className="mt-3 w-full max-w-md rounded-xl bg-white/8 px-3 py-2 text-center ring-1 ring-white/10">
+              {detectedControlNumber ? (
+                <p className="text-[11px] text-white/75">
+                  N.º de control: <span className="font-semibold text-white">{detectedControlNumber}</span>
+                  {identifiedStudentName ? (
+                    <span className="text-white/60"> · {identifiedStudentName}</span>
+                  ) : null}
+                </p>
+              ) : null}
               {overlayScore ? (
                 <p className="text-sm font-semibold">
                   <span className="tabular-nums">{overlayScore.correct}</span>

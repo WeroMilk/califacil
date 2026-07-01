@@ -3006,6 +3006,21 @@ export default function CalificarPage() {
           omrRowCount
         );
         if (scanGen !== reviewScanGenRef.current) return;
+        const controlRead = readAnswerSheetControlNumberFromCanvas(scanCanvas, omrRowCount);
+        if (controlRead.controlNumber) {
+          setDetectedControlNumber(controlRead.controlNumber);
+          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
+          if (matched) {
+            setSelectedStudentId(matched.id);
+            toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
+          } else {
+            toast.error(
+              `El control ${controlRead.controlNumber} no coincide con ningún alumno. Elige al alumno manualmente.`
+            );
+          }
+        } else {
+          setDetectedControlNumber(null);
+        }
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
           setReviewStatus('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
@@ -3031,7 +3046,7 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, omrCols, omrRowCount, sheets]
+    [mapRawToDraft, omrCols, omrRowCount, sheets, sortedStudents]
   );
 
   const realignMobileCaptureOrangeFrame = useCallback(
@@ -3046,6 +3061,12 @@ export default function CalificarPage() {
         await yieldForSpinnerPaint();
         if (scanGen !== reviewScanGenRef.current) return;
         const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, 1200);
+        const controlRead = readAnswerSheetControlNumberFromCanvas(scanCanvas, omrRowCount);
+        if (controlRead.controlNumber) {
+          setDetectedControlNumber(controlRead.controlNumber);
+          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
+          if (matched) setSelectedStudentId(matched.id);
+        }
         const meta = scanWarpedWithNormTableFrame(scanCanvas, omrCols, omrRowCount, frame);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3070,7 +3091,7 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, sheets]
+    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, sheets, sortedStudents]
   );
 
   const finalizeMobileReviewGrade = useCallback(async () => {
@@ -3852,6 +3873,8 @@ export default function CalificarPage() {
             onRealignOrangeFrame={(frame) => void realignMobileCaptureOrangeFrame(frame)}
             onFinalizeGrade={() => void finalizeMobileReviewGrade()}
             onBackFromAlign={backFromMobileReviewAlign}
+            detectedControlNumber={detectedControlNumber}
+            identifiedStudentName={selectedStudentName || null}
           />,
           document.body
         )}
