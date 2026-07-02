@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import {
+  califacilFiducialCornerGuidesOnViewportQuad,
   califacilStaticFiducialCornerGuidesInViewportPx,
   type CalifacilSheetCornerGuidePx,
 } from '@/lib/omrScan';
@@ -74,21 +75,6 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
   return display;
 }
 
-function viewportPolygonToGuideRect(poly: ViewportPoint[]): ViewfinderGuideRectPx {
-  const xs = poly.map((p) => p.x);
-  const ys = poly.map((p) => p.y);
-  const left = Math.min(...xs);
-  const top = Math.min(...ys);
-  const right = Math.max(...xs);
-  const bottom = Math.max(...ys);
-  return {
-    left,
-    top,
-    width: Math.max(1, right - left),
-    height: Math.max(1, bottom - top),
-  };
-}
-
 function ZipgradeCornerFrame({
   guide,
   detected,
@@ -128,17 +114,22 @@ export function IphoneDocumentScannerOverlay({
   const smoothPoly = useSmoothedPolygon(poly);
   const sheetTracked = smoothPoly !== null;
 
-  const activeGuideRect = useMemo(() => {
-    if (smoothPoly) return viewportPolygonToGuideRect(smoothPoly);
-    return guideRect ?? null;
-  }, [smoothPoly, guideRect]);
-
   const cornerGuides = useMemo(() => {
-    if (!activeGuideRect || activeGuideRect.width < 40 || activeGuideRect.height < 40) {
-      return null;
+    if (smoothPoly) {
+      return califacilFiducialCornerGuidesOnViewportQuad(
+        smoothPoly as [
+          ViewportPoint,
+          ViewportPoint,
+          ViewportPoint,
+          ViewportPoint,
+        ]
+      );
     }
-    return califacilStaticFiducialCornerGuidesInViewportPx(activeGuideRect);
-  }, [activeGuideRect]);
+    if (guideRect && guideRect.width >= 40 && guideRect.height >= 40) {
+      return califacilStaticFiducialCornerGuidesInViewportPx(guideRect);
+    }
+    return null;
+  }, [smoothPoly, guideRect]);
 
   const statusLine = detected
     ? captureProgress >= 1

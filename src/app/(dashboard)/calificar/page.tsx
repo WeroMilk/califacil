@@ -30,6 +30,7 @@ import {
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
   califacilMobileAnswerSheetGuideInViewportPx,
+  califacilViewfinderGuideInViewportPx,
   captureVideoFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -723,7 +724,7 @@ export default function CalificarPage() {
 
   const mobileViewfinderGuideRect = useMemo(() => {
     if (!liveVideoLayout) return null;
-    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
+    return califacilViewfinderGuideInViewportPx(liveVideoLayout);
   }, [liveVideoLayout]);
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */

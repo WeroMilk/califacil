@@ -335,11 +335,11 @@ export type CalifacilSheetCornerGuidePx = {
   size: number;
 };
 
-/** Visores de esquina fijos en el marco de alineación (no siguen la detección en vivo). */
+/** Visores de esquina en marco axis-aligned (carta completa en pantalla). */
 export function califacilStaticFiducialCornerGuidesInViewportPx(
   guideRect: { left: number; top: number; width: number; height: number }
 ): CalifacilSheetCornerGuidePx[] {
-  const size = Math.max(52, Math.min(80, Math.round(guideRect.width * 0.12)));
+  const size = Math.max(44, Math.min(72, Math.round(guideRect.width * 0.095)));
   const half = size / 2;
   const corners = [
     CALIFACIL_FIDUCIAL_CENTERS_NORM.tl,
@@ -348,7 +348,50 @@ export function califacilStaticFiducialCornerGuidesInViewportPx(
     CALIFACIL_FIDUCIAL_CENTERS_NORM.br,
   ];
   return corners.map((c) => {
-    const p = mapPageNormToAlignGuideViewport(c.x, c.y, guideRect);
+    const p = mapPageNormToAlignGuideViewport(
+      c.x,
+      c.y,
+      guideRect,
+      CALIFACIL_WARP_PAGE_FRAME_NORM
+    );
+    return { left: p.x - half, top: p.y - half, size };
+  });
+}
+
+function bilinearPointInViewportQuad(
+  quad: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }],
+  u: number,
+  v: number
+): { x: number; y: number } {
+  const [tl, tr, br, bl] = quad;
+  const top = { x: tl.x + (tr.x - tl.x) * u, y: tl.y + (tr.y - tl.y) * u };
+  const bottom = { x: bl.x + (br.x - bl.x) * u, y: bl.y + (br.y - bl.y) * u };
+  return {
+    x: top.x + (bottom.x - top.x) * v,
+    y: top.y + (bottom.y - top.y) * v,
+  };
+}
+
+/** Visores de esquina sobre cuadrilátero detectado (sigue perspectiva de la hoja). */
+export function califacilFiducialCornerGuidesOnViewportQuad(
+  quad: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }]
+): CalifacilSheetCornerGuidePx[] {
+  const [tl, tr, br, bl] = quad;
+  const estW =
+    (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) * 0.5;
+  const size = Math.max(44, Math.min(72, Math.round(estW * 0.095)));
+  const half = size / 2;
+  const frame = CALIFACIL_WARP_PAGE_FRAME_NORM;
+  const corners = [
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.tl,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.tr,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.bl,
+    CALIFACIL_FIDUCIAL_CENTERS_NORM.br,
+  ];
+  return corners.map((c) => {
+    const u = (c.x - frame.x) / frame.w;
+    const v = (c.y - frame.y) / frame.h;
+    const p = bilinearPointInViewportQuad(quad, u, v);
     return { left: p.x - half, top: p.y - half, size };
   });
 }
