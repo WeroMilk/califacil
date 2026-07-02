@@ -39,7 +39,7 @@ import {
   detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
   fileToImage,
-  getObjectContainVideoLayout,
+  getObjectCoverVideoLetterbox,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isCalifacilAnswerSheetReadyForGrading,
@@ -868,12 +868,9 @@ export default function CalificarPage() {
     if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
     const { width: cw, height: ch } = container.getBoundingClientRect();
     if (cw < 20 || ch < 20) return;
-    const layout = getObjectContainVideoLayout(video.videoWidth, video.videoHeight, cw, ch);
-    setLiveVideoLayout({
-      ...layout,
-      frameW: video.videoWidth,
-      frameH: video.videoHeight,
-    });
+    setLiveVideoLayout(
+      getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
+    );
   }, []);
 
   const setTorchEnabled = useCallback(
@@ -3963,7 +3960,6 @@ export default function CalificarPage() {
                   : 0
               }
               lowLight={mobileScannerLowLight}
-              liveLayout={liveVideoLayout}
               cameraFullscreenMode={cameraFullscreenMode}
               flashMode={flashMode}
               flashOn={flashOn}

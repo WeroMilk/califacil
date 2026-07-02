@@ -570,6 +570,23 @@ export type ObjectContainVideoLayout = {
   scale: number;
 };
 
+/** Layout del video en pantalla con object-cover (cámara a pantalla completa). */
+export function getObjectCoverVideoLetterbox(
+  frameW: number,
+  frameH: number,
+  containerW: number,
+  containerH: number
+): CalifacilVideoLetterbox {
+  return {
+    offsetX: 0,
+    offsetY: 0,
+    displayW: Math.max(1, containerW),
+    displayH: Math.max(1, containerH),
+    frameW: Math.max(1, frameW),
+    frameH: Math.max(1, frameH),
+  };
+}
+
 /** Calcula posición y tamaño del video visible con object-contain. */
 export function getObjectContainVideoLayout(
   videoW: number,

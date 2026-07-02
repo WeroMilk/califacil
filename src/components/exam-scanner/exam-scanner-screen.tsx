@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type RefObject } from 'react';
+import { useEffect, useMemo, type RefObject } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -13,12 +13,12 @@ import {
   deriveDetectionPhase,
   deriveStatusLabel,
 } from '@/components/exam-scanner/document-detector';
-import type {
-  LiveVideoLayoutPx,
-  ViewfinderGuideRectPx,
-  ViewportPoint,
-} from '@/components/exam-scanner/types';
-import { EXAM_PSEUDO_FULLSCREEN_CLASS, type ExamFullscreenMode } from '@/lib/examFullscreen';
+import type { ViewfinderGuideRectPx, ViewportPoint } from '@/components/exam-scanner/types';
+import {
+  EXAM_PSEUDO_FULLSCREEN_CLASS,
+  setExamImmersiveRoot,
+  type ExamFullscreenMode,
+} from '@/lib/examFullscreen';
 
 type FlashMode = 'auto' | 'on' | 'off';
 
@@ -35,7 +35,6 @@ export type ExamScannerScreenProps = {
   aligned: boolean;
   stableProgress: number;
   lowLight?: boolean;
-  liveLayout: LiveVideoLayoutPx | null;
   cameraFullscreenMode?: ExamFullscreenMode;
   flashMode: FlashMode;
   flashOn: boolean;
@@ -60,7 +59,6 @@ export function ExamScannerScreen({
   aligned,
   stableProgress,
   lowLight,
-  liveLayout,
   cameraFullscreenMode = 'none',
   flashMode,
   flashOn,
@@ -92,13 +90,18 @@ export function ExamScannerScreen({
 
   const progress = scanBusy ? 1 : stableProgress;
 
+  useEffect(() => {
+    if (!cameraOpen) return;
+    setExamImmersiveRoot(true);
+    return () => setExamImmersiveRoot(false);
+  }, [cameraOpen]);
+
   return (
     <div
       ref={shellRef as RefObject<HTMLDivElement> | undefined}
       className={cn(
-        'exam-scanner-root fixed inset-0 z-[200] bg-black text-white',
-        cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
-        cameraFullscreenMode === 'pseudo' && '!bg-black'
+        'exam-scanner-root fixed inset-0 z-[200] overflow-hidden bg-black text-white',
+        cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS
       )}
     >
       {!cameraOpen ? (
@@ -113,7 +116,6 @@ export function ExamScannerScreen({
         <>
           <CameraView
             ref={viewportRef as RefObject<HTMLDivElement> | undefined}
-            layout={liveLayout}
             videoRef={videoRef}
           />
           <OverlayRenderer
@@ -121,12 +123,28 @@ export function ExamScannerScreen({
             documentPolygon={documentPolygon}
             guideRect={guideRect}
           />
-          <StatusCard
-            examTitle={examTitle}
-            statusLabel={statusLabel}
-            stableProgress={progress}
-            phase={phase}
-          />
+
+          <div
+            className="exam-scanner-topbar absolute inset-x-0 z-40 flex items-start gap-2.5 px-3"
+            style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+          >
+            <button
+              type="button"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-all duration-200 active:scale-95"
+              aria-label="Cerrar escáner"
+              disabled={scanBusy}
+              onClick={onClose}
+            >
+              <X className="h-4.5 w-4.5" strokeWidth={2.5} />
+            </button>
+            <StatusCard
+              examTitle={examTitle}
+              statusLabel={statusLabel}
+              stableProgress={progress}
+              phase={phase}
+            />
+          </div>
+
           <CaptureFlash active={shutterFlash} />
           {!scanBusy ? (
             <ScanHud
@@ -138,18 +156,9 @@ export function ExamScannerScreen({
               onSettings={onSettings}
             />
           ) : null}
-          <button
-            type="button"
-            className="absolute left-3 z-50 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-md transition-all duration-200 active:scale-95"
-            style={{ top: 'max(0.55rem, env(safe-area-inset-top, 0px))' }}
-            aria-label="Cerrar escáner"
-            disabled={scanBusy}
-            onClick={onClose}
-          >
-            <X className="h-4.5 w-4.5" strokeWidth={2.5} />
-          </button>
+
           {scanBusy ? (
-            <div className="pointer-events-none absolute inset-0 z-[45] flex items-center justify-center bg-black/25 backdrop-blur-[1px]">
+            <div className="pointer-events-none absolute inset-0 z-[45] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
               <Loader2
                 className="h-9 w-9 animate-spin text-white/90 motion-reduce:animate-none [animation-duration:650ms]"
                 aria-hidden

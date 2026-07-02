@@ -39,6 +39,20 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
   const stroke = phaseStrokeColor(phase);
   const points = smoothPoly?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
+  const bracketLen = useMemo(() => {
+    if (typeof window === 'undefined') return smoothPoly ? 38 : 30;
+    const vw = window.innerWidth;
+    return smoothPoly
+      ? Math.round(Math.min(44, Math.max(30, vw * 0.1)))
+      : Math.round(Math.min(36, Math.max(26, vw * 0.085)));
+  }, [smoothPoly]);
+
+  const bracketStroke = smoothPoly ? stroke : phaseStrokeColor(phase);
+  const guideQuad =
+    !smoothPoly && guideRect && guideRect.width > 40
+      ? guideRectToViewportQuad(guideRect)
+      : null;
+
   const cornerGuides = useMemo(() => {
     if (smoothPoly) {
       return califacilFiducialCornerGuidesOnViewportQuad(
@@ -50,13 +64,6 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
     }
     return null;
   }, [smoothPoly, guideRect]);
-
-  const bracketLen = smoothPoly ? 38 : 32;
-  const bracketStroke = smoothPoly ? stroke : phaseStrokeColor(phase);
-  const guideQuad =
-    !smoothPoly && guideRect && guideRect.width > 40
-      ? guideRectToViewportQuad(guideRect)
-      : null;
 
   return (
     <div className="exam-scanner-overlay pointer-events-none absolute inset-0 z-10">
@@ -94,7 +101,7 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
         )}
       </svg>
 
-      {cornerGuides && !smoothPoly && phase === 'searching'
+      {cornerGuides && !smoothPoly && phase === 'searching' && !guideQuad
         ? cornerGuides.map((g, i) => (
             <div
               key={i}
