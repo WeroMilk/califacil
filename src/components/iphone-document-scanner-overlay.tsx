@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export type ViewportPoint = { x: number; y: number };
@@ -9,6 +9,9 @@ type Props = {
   documentPolygon?: ViewportPoint[] | null;
   detected?: boolean;
   hint?: string;
+  examTitle?: string;
+  /** 0–1 progreso hacia captura automática */
+  captureProgress?: number;
 };
 
 function lerpPoint(a: ViewportPoint, b: ViewportPoint, t: number): ViewportPoint {
@@ -57,11 +60,12 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
   return display;
 }
 
-function cornerBrackets(
+/** Esquinas estilo ZipGrade: marcos negros en L en cada vértice del documento. */
+function zipgradeCornerBrackets(
   poly: ViewportPoint[],
-  len = 26,
-  stroke = 'rgb(255, 214, 10)',
-  sw = 3.75
+  len = 32,
+  stroke = 'rgba(0,0,0,0.88)',
+  sw = 3.25
 ) {
   const [tl, tr, br, bl] = poly;
   return (
@@ -77,57 +81,89 @@ function cornerBrackets(
 export function IphoneDocumentScannerOverlay({
   documentPolygon,
   detected = false,
-  hint = 'Coloca el documento en el visor.',
+  hint = 'Encuadra la hoja dentro del visor.',
+  examTitle,
+  captureProgress = 0,
 }: Props) {
-  const maskId = useId();
   const poly =
     documentPolygon && documentPolygon.length === 4 ? documentPolygon : null;
   const smoothPoly = useSmoothedPolygon(poly);
-  const points = smoothPoly ? smoothPoly.map((p) => `${p.x},${p.y}`).join(' ') : '';
 
-  const bannerText = detected ? 'Documento detectado' : hint;
+  const statusLine = detected
+    ? captureProgress >= 1
+      ? 'Calificando…'
+      : captureProgress > 0
+        ? 'Mantén quieto…'
+        : 'Hoja detectada'
+    : hint;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
-      <svg className="absolute inset-0 h-full w-full" aria-hidden>
-        {smoothPoly ? (
-          <>
-            <defs>
-              <mask id={maskId}>
-                <rect width="100%" height="100%" fill="white" />
-                <polygon points={points} fill="black" />
-              </mask>
-            </defs>
-            <rect
-              width="100%"
-              height="100%"
-              fill="rgba(0,0,0,0.52)"
-              mask={`url(#${maskId})`}
+      {smoothPoly ? (
+        <svg className="absolute inset-0 h-full w-full" aria-hidden>
+          {zipgradeCornerBrackets(
+            smoothPoly,
+            detected ? 34 : 28,
+            detected ? 'rgba(0,0,0,0.92)' : 'rgba(255,255,255,0.82)',
+            detected ? 3.5 : 3
+          )}
+        </svg>
+      ) : (
+        <>
+          {[
+            { left: '10%', top: '12%' },
+            { right: '10%', top: '12%' },
+            { right: '10%', bottom: '14%' },
+            { left: '10%', bottom: '14%' },
+          ].map((style, i) => (
+            <div
+              key={i}
+              className="absolute h-14 w-14 rounded-lg border-[2.5px] border-white/55"
+              style={style}
+              aria-hidden
             />
-            <polygon
-              points={points}
-              fill={detected ? 'rgba(255, 214, 10, 0.22)' : 'rgba(255, 214, 10, 0.14)'}
-              stroke={detected ? 'rgba(255, 214, 10, 0.72)' : 'rgba(255, 214, 10, 0.48)'}
-              strokeWidth={detected ? 2 : 1.5}
-            />
-            {cornerBrackets(smoothPoly, detected ? 28 : 24, 'rgb(255, 214, 10)', detected ? 4 : 3.5)}
-          </>
-        ) : (
-          <rect width="100%" height="100%" fill="rgba(0,0,0,0.35)" />
-        )}
-      </svg>
+          ))}
+        </>
+      )}
 
-      <div
-        className={cn(
-          'absolute left-1/2 z-20 max-w-[min(92%,20rem)] -translate-x-1/2 rounded-full px-5 py-2 text-center shadow-lg backdrop-blur-xl transition-all duration-300',
-          detected
-            ? 'bg-emerald-500/28 text-white ring-1 ring-emerald-300/45'
-            : 'bg-black/58 text-white/95 ring-1 ring-white/12'
-        )}
-        style={{ top: 'max(3.25rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' }}
-      >
-        <p className="text-[13px] font-medium leading-snug tracking-tight">{bannerText}</p>
-      </div>
+      {(examTitle || statusLine) && (
+        <div
+          className="absolute left-1/2 z-20 max-w-[min(92%,20rem)] -translate-x-1/2 text-center"
+          style={{ top: 'max(3.25rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' }}
+        >
+          <div
+            className={cn(
+              'rounded-lg border px-4 py-2.5 shadow-lg backdrop-blur-xl',
+              detected
+                ? 'border-emerald-400/35 bg-white/92 text-gray-900'
+                : 'border-white/12 bg-black/58 text-white/95'
+            )}
+          >
+            {examTitle ? (
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-600">
+                {examTitle}
+              </p>
+            ) : null}
+            <p
+              className={cn(
+                'text-[13px] font-medium leading-snug tracking-tight',
+                examTitle && 'mt-0.5',
+                detected ? 'text-gray-900' : 'text-white'
+              )}
+            >
+              {statusLine}
+            </p>
+            {detected && captureProgress > 0 && captureProgress < 1 ? (
+              <div className="mx-auto mt-2 h-1 w-full max-w-[10rem] overflow-hidden rounded-full bg-gray-200">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-[width] duration-75"
+                  style={{ width: `${Math.round(captureProgress * 100)}%` }}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -25,6 +25,7 @@ export type ZipGradeSheetData = {
 type ScanCompleteModalProps = {
   open: boolean;
   examTitle?: string;
+  previewUrl?: string | null;
   score: { correct: number; total: number; pct: number };
   nameCropUrl?: string | null;
   studentName?: string;
@@ -34,9 +35,32 @@ type ScanCompleteModalProps = {
   onReview: () => void;
 };
 
+function ZipGradeResultCornerGuides() {
+  const inset = 'max(0.75rem, env(safe-area-inset-left, 0px))';
+  const corners = [
+    { left: inset, top: 'max(3.5rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' },
+    { right: inset, top: 'max(3.5rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' },
+    { right: inset, bottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' },
+    { left: inset, bottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' },
+  ];
+  return (
+    <>
+      {corners.map((style, i) => (
+        <div
+          key={i}
+          className="pointer-events-none absolute z-[5] h-14 w-14 rounded-lg border-[2.5px] border-black/85 bg-white/30"
+          style={style}
+          aria-hidden
+        />
+      ))}
+    </>
+  );
+}
+
 export function MobileZipGradeScanCompleteModal({
   open,
   examTitle,
+  previewUrl,
   score,
   nameCropUrl,
   studentName,
@@ -49,14 +73,27 @@ export function MobileZipGradeScanCompleteModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[300] flex flex-col bg-black/55"
+      className="fixed inset-0 z-[300] flex flex-col bg-black"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
+      {previewUrl ? (
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={previewUrl}
+            alt=""
+            className="h-full w-full object-contain opacity-95"
+          />
+          <div className="absolute inset-0 bg-black/18" aria-hidden />
+          <ZipGradeResultCornerGuides />
+        </div>
+      ) : null}
+
       <header
-        className="flex shrink-0 items-center justify-between px-2 py-2.5 text-white"
+        className="relative z-10 flex shrink-0 items-center justify-between px-2 py-2.5 text-white"
         style={{ backgroundColor: ZIPGRADE_GREEN }}
       >
         <button
@@ -79,7 +116,14 @@ export function MobileZipGradeScanCompleteModal({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 items-center justify-center px-5 py-6">
+      {examTitle ? (
+        <div className="relative z-10 mx-auto mt-2 max-w-[min(92%,20rem)] rounded-lg border border-black/10 bg-white/88 px-3 py-2 text-center shadow-md backdrop-blur-sm">
+          <p className="truncate text-xs font-semibold text-gray-900">{examTitle}</p>
+          <p className="mt-0.5 text-[11px] font-medium text-gray-600">Grading Paper</p>
+        </div>
+      ) : null}
+
+      <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-5 py-6">
         <div
           className="w-full max-w-sm animate-fade-in rounded-xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
           role="dialog"
