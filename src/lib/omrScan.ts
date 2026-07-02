@@ -2132,23 +2132,28 @@ function findDarkColumnRuns(
   return runs;
 }
 
-/** Rechaza cuads que cubren casi todo el ROI (borde amarillo pegado a la pantalla). */
+/** Rechaza cuads pegados al borde del ROI (mesa/fondo), no hojas bien encuadradas que llenan el visor. */
 function quadCoversFullRoi(
   quad: [Point, Point, Point, Point],
   roiW: number,
   roiH: number
 ): boolean {
   const area = quadShoelaceArea(quad);
-  if (area > roiW * roiH * 0.72) return true;
-  const marginX = roiW * 0.028;
-  const marginY = roiH * 0.028;
+  const roiArea = Math.max(1, roiW * roiH);
+  if (area > roiArea * 0.97) return true;
+  const marginX = roiW * 0.012;
+  const marginY = roiH * 0.012;
   const [tl, tr, br, bl] = quad;
-  const spansFullWidth =
-    tl.x <= marginX && bl.x <= marginX && tr.x >= roiW - marginX && br.x >= roiW - marginX;
-  const spansFullHeight =
-    tl.y <= marginY && tr.y <= marginY && bl.y >= roiH - marginY && br.y >= roiH - marginY;
-  if (spansFullWidth && spansFullHeight) return true;
-  return false;
+  const flushWithRoi =
+    tl.x <= marginX &&
+    bl.x <= marginX &&
+    tr.x >= roiW - marginX &&
+    br.x >= roiW - marginX &&
+    tl.y <= marginY &&
+    tr.y <= marginY &&
+    bl.y >= roiH - marginY &&
+    br.y >= roiH - marginY;
+  return flushWithRoi && area > roiArea * 0.88;
 }
 
 /** Hoja blanca sobre fondo oscuro (mesa): bbox de píxeles claros — solo si parece hoja carta. */

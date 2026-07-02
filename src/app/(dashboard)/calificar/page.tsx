@@ -567,6 +567,7 @@ export default function CalificarPage() {
   /** Ticks consecutivos con hoja detectada en vivo. */
   const strictValidationTicksRef = useRef(0);
   const cornerStableTicksRef = useRef(0);
+  const fiducialStableTicksRef = useRef(0);
   /** Último cuadrilátero detectado en el ROI (coordenadas del canvas ROI). */
   const lastRoiQuadRef = useRef<RoiQuad | null>(null);
   const smoothedRoiQuadRef = useRef<RoiQuad | null>(null);
@@ -994,6 +995,7 @@ export default function CalificarPage() {
     liveReadingStreakRef.current = {};
     strictValidationTicksRef.current = 0;
     cornerStableTicksRef.current = 0;
+    fiducialStableTicksRef.current = 0;
     lastRoiQuadRef.current = null;
     smoothedRoiQuadRef.current = null;
     lastRoiCaptureMetaRef.current = null;
@@ -2156,16 +2158,27 @@ export default function CalificarPage() {
             }
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
-            const stripAligned = stripQuad !== null;
-            const roiQuadRaw = stripQuad;
+            let roiQuadRaw: RoiQuad | null = stripQuad;
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
+
+            let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
+            let fiducialCount = fiducialCorners.filter(Boolean).length;
+
+            if (!roiQuadRaw && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
+              roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
+              fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
+              fiducialCount = fiducialCorners.filter(Boolean).length;
+            }
+
+            const stripAligned = stripQuad !== null;
             const quadValid =
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
                 ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.44)
                 : null;
+            const fiducialsLocked = fiducialCount >= 4;
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
@@ -2173,10 +2186,8 @@ export default function CalificarPage() {
             const layout = liveVideoLayoutRef.current;
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
-            const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
-            const fiducialCount = fiducialCorners.filter(Boolean).length;
             const now = performance.now();
-            if (stripAligned && roiCapture && layout && quadValid && roiQuad) {
+            if ((stripAligned || quadValid) && roiCapture && layout && roiQuad) {
               const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
               documentPolygonHoldRef.current = {
                 polygon: viewportPoly,
@@ -2216,7 +2227,37 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            if (!stripAligned || !quadValid || !roiQuad) {
+            if (!quadValid || !roiQuad) {
+              if (fiducialsLocked) {
+                fiducialStableTicksRef.current += 1;
+                cornerStableTicksRef.current = 0;
+                setMobileStableTicks(fiducialStableTicksRef.current);
+                setCornersAlignedView(true);
+                setLiveStatus(
+                  fiducialStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS
+                    ? 'Mantén quieto — captura automática…'
+                    : 'Calificando…'
+                );
+                if (
+                  autoShutterEnabledRef.current &&
+                  !mobileCaptureBusyRef.current &&
+                  fiducialStableTicksRef.current >= CORNER_ALIGN_STABLE_TICKS
+                ) {
+                  fiducialStableTicksRef.current = 0;
+                  setMobileStableTicks(0);
+                  lastRoiCaptureMetaRef.current = roiCapture;
+                  setShutterFlash(true);
+                  window.setTimeout(() => setShutterFlash(false), 220);
+                  triggerMobileSheetCaptureRef.current(video, {
+                    roiCapture,
+                    force: true,
+                  });
+                }
+                nextDelay = MOBILE_CORNER_LOOP_MS;
+                return;
+              }
+
+              fiducialStableTicksRef.current = 0;
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               if (!documentPolygonHoldRef.current) {
@@ -2240,6 +2281,8 @@ export default function CalificarPage() {
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
+
+            fiducialStableTicksRef.current = 0;
 
             if (fillRatio < (stripAligned ? 0.08 : MOBILE_MIN_ROI_FILL_RATIO)) {
               cornerStableTicksRef.current = 0;
@@ -2270,7 +2313,7 @@ export default function CalificarPage() {
               roiQuad,
               roiW,
               roiH,
-              0.09
+              0.11
             );
             lastRoiQuadRef.current = roiQuad;
             if (!stable) {
@@ -3963,11 +4006,11 @@ export default function CalificarPage() {
                       documentPolygon={mobileDocumentPolygon}
                       guideRect={mobileViewfinderGuideRect}
                       fiducialCorners={mobileFiducialCorners}
-                      detected={cornersAlignedView}
+                      detected={cornersAlignedView || mobileFiducialCount >= 4}
                       hint="Encuadra la hoja: deben verse las franjas negras laterales."
                       examTitle={exam.title}
                       captureProgress={
-                        cornersAlignedView
+                        cornersAlignedView || mobileFiducialCount >= 4
                           ? Math.min(1, mobileStableTicks / CORNER_ALIGN_STABLE_TICKS)
                           : 0
                       }
