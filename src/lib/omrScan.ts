@@ -2137,18 +2137,68 @@ function quadCoversFullRoi(
   roiH: number
 ): boolean {
   const area = quadShoelaceArea(quad);
-  if (area > roiW * roiH * 0.88) return true;
-  const marginX = roiW * 0.018;
-  const marginY = roiH * 0.018;
+  if (area > roiW * roiH * 0.72) return true;
+  const marginX = roiW * 0.028;
+  const marginY = roiH * 0.028;
   const [tl, tr, br, bl] = quad;
-  const allOnBorder =
-    tl.x <= marginX &&
-    tr.x >= roiW - marginX &&
-    tl.y <= marginY &&
-    tr.y <= marginY &&
-    bl.y >= roiH - marginY &&
-    br.y >= roiH - marginY;
-  return allOnBorder;
+  const spansFullWidth =
+    tl.x <= marginX && bl.x <= marginX && tr.x >= roiW - marginX && br.x >= roiW - marginX;
+  const spansFullHeight =
+    tl.y <= marginY && tr.y <= marginY && bl.y >= roiH - marginY && br.y >= roiH - marginY;
+  if (spansFullWidth && spansFullHeight) return true;
+  return false;
+}
+
+/** Hoja blanca sobre fondo oscuro (mesa): bbox de píxeles claros. */
+function detectPaperSheetQuadViaBrightness(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 80 || h < 80) return null;
+
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const y0 = Math.floor(h * 0.06);
+  const y1 = Math.floor(h * 0.94);
+  const step = Math.max(2, Math.round(Math.min(w, h) / 160));
+
+  let minX = w;
+  let maxX = 0;
+  let minY = h;
+  let maxY = 0;
+  let bright = 0;
+  for (let y = y0; y < y1; y += step) {
+    for (let x = Math.floor(w * 0.04); x < Math.floor(w * 0.96); x += step) {
+      const i = (y * w + x) * 4;
+      const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      if (lum > 148) {
+        bright++;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  if (bright < 12) return null;
+
+  const padX = Math.max(4, Math.round((maxX - minX) * 0.02));
+  const padY = Math.max(4, Math.round((maxY - minY) * 0.025));
+  minX = Math.max(0, minX - padX);
+  maxX = Math.min(w - 1, maxX + padX);
+  minY = Math.max(0, minY - padY);
+  maxY = Math.min(h - 1, maxY + padY);
+
+  const quad: [Point, Point, Point, Point] = [
+    { x: minX, y: minY },
+    { x: maxX, y: minY },
+    { x: maxX, y: maxY },
+    { x: minX, y: maxY },
+  ];
+  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
+  return quad;
 }
 
 /**
@@ -2172,71 +2222,82 @@ export function detectAnswerSheetQuadViaAlignStrips(
   for (let x = 0; x < w; x++) {
     profile.push(columnDarknessFraction(data, w, y0, y1, x));
   }
-  const smooth = smoothColumnProfile(profile, 2);
+  const smooth = smoothColumnProfile(profile, 3);
 
-  const minStripDark = 0.34;
-  const minStripW = Math.max(3, Math.round(w * 0.005));
-  const maxStripW = Math.max(10, Math.round(w * 0.04));
-  const runs = findDarkColumnRuns(smooth, minStripDark);
+  const thresholds = [0.28, 0.34, 0.4];
+  const minStripW = Math.max(2, Math.round(w * 0.003));
+  const maxStripW = Math.max(12, Math.round(w * 0.065));
 
-  const leftRuns = runs.filter(
-    (r) => r.end < w * 0.48 && r.end - r.start + 1 >= minStripW && r.end - r.start + 1 <= maxStripW
-  );
-  const rightRuns = runs.filter(
-    (r) => r.start > w * 0.52 && r.end - r.start + 1 >= minStripW && r.end - r.start + 1 <= maxStripW
-  );
-  if (leftRuns.length === 0 || rightRuns.length === 0) return null;
+  for (const minStripDark of thresholds) {
+    const runs = findDarkColumnRuns(smooth, minStripDark);
 
-  const leftRun = leftRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
-  const rightRun = rightRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
+    const leftRuns = runs.filter(
+      (r) =>
+        r.end < w * 0.5 &&
+        r.end - r.start + 1 >= minStripW &&
+        r.end - r.start + 1 <= maxStripW
+    );
+    const rightRuns = runs.filter(
+      (r) =>
+        r.start > w * 0.5 &&
+        r.end - r.start + 1 >= minStripW &&
+        r.end - r.start + 1 <= maxStripW
+    );
+    if (leftRuns.length === 0 || rightRuns.length === 0) continue;
 
-  const paperLeft = leftRun.start;
-  const paperRight = rightRun.end;
-  const paperW = paperRight - paperLeft;
-  if (paperW < w * 0.28 || paperW > w * 0.96) return null;
+    const leftRun = leftRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
+    const rightRun = rightRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
 
-  const sampleX0 = paperLeft + Math.round(paperW * 0.08);
-  const sampleX1 = paperRight - Math.round(paperW * 0.08);
-  const rowBright = (y: number): number => {
-    let sum = 0;
-    let n = 0;
-    for (let x = sampleX0; x < sampleX1; x += Math.max(2, Math.round(paperW / 48))) {
-      const i = (y * w + x) * 4;
-      sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
-      n++;
+    const paperLeft = leftRun.start;
+    const paperRight = rightRun.end;
+    const paperW = paperRight - paperLeft;
+    if (paperW < w * 0.22 || paperW > w * 0.94) continue;
+
+    const sampleX0 = paperLeft + Math.round(paperW * 0.06);
+    const sampleX1 = paperRight - Math.round(paperW * 0.06);
+    const rowBright = (y: number): number => {
+      let sum = 0;
+      let n = 0;
+      for (let x = sampleX0; x < sampleX1; x += Math.max(2, Math.round(paperW / 52))) {
+        const i = (y * w + x) * 4;
+        sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+        n++;
+      }
+      return n > 0 ? sum / n : 0;
+    };
+
+    let top = y0;
+    let bottom = y1;
+    for (let y = y0; y < y1; y++) {
+      if (rowBright(y) > 145) {
+        top = y;
+        break;
+      }
     }
-    return n > 0 ? sum / n : 0;
-  };
-
-  let top = y0;
-  let bottom = y1;
-  for (let y = y0; y < y1; y++) {
-    if (rowBright(y) > 158) {
-      top = y;
-      break;
+    for (let y = y1 - 1; y >= top; y--) {
+      if (rowBright(y) > 145) {
+        bottom = y;
+        break;
+      }
     }
+    if (bottom - top < h * 0.18) continue;
+
+    const quad: [Point, Point, Point, Point] = [
+      { x: paperLeft, y: top },
+      { x: paperRight, y: top },
+      { x: paperRight, y: bottom },
+      { x: paperLeft, y: bottom },
+    ];
+    if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) continue;
+
+    const aspect = paperW / Math.max(1, bottom - top);
+    const target = califacilAnswerSheetAlignFrameAspect();
+    if (aspect < target * 0.42 || aspect > target * 1.65) continue;
+
+    return quad;
   }
-  for (let y = y1 - 1; y >= top; y--) {
-    if (rowBright(y) > 158) {
-      bottom = y;
-      break;
-    }
-  }
-  if (bottom - top < h * 0.22) return null;
 
-  const quad: [Point, Point, Point, Point] = [
-    { x: paperLeft, y: top },
-    { x: paperRight, y: top },
-    { x: paperRight, y: bottom },
-    { x: paperLeft, y: bottom },
-  ];
-  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
-
-  const aspect = paperW / Math.max(1, bottom - top);
-  const target = califacilAnswerSheetAlignFrameAspect();
-  if (aspect < target * 0.55 || aspect > target * 1.45) return null;
-
-  return quad;
+  return null;
 }
 
 /** Detección de bordes (Sobel) + contorno rectangular más grande dentro del ROI. */
@@ -2295,6 +2356,28 @@ function detectLargestQuadViaRoiEdges(
   if (paper) return paper;
 
   return detectCalifacilQuadFromBrightPaper(d, w, h, 0.58);
+}
+
+/**
+ * Detección prioritaria para cámara móvil: franjas negras → papel blanco → contornos.
+ */
+export function detectAnswerSheetQuadInRoi(
+  roiCanvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const w = roiCanvas.width;
+  const h = roiCanvas.height;
+  if (w < 80 || h < 80) return null;
+
+  const preprocessed = preprocessForSheetDetection(roiCanvas);
+  const sources = preprocessed ? [preprocessed, roiCanvas] : [roiCanvas];
+
+  for (const src of sources) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(src);
+    if (stripQuad && !quadCoversFullRoi(stripQuad, w, h)) return stripQuad;
+    const paperQuad = detectPaperSheetQuadViaBrightness(src);
+    if (paperQuad && !quadCoversFullRoi(paperQuad, w, h)) return paperQuad;
+  }
+  return detectLargestQuadInRoiCanvas(roiCanvas);
 }
 
 /**

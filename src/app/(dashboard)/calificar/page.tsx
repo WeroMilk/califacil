@@ -34,6 +34,7 @@ import {
   detectAnswerSheetFiducialsInRoi,
   estimateCanvasShadowAsymmetry,
   detectLargestQuadInRoiCanvas,
+  detectAnswerSheetQuadInRoi,
   detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
   fileToImage,
@@ -88,7 +89,6 @@ import {
   IosCaptureFlashOverlay,
 } from '@/components/iphone-document-scanner-overlay';
 import { CalificarMobileHome } from '@/components/calificar-mobile-home';
-import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   MobileZipGradeReviewScreen,
   MobileZipGradeScanCompleteModal,
@@ -215,8 +215,8 @@ const SHADOW_ASYMMETRY_TORCH = 0.14;
 const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Fotogramas estables antes de auto-captura (~0,25 s con loop a 50 ms). */
-const CORNER_ALIGN_STABLE_TICKS = 5;
+/** Fotogramas estables antes de auto-captura (~0,2 s con loop a 50 ms). */
+const CORNER_ALIGN_STABLE_TICKS = 4;
 /** Intervalo del loop de detección de documento en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 50;
 /** Mantiene el polígono visible un instante si la detección parpadea (fluidez iOS). */
@@ -1237,9 +1237,12 @@ export default function CalificarPage() {
         const snapSource = prepareAnswerSheetDisplayCanvas(examCanvas) ?? examCanvas;
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
+            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.88);
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
+          if (!snapUrl) {
+            snapUrl = canvasPreviewDataUrl(snapSource, 1100);
+          }
         }
         const nameCropUrl =
           snapSource instanceof HTMLCanvasElement
@@ -2148,7 +2151,7 @@ export default function CalificarPage() {
             }
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
-            const roiQuadRaw = stripQuad ?? detectLargestQuadInRoiCanvas(roiCanvas);
+            const roiQuadRaw = detectAnswerSheetQuadInRoi(roiCanvas);
             const stripAligned = stripQuad !== null;
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
@@ -2168,7 +2171,7 @@ export default function CalificarPage() {
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
             const now = performance.now();
-            if (roiCapture && layout && quadValid && roiQuad && fillRatio >= 0.08) {
+            if (roiCapture && layout && quadValid && roiQuad && fillRatio >= 0.08 && fillRatio <= 0.72) {
               const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
               documentPolygonHoldRef.current = {
                 polygon: viewportPoly,
@@ -3078,9 +3081,7 @@ export default function CalificarPage() {
         });
       }
       if (!roiQuad && roiCapture) {
-        const detected =
-          detectAnswerSheetQuadViaAlignStrips(roiCapture.roiCanvas) ??
-          detectLargestQuadInRoiCanvas(roiCapture.roiCanvas);
+        const detected = detectAnswerSheetQuadInRoi(roiCapture.roiCanvas);
         if (
           detected &&
           isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)
@@ -3097,8 +3098,8 @@ export default function CalificarPage() {
       if (!warped) {
         const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
         if (!warpedOnly) {
-          toast.error('No se detectó la hoja. Encuadra la página completa e intenta de nuevo.');
-          setLiveStatus('No se detectó la hoja. Ajusta el encuadre y pulsa Capturar.');
+          toast.error('No se detectó la hoja. Encuadra las franjas negras laterales.');
+          setLiveStatus('Centra la hoja: deben verse las franjas negras a los lados.');
           return;
         }
         const refined = refineWarpedCalifacilSheet(warpedOnly, {
@@ -3116,57 +3117,59 @@ export default function CalificarPage() {
         alignment = refined.alignment;
       }
 
-      const frameQuad =
-        roiCapture && roiQuad
-          ? frameQuadOnFullCanvas(roiQuad, roiCapture, fullCanvas)
-          : defaultDocumentQuad(fullCanvas.width, fullCanvas.height);
-
       playAutoCaptureClickSound();
 
       const chunk = sheets[sheetIndexRef.current] ?? [];
-      if (chunk.length > 0 && warped) {
-        const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
-        applyControlNumberFromRead(controlRead, { silent: true });
-        let { meta } = runFastWarpedScan(warped);
-        const minResolved = Math.max(6, Math.floor(omrRowCount * 0.35));
+      if (chunk.length === 0 || !warped) {
+        toast.error('No hay preguntas para calificar en esta hoja.');
+        return;
+      }
 
-        if (!meta.geometry || countResolvedOmrPicks(meta.picks) < minResolved) {
-          const scanCanvas2 = downscaleCanvasForOmrScan(warped, 960);
-          const best = scanWarpedWithBestTableFrame(scanCanvas2, omrCols, omrRowCount);
-          meta = best.meta;
-        }
+      setLiveStatus('Calificando…');
+      const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
+      applyControlNumberFromRead(controlRead, { silent: true });
 
-        if (meta.geometry) {
-          const mapped = mapRawToDraft([...meta.picks], chunk);
-          const result = await finalizeCapturedSheet(warped, undefined, {
-            preWarped: true,
-            warpAlignment: alignment,
-            skipReviewUi: true,
-            skipSheetValidation: true,
-            precomputedDraft: mapped.draft,
-            precomputedPicks: meta.picks,
-            precomputedGeometry: meta.geometry,
-            precomputedControlNumber: controlRead.controlNumber,
-          });
-          if (result.success) {
-            playScanCompleteChime();
-            mobileReviewOpenRef.current = false;
-            setMobileCaptureReview(null);
-            setMobileReviewAlign(null);
-            stopLiveCamera();
-            return;
-          }
+      const scanCanvas = downscaleCanvasForOmrScan(warped, 960);
+      let meta = runFastWarpedScan(warped).meta;
+      if (!meta.geometry || countResolvedOmrPicks(meta.picks) < 4) {
+        meta = scanWarpedWithNormTableFrame(
+          scanCanvas,
+          omrCols,
+          omrRowCount,
+          califacilOmrTableFrameNormRect(omrRowCount)
+        );
+      }
+      if (!meta.geometry) {
+        meta = scanWarpedWithBestTableFrame(scanCanvas, omrCols, omrRowCount).meta;
+      }
+      if (!meta.geometry) {
+        meta = scanWarpedMobileAnswerSheetFast(scanCanvas, omrCols, omrRowCount);
+      }
+
+      if (meta.geometry) {
+        const mapped = mapRawToDraft([...meta.picks], chunk);
+        const result = await finalizeCapturedSheet(warped, undefined, {
+          preWarped: true,
+          warpAlignment: alignment,
+          skipReviewUi: true,
+          skipSheetValidation: true,
+          precomputedDraft: mapped.draft,
+          precomputedPicks: meta.picks,
+          precomputedGeometry: meta.geometry,
+          precomputedControlNumber: controlRead.controlNumber,
+        });
+        if (result.success) {
+          playScanCompleteChime();
+          mobileReviewOpenRef.current = false;
+          setMobileCaptureReview(null);
+          setMobileReviewAlign(null);
+          stopLiveCamera();
+          return;
         }
       }
 
-      mobileReviewOpenRef.current = true;
-      setMobileCaptureReview({
-        sourceCanvas: fullCanvas,
-        frameQuad,
-        warped,
-        alignment,
-      });
-      setMobileReviewAlign(null);
+      toast.error('No se pudo leer la hoja. Mejora la luz y encuadra las franjas negras.');
+      setLiveStatus('Intenta otra foto — franjas negras visibles a los lados.');
     },
     [
       applyControlNumberFromRead,
@@ -4108,34 +4111,6 @@ export default function CalificarPage() {
               )}
             </div>
           </div>,
-          document.body
-        )}
-
-      {mobileCaptureReview &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <MobileSheetScanReview
-            sourceCanvas={mobileCaptureReview.sourceCanvas}
-            frameQuad={mobileCaptureReview.frameQuad}
-            initialWarped={mobileCaptureReview.warped}
-            initialAlignment={mobileCaptureReview.alignment}
-            initialFilter={liveColorMode}
-            rowCount={currentChunk.length}
-            columnCount={omrCols}
-            alignPreview={mobileAlignPreviewProp}
-            alignOrangeFrame={mobileReviewAlign?.orangeFrameNorm ?? null}
-            scanning={reviewScanning}
-            statusMessage={reviewStatus}
-            onRetake={retakeMobileCaptureReview}
-            onPreviewAlignment={(warped, alignment) =>
-              void previewMobileCaptureAlignment(warped, alignment)
-            }
-            onRealignOrangeFrame={(frame) => void realignMobileCaptureOrangeFrame(frame)}
-            onFinalizeGrade={() => void finalizeMobileReviewGrade()}
-            onBackFromAlign={backFromMobileReviewAlign}
-            detectedControlNumber={detectedControlNumber}
-            identifiedStudentName={selectedStudentName || null}
-          />,
           document.body
         )}
 
