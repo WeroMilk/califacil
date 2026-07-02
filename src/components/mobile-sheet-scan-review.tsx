@@ -337,8 +337,8 @@ export function MobileSheetScanReview({
     () => applyFilterAndRotation(warped, filter, rotation),
     [warped, filter, rotation]
   );
-  const previewUrl = useCanvasPreviewUrl(filteredPreview, 1280);
-  const sourceUrl = useCanvasPreviewUrl(sourceCanvas, 1600);
+  const previewUrl = useCanvasPreviewUrl(filteredPreview, 960);
+  const sourceUrl = useCanvasPreviewUrl(adjustMode ? sourceCanvas : null, 1200);
 
   useEffect(() => {
     if (!alignPreview) {
@@ -357,7 +357,7 @@ export function MobileSheetScanReview({
   useEffect(() => {
     if (!alignPreview?.previewCanvas || !orangeFrameNorm || scanning) return;
     const timer = window.setTimeout(() => {
-      const scanCanvas = downscaleCanvasForOmrScan(alignPreview.previewCanvas, 1200);
+      const scanCanvas = downscaleCanvasForOmrScan(alignPreview.previewCanvas, 960);
       const meta = scanWarpedWithNormTableFrame(
         scanCanvas,
         columnCount,
@@ -366,9 +366,16 @@ export function MobileSheetScanReview({
       );
       setLivePicks([...meta.picks]);
       setLiveScore(scorePicksAgainstExpected(meta.picks, alignPreview.expectedPicks));
-    }, 90);
+    }, 45);
     return () => window.clearTimeout(timer);
   }, [alignPreview, orangeFrameNorm, columnCount, rowCount, scanning]);
+
+  const autoPreviewFiredRef = useRef(false);
+  useEffect(() => {
+    if (alignPreview || adjustMode || autoPreviewFiredRef.current) return;
+    autoPreviewFiredRef.current = true;
+    onPreviewAlignment(filteredPreview, alignment);
+  }, [alignPreview, adjustMode, filteredPreview, alignment, onPreviewAlignment]);
 
   const displayGeometry = useMemo(() => {
     if (!alignPreview || !orangeFrameNorm) return null;
@@ -387,7 +394,7 @@ export function MobileSheetScanReview({
     (quad: ScanReviewQuad) => {
       const next = warpFromQuad(sourceCanvas, quad);
       if (!next) return;
-      const refined = refineWarpedCalifacilSheet(next, { maxAllowedPx: 22, fast: false });
+      const refined = refineWarpedCalifacilSheet(next, { maxAllowedPx: 22, fast: true });
       setWarped(refined.canvas);
       setAlignment(refined.alignment);
     },

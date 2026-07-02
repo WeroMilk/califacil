@@ -4279,6 +4279,16 @@ const FRAME_GRID_SCAN_THRESHOLDS: ScanThresholds = {
   ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
 };
 
+/** Umbrales más permisivos para burbujas del número de control (tinta más suave / foto móvil). */
+const CONTROL_NUMBER_SCAN_THRESHOLDS: ScanThresholds = {
+  minMarkDarkness: 0.05,
+  minBestVsSecondGap: 0.026,
+  minBestVsSecondRatio: 1.22,
+  minCenterVsRingDelta: 0.028,
+  minSolidCenterDarkness: 0.16,
+  ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+};
+
 function uniqueFrameProfiles(values: number[]): number[] {
   const seen = new Set<number>();
   const out: number[] = [];
@@ -4667,44 +4677,55 @@ function expandControlNumberGeometryForSampling(
 export function readAnswerSheetControlNumberFromCanvas(
   canvas: HTMLCanvasElement,
   rowCount = CALIFACIL_OMR_DEFAULT_ROWS,
-  thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS
+  thresholds: ScanThresholds = CONTROL_NUMBER_SCAN_THRESHOLDS
 ): { digits: (number | null)[]; controlNumber: string | null } {
   if (canvas.width < 40 || canvas.height < 40) {
     return { digits: [], controlNumber: null };
   }
-  const baseGeom = expandControlNumberGeometryForSampling(
-    buildAnswerSheetControlNumberGeometry(
-      canvas.width,
-      canvas.height,
-      CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT,
-      rowCount
-    )
-  );
+  const canvases: HTMLCanvasElement[] = [canvas];
+  if (Math.max(canvas.width, canvas.height) > 720) {
+    const down = downscaleCanvasForOmrScan(canvas, 720);
+    if (down !== canvas) canvases.push(down);
+  }
   const shifts = [
     { dx: 0, dy: 0 },
-    { dx: -0.01, dy: 0 },
-    { dx: 0.01, dy: 0 },
-    { dx: 0, dy: -0.008 },
-    { dx: 0, dy: 0.008 },
-    { dx: -0.01, dy: -0.008 },
-    { dx: 0.01, dy: -0.008 },
-    { dx: -0.01, dy: 0.008 },
-    { dx: 0.01, dy: 0.008 },
-    { dx: -0.005, dy: 0 },
-    { dx: 0.005, dy: 0 },
+    { dx: -0.012, dy: 0 },
+    { dx: 0.012, dy: 0 },
+    { dx: -0.006, dy: 0 },
+    { dx: 0.006, dy: 0 },
+    { dx: 0, dy: -0.012 },
+    { dx: 0, dy: 0.012 },
+    { dx: 0, dy: -0.02 },
+    { dx: 0, dy: 0.02 },
+    { dx: -0.012, dy: -0.012 },
+    { dx: 0.012, dy: -0.012 },
+    { dx: -0.012, dy: 0.012 },
+    { dx: 0.012, dy: 0.012 },
+    { dx: -0.008, dy: -0.016 },
+    { dx: 0.008, dy: 0.016 },
   ];
   let best: { digits: (number | null)[]; controlNumber: string | null; score: number } = {
     digits: [],
     controlNumber: null,
     score: -1,
   };
-  for (const { dx, dy } of shifts) {
-    const geom = shiftControlNumberGeometry(baseGeom, dx, dy);
-    const read = readControlNumberFromTemplateGeometry(canvas, geom, thresholds);
-    const score = scoreControlNumberDigits(read.digits);
-    const complete = read.controlNumber ? 900 : 0;
-    if (score + complete > best.score) {
-      best = { ...read, score: score + complete };
+  for (const scanCanvas of canvases) {
+    const baseGeom = expandControlNumberGeometryForSampling(
+      buildAnswerSheetControlNumberGeometry(
+        scanCanvas.width,
+        scanCanvas.height,
+        CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT,
+        rowCount
+      )
+    );
+    for (const { dx, dy } of shifts) {
+      const geom = shiftControlNumberGeometry(baseGeom, dx, dy);
+      const read = readControlNumberFromTemplateGeometry(scanCanvas, geom, thresholds);
+      const score = scoreControlNumberDigits(read.digits);
+      const complete = read.controlNumber ? 1200 : 0;
+      if (score + complete > best.score) {
+        best = { ...read, score: score + complete };
+      }
     }
   }
   return { digits: best.digits, controlNumber: best.controlNumber };

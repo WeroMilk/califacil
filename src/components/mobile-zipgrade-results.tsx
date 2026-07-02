@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Menu, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
 import { CalifacilZipGradeReviewOverlay } from '@/components/califacil-zipgrade-review-overlay';
@@ -24,6 +24,7 @@ export type ZipGradeSheetData = {
 
 type ScanCompleteModalProps = {
   open: boolean;
+  examTitle?: string;
   score: { correct: number; total: number; pct: number };
   nameCropUrl?: string | null;
   studentName?: string;
@@ -35,6 +36,7 @@ type ScanCompleteModalProps = {
 
 export function MobileZipGradeScanCompleteModal({
   open,
+  examTitle,
   score,
   nameCropUrl,
   studentName,
@@ -46,67 +48,99 @@ export function MobileZipGradeScanCompleteModal({
   if (!open || typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/45 px-6 backdrop-blur-[2px]">
-      <div
-        className="w-full max-w-sm animate-fade-in rounded-2xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
-        role="dialog"
-        aria-labelledby="zipgrade-scan-title"
+    <div
+      className="fixed inset-0 z-[300] flex flex-col bg-black/55"
+      style={{
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
+    >
+      <header
+        className="flex shrink-0 items-center justify-between px-2 py-2.5 text-white"
+        style={{ backgroundColor: ZIPGRADE_GREEN }}
       >
-        <p id="zipgrade-scan-title" className="text-[13px] font-medium text-gray-500">
-          Nombre
-        </p>
-        <div className="mt-1 min-h-[2.75rem] rounded-lg border border-gray-200 bg-gray-50/80 px-2 py-1.5">
-          {nameCropUrl ? (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img
-              src={nameCropUrl}
-              alt="Nombre del alumno"
-              className="h-10 max-w-full object-contain object-left"
-            />
-          ) : studentName ? (
-            <p className="text-lg font-semibold text-gray-900">{studentName}</p>
-          ) : (
-            <p className="text-sm italic text-gray-400">Sin nombre detectado</p>
-          )}
-        </div>
+        <button
+          type="button"
+          className="flex min-w-[5.5rem] items-center gap-0.5 px-2 py-1 text-[17px] font-normal active:opacity-70"
+          onClick={onDelete}
+        >
+          <ChevronLeft className="h-6 w-6" strokeWidth={2.25} />
+          Escaneo terminado
+        </button>
+        <span className="truncate px-2 text-center text-[13px] font-semibold uppercase tracking-[0.2em] opacity-95">
+          {examTitle ? examTitle.slice(0, 18) : 'CaliFácil'}
+        </span>
+        <button
+          type="button"
+          className="flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/10"
+          aria-label="Ajustes"
+        >
+          <Settings className="h-5 w-5" />
+        </button>
+      </header>
 
-        <p className="mt-4 text-[13px] font-medium text-gray-500">Calificación</p>
-        <p className="mt-0.5 text-[2rem] font-bold leading-tight tracking-tight text-gray-950">
-          {score.correct}/{score.total}={score.pct}%
-        </p>
+      <div className="flex min-h-0 flex-1 items-center justify-center px-5 py-6">
+        <div
+          className="w-full max-w-sm animate-fade-in rounded-xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
+          role="dialog"
+          aria-labelledby="zipgrade-scan-title"
+        >
+          <p id="zipgrade-scan-title" className="text-[13px] font-medium text-gray-500">
+            Nombre
+          </p>
+          <div className="mt-1 min-h-[2.75rem] rounded-lg border border-gray-200 bg-gray-50/80 px-2 py-1.5">
+            {nameCropUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={nameCropUrl}
+                alt="Nombre del alumno"
+                className="h-10 max-w-full object-contain object-left"
+              />
+            ) : studentName ? (
+              <p className="text-lg font-semibold text-gray-900">{studentName}</p>
+            ) : (
+              <p className="text-sm italic text-gray-400">Sin nombre detectado</p>
+            )}
+          </div>
 
-        <p className="mt-2 text-sm text-gray-500">
-          ID:{' '}
-          <span className="font-semibold text-gray-800 tabular-nums">
-            {controlNumber ?? '—'}
-          </span>
-        </p>
+          <p className="mt-4 text-[13px] font-medium text-gray-500">Calificación</p>
+          <p className="mt-0.5 text-[2rem] font-bold leading-tight tracking-tight text-gray-950">
+            {score.correct}/{score.total}={score.pct}%
+          </p>
 
-        <div className="mt-5 flex items-center justify-between border-t border-gray-100 pt-3">
-          <button
-            type="button"
-            className="px-2 py-2 text-[17px] font-medium"
-            style={{ color: ZIPGRADE_GREEN }}
-            onClick={onDelete}
-          >
-            Borrar
-          </button>
-          <button
-            type="button"
-            className="px-2 py-2 text-[17px] font-medium"
-            style={{ color: ZIPGRADE_GREEN }}
-            onClick={onStudent}
-          >
-            Estudiante
-          </button>
-          <button
-            type="button"
-            className="px-2 py-2 text-[17px] font-semibold"
-            style={{ color: ZIPGRADE_GREEN }}
-            onClick={onReview}
-          >
-            Revisión
-          </button>
+          <p className="mt-2 text-sm text-gray-500">
+            ID:{' '}
+            <span className="font-semibold text-gray-800 tabular-nums">
+              {controlNumber ?? '—'}
+            </span>
+          </p>
+
+          <div className="mt-5 flex items-center justify-between border-t border-gray-100 pt-3">
+            <button
+              type="button"
+              className="px-2 py-2 text-[17px] font-medium"
+              style={{ color: ZIPGRADE_GREEN }}
+              onClick={onDelete}
+            >
+              Borrar
+            </button>
+            <button
+              type="button"
+              className="px-2 py-2 text-[17px] font-medium"
+              style={{ color: ZIPGRADE_GREEN }}
+              onClick={onStudent}
+            >
+              Estudiante
+            </button>
+            <button
+              type="button"
+              className="px-2 py-2 text-[17px] font-semibold"
+              style={{ color: ZIPGRADE_GREEN }}
+              onClick={onReview}
+            >
+              Revisión
+            </button>
+          </div>
         </div>
       </div>
     </div>,

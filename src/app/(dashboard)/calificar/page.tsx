@@ -58,9 +58,11 @@ import {
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
   scanCalifacilOmrSheetWithMeta,
+  scanWarpedMobileAnswerSheetFast,
   scanWarpedWithBestTableFrame,
   scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
+  califacilOmrTableFrameNormRect,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
   downscaleCanvasForOmrScan,
@@ -212,8 +214,8 @@ const SHADOW_ASYMMETRY_TORCH = 0.14;
 const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
-/** Fotogramas estables antes de auto-captura (~0,35 s con loop a 50 ms). */
-const CORNER_ALIGN_STABLE_TICKS = 7;
+/** Fotogramas estables antes de auto-captura (~0,25 s con loop a 50 ms). */
+const CORNER_ALIGN_STABLE_TICKS = 5;
 /** Intervalo del loop de detección de documento en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 50;
 /** Mantiene el polígono visible un instante si la detección parpadea (fluidez iOS). */
@@ -382,10 +384,23 @@ function yieldForSpinnerPaint(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        window.setTimeout(resolve, 48);
+        window.setTimeout(resolve, 16);
       });
     });
   });
+}
+
+function countResolvedOmrPicks(picks: (number | null)[]): number {
+  let n = 0;
+  for (const p of picks) {
+    if (p !== null) n += 1;
+  }
+  return n;
+}
+
+function omrPicksMeetInstantThreshold(picks: (number | null)[], minRatio = 0.7): boolean {
+  if (picks.length === 0) return false;
+  return countResolvedOmrPicks(picks) >= picks.length * minRatio;
 }
 
 /** Convierte borrador de texto a índice de columna OMR por fila (0 = A). */
@@ -608,6 +623,8 @@ export default function CalificarPage() {
   const mobileCaptureBusyRef = useRef(false);
   const mobileReviewOpenRef = useRef(false);
   const reviewScanGenRef = useRef(0);
+  const autoFinalizeTokenRef = useRef(0);
+  const finalizeMobileReviewGradeRef = useRef<() => Promise<void>>(async () => {});
   const triggerMobileSheetCaptureRef = useRef<
     (
       video: HTMLVideoElement,
@@ -632,6 +649,7 @@ export default function CalificarPage() {
         precomputedDraft?: Record<string, string>;
         precomputedPicks?: (number | null)[];
         precomputedGeometry?: CalifacilOmrScanGeometry | null;
+        precomputedControlNumber?: string | null;
       }
     ) => Promise<{ success: boolean; chunkDraft?: Record<string, string> }>
   >(async () => ({ success: false }));
@@ -710,6 +728,56 @@ export default function CalificarPage() {
   const autoIdentifyByControl = useMemo(
     () => sortedStudents.some((s) => (s.control_number ?? '').replace(/\D/g, '').length > 0),
     [sortedStudents]
+  );
+
+  const applyControlNumberFromRead = useCallback(
+    (
+      controlRead: { controlNumber: string | null },
+      opts?: { silent?: boolean }
+    ): string | null => {
+      if (controlRead.controlNumber) {
+        setDetectedControlNumber(controlRead.controlNumber);
+        const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
+        if (matched) {
+          setSelectedStudentId(matched.id);
+          if (!opts?.silent) {
+            toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
+          }
+          return matched.id;
+        }
+        if (!opts?.silent) {
+          toast.error(
+            `El control ${controlRead.controlNumber} no coincide con ningún alumno del examen. Elige al alumno manualmente.`
+          );
+        }
+        return null;
+      }
+      setDetectedControlNumber(null);
+      return null;
+    },
+    [sortedStudents]
+  );
+
+  const runFastWarpedScan = useCallback(
+    (warped: HTMLCanvasElement) => {
+      const scanCanvas = downscaleCanvasForOmrScan(warped, 960);
+      let meta = scanWarpedMobileAnswerSheetFast(scanCanvas, omrCols, omrRowCount);
+      let orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
+      if (meta.geometry) {
+        orangeFrameNorm =
+          califacilOmrOrangeFrameRect(meta.geometry, omrRowCount) ?? orangeFrameNorm;
+      }
+      if (
+        !meta.geometry ||
+        countResolvedOmrPicks(meta.picks) < omrRowCount * 0.62
+      ) {
+        const best = scanWarpedWithBestTableFrame(scanCanvas, omrCols, omrRowCount);
+        meta = best.meta;
+        orangeFrameNorm = best.orangeFrameNorm;
+      }
+      return { meta, orangeFrameNorm, scanCanvas };
+    },
+    [omrCols, omrRowCount]
   );
 
   useEffect(() => {
@@ -1046,6 +1114,7 @@ export default function CalificarPage() {
         precomputedDraft?: Record<string, string>;
         precomputedPicks?: (number | null)[];
         precomputedGeometry?: CalifacilOmrScanGeometry | null;
+        precomputedControlNumber?: string | null;
       }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       if (!examId || !exam || !supportsCalifacil) {
@@ -1129,23 +1198,39 @@ export default function CalificarPage() {
           draftSelectionsToColumnPicks(chunk, mergedDraft).slice(0, chunk.length);
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
         let gradeStudentId = selectedStudentId;
-        const controlRead = readAnswerSheetControlNumberFromCanvas(examCanvas, omrRowCount);
-        if (controlRead.controlNumber) {
-          setDetectedControlNumber(controlRead.controlNumber);
-          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
-          if (matched) {
-            gradeStudentId = matched.id;
-            setSelectedStudentId(matched.id);
-            if (!skipReviewUi) {
-              toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
-            }
-          } else if (!skipReviewUi) {
-            toast.error(
-              `El control ${controlRead.controlNumber} no coincide con ningún alumno del examen. Elige al alumno manualmente.`
+        if (opts.precomputedControlNumber !== undefined) {
+          if (opts.precomputedControlNumber) {
+            setDetectedControlNumber(opts.precomputedControlNumber);
+            const matched = findStudentByControlNumber(
+              sortedStudents,
+              opts.precomputedControlNumber
             );
+            if (matched) {
+              gradeStudentId = matched.id;
+              setSelectedStudentId(matched.id);
+            }
+          } else {
+            setDetectedControlNumber(null);
           }
         } else {
-          setDetectedControlNumber(null);
+          const controlRead = readAnswerSheetControlNumberFromCanvas(examCanvas, omrRowCount);
+          if (controlRead.controlNumber) {
+            setDetectedControlNumber(controlRead.controlNumber);
+            const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
+            if (matched) {
+              gradeStudentId = matched.id;
+              setSelectedStudentId(matched.id);
+              if (!skipReviewUi) {
+                toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
+              }
+            } else if (!skipReviewUi) {
+              toast.error(
+                `El control ${controlRead.controlNumber} no coincide con ningún alumno del examen. Elige al alumno manualmente.`
+              );
+            }
+          } else {
+            setDetectedControlNumber(null);
+          }
         }
         let snapUrl: string | null = null;
         const snapSource = prepareAnswerSheetDisplayCanvas(examCanvas) ?? examCanvas;
@@ -2806,32 +2891,8 @@ export default function CalificarPage() {
         sortedStudents.some((s) => s.id === studentId) &&
         canGradeStudents;
 
-      let persisted = false;
-      if (canPersist) {
-        try {
-          await persistStudentAnswers(fullDraft, studentId);
-          persisted = true;
-          toast.success('Calificación guardada.');
-        } catch (err: unknown) {
-          const code = err instanceof Error ? err.message : '';
-          if (code === 'incomplete_key') {
-            toast.error('Clave automática incompleta. No se pudo guardar en la nube.');
-          } else {
-            toast.error('No se pudo guardar en la nube. El resultado se muestra igual.');
-          }
-        }
-      } else {
-        toast.message(
-          studentId
-            ? 'Resultado calculado. Las casillas sin marcar cuentan como incorrectas.'
-            : 'Resultado calculado. Marca el número de control en la hoja o elige al alumno para guardar.'
-        );
-      }
-
-      setAutoGradePersisted(persisted);
-      stopLiveCamera();
-
       if (isMobile) {
+        stopLiveCamera();
         setPhase('ver_resultados');
         setZipGradeModalOpen(true);
         setZipGradeReviewOpen(false);
@@ -2846,6 +2907,31 @@ export default function CalificarPage() {
           if (u) URL.revokeObjectURL(u);
           return null;
         });
+      }
+
+      setAutoGradePersisted(false);
+
+      if (canPersist) {
+        void (async () => {
+          try {
+            await persistStudentAnswers(fullDraft, studentId);
+            setAutoGradePersisted(true);
+            toast.success('Calificación guardada.');
+          } catch (err: unknown) {
+            const code = err instanceof Error ? err.message : '';
+            if (code === 'incomplete_key') {
+              toast.error('Clave automática incompleta. No se pudo guardar en la nube.');
+            } else {
+              toast.error('No se pudo guardar en la nube. El resultado se muestra igual.');
+            }
+          }
+        })();
+      } else {
+        toast.message(
+          studentId
+            ? 'Resultado calculado. Las casillas sin marcar cuentan como incorrectas.'
+            : 'Resultado calculado. Marca el número de control en la hoja o elige al alumno para guardar.'
+        );
       }
 
       setLiveDraftSelections({});
@@ -3012,14 +3098,14 @@ export default function CalificarPage() {
         }
         const refined = refineWarpedCalifacilSheet(warpedOnly, {
           maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fast: false,
+          fast: true,
         });
         warped = refined.canvas;
         alignment = refined.alignment;
-      } else {
+      } else if (alignment && !alignment.ok) {
         const refined = refineWarpedCalifacilSheet(warped, {
           maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fast: false,
+          fast: true,
         });
         warped = refined.canvas;
         alignment = refined.alignment;
@@ -3031,6 +3117,70 @@ export default function CalificarPage() {
           : defaultDocumentQuad(fullCanvas.width, fullCanvas.height);
 
       playAutoCaptureClickSound();
+
+      const chunk = sheets[sheetIndexRef.current] ?? [];
+      if (chunk.length > 0 && warped) {
+        const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
+        applyControlNumberFromRead(controlRead, { silent: true });
+        const { meta, orangeFrameNorm, scanCanvas } = runFastWarpedScan(warped);
+
+        if (meta.geometry && omrPicksMeetInstantThreshold(meta.picks, 0.68)) {
+          const mapped = mapRawToDraft([...meta.picks], chunk);
+          const result = await finalizeCapturedSheet(warped, undefined, {
+            preWarped: true,
+            warpAlignment: alignment,
+            skipReviewUi: true,
+            skipSheetValidation: true,
+            precomputedDraft: mapped.draft,
+            precomputedPicks: meta.picks,
+            precomputedGeometry: meta.geometry,
+            precomputedControlNumber: controlRead.controlNumber,
+          });
+          if (result.success) {
+            playScanCompleteChime();
+            mobileReviewOpenRef.current = false;
+            setMobileCaptureReview(null);
+            setMobileReviewAlign(null);
+            stopLiveCamera();
+            return;
+          }
+        }
+
+        if (meta.geometry) {
+          const mapped = mapRawToDraft([...meta.picks], chunk);
+          const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? '';
+          mobileReviewOpenRef.current = true;
+          setMobileCaptureReview({
+            sourceCanvas: fullCanvas,
+            frameQuad,
+            warped,
+            alignment,
+          });
+          setMobileReviewAlign({
+            warped,
+            alignment,
+            geometry: meta.geometry,
+            picks: [...meta.picks],
+            draft: mapped.draft,
+            previewUrl,
+            orangeFrameNorm,
+          });
+          const stats = gradeMcDraftAgainstKey(
+            mapped.draft,
+            questions,
+            examVirtualKeyByQuestionId
+          );
+          if (stats.total > 0 && stats.correct / stats.total >= 0.72) {
+            const token = ++autoFinalizeTokenRef.current;
+            window.setTimeout(() => {
+              if (token !== autoFinalizeTokenRef.current) return;
+              void finalizeMobileReviewGradeRef.current();
+            }, 220);
+          }
+          return;
+        }
+      }
+
       mobileReviewOpenRef.current = true;
       setMobileCaptureReview({
         sourceCanvas: fullCanvas,
@@ -3038,12 +3188,25 @@ export default function CalificarPage() {
         warped,
         alignment,
       });
+      setMobileReviewAlign(null);
     },
-    [setTorchEnabled]
+    [
+      applyControlNumberFromRead,
+      examVirtualKeyByQuestionId,
+      finalizeCapturedSheet,
+      mapRawToDraft,
+      omrRowCount,
+      questions,
+      runFastWarpedScan,
+      setTorchEnabled,
+      sheets,
+      stopLiveCamera,
+    ]
   );
 
   const retakeMobileCaptureReview = useCallback(() => {
     reviewScanGenRef.current += 1;
+    autoFinalizeTokenRef.current += 1;
     mobileReviewOpenRef.current = false;
     setMobileCaptureReview(null);
     setMobileReviewAlign(null);
@@ -3079,37 +3242,18 @@ export default function CalificarPage() {
         setReviewStatus('Leyendo respuestas…');
       });
       try {
-        await yieldForSpinnerPaint();
-        if (scanGen !== reviewScanGenRef.current) return;
-        const scanCanvas = downscaleCanvasForOmrScan(warped, 1200);
-        const { meta, orangeFrameNorm } = scanWarpedWithBestTableFrame(
-          scanCanvas,
-          omrCols,
-          omrRowCount
-        );
         if (scanGen !== reviewScanGenRef.current) return;
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
-        if (controlRead.controlNumber) {
-          setDetectedControlNumber(controlRead.controlNumber);
-          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
-          if (matched) {
-            setSelectedStudentId(matched.id);
-            toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
-          } else {
-            toast.error(
-              `El control ${controlRead.controlNumber} no coincide con ningún alumno. Elige al alumno manualmente.`
-            );
-          }
-        } else {
-          setDetectedControlNumber(null);
-        }
+        applyControlNumberFromRead(controlRead, { silent: true });
+        const { meta, orangeFrameNorm, scanCanvas } = runFastWarpedScan(warped);
+        if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
           setReviewStatus('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
           toast.error('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 1200) ?? '';
+        const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? '';
         setMobileReviewAlign({
           warped,
           alignment,
@@ -3120,6 +3264,14 @@ export default function CalificarPage() {
           orangeFrameNorm,
         });
         setReviewStatus(null);
+        const stats = gradeMcDraftAgainstKey(mapped.draft, questions, examVirtualKeyByQuestionId);
+        if (stats.total > 0 && stats.correct / stats.total >= 0.72) {
+          const token = ++autoFinalizeTokenRef.current;
+          window.setTimeout(() => {
+            if (token !== autoFinalizeTokenRef.current) return;
+            void finalizeMobileReviewGradeRef.current();
+          }, 220);
+        }
       } catch {
         if (scanGen !== reviewScanGenRef.current) return;
         setReviewStatus('Error al leer la hoja. Intenta Ajustar las esquinas.');
@@ -3128,27 +3280,29 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, omrCols, omrRowCount, sheets, sortedStudents]
+    [
+      applyControlNumberFromRead,
+      examVirtualKeyByQuestionId,
+      mapRawToDraft,
+      omrRowCount,
+      questions,
+      runFastWarpedScan,
+      sheets,
+    ]
   );
 
   const realignMobileCaptureOrangeFrame = useCallback(
     async (frame: OmrNormRect) => {
       if (!mobileReviewAlign) return;
+      autoFinalizeTokenRef.current += 1;
       const chunk = sheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0) return;
       const scanGen = ++reviewScanGenRef.current;
       setReviewScanning(true);
       setReviewStatus('Actualizando lectura…');
       try {
-        await yieldForSpinnerPaint();
         if (scanGen !== reviewScanGenRef.current) return;
-        const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, 1200);
-        const controlRead = readAnswerSheetControlNumberFromCanvas(mobileReviewAlign.warped, omrRowCount);
-        if (controlRead.controlNumber) {
-          setDetectedControlNumber(controlRead.controlNumber);
-          const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
-          if (matched) setSelectedStudentId(matched.id);
-        }
+        const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, 960);
         const meta = scanWarpedWithNormTableFrame(scanCanvas, omrCols, omrRowCount, frame);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3156,7 +3310,7 @@ export default function CalificarPage() {
           setReviewStatus('No se pudo leer con ese marco. Ajusta las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 1200) ?? mobileReviewAlign.previewUrl;
+        const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? mobileReviewAlign.previewUrl;
         setMobileReviewAlign({
           ...mobileReviewAlign,
           geometry: meta.geometry,
@@ -3173,11 +3327,12 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, sheets, sortedStudents]
+    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, sheets]
   );
 
   const finalizeMobileReviewGrade = useCallback(async () => {
     if (!mobileReviewAlign) return;
+    autoFinalizeTokenRef.current += 1;
     setReviewScanning(true);
     setReviewStatus('Calificando…');
     try {
@@ -3189,6 +3344,7 @@ export default function CalificarPage() {
         precomputedDraft: mobileReviewAlign.draft,
         precomputedPicks: mobileReviewAlign.picks,
         precomputedGeometry: mobileReviewAlign.geometry,
+        precomputedControlNumber: detectedControlNumber,
       });
       if (result.success) {
         playScanCompleteChime();
@@ -3204,7 +3360,9 @@ export default function CalificarPage() {
     } finally {
       setReviewScanning(false);
     }
-  }, [finalizeCapturedSheet, mobileReviewAlign, stopLiveCamera]);
+  }, [detectedControlNumber, finalizeCapturedSheet, mobileReviewAlign, stopLiveCamera]);
+
+  finalizeMobileReviewGradeRef.current = finalizeMobileReviewGrade;
 
   const backFromMobileReviewAlign = useCallback(() => {
     reviewScanGenRef.current += 1;
@@ -3323,6 +3481,7 @@ export default function CalificarPage() {
       (phase === 'capturar' ||
         mobileCaptureReview !== null ||
         zipGradeReviewOpen ||
+        zipGradeModalOpen ||
         (phase === 'ver_resultados' && (zipGradeModalOpen || zipGradeReviewOpen)));
     document.documentElement.classList.toggle('calificar-immersive', immersive);
     return () => {
@@ -4213,6 +4372,7 @@ export default function CalificarPage() {
         <>
           <MobileZipGradeScanCompleteModal
             open={zipGradeModalOpen && !zipGradeReviewOpen}
+            examTitle={exam.title}
             score={
               autoGradeStats ?? {
                 correct: currentZipGradeSheet?.correct ?? 0,
