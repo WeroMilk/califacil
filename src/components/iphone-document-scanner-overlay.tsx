@@ -34,7 +34,7 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
     const from = fromRef.current ?? target;
     fromRef.current = target;
     startRef.current = performance.now();
-    const duration = 210;
+    const duration = 140;
 
     const tick = (now: number) => {
       const t = Math.min(1, (now - startRef.current) / duration);

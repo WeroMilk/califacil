@@ -34,6 +34,7 @@ import {
   detectAnswerSheetFiducialsInRoi,
   estimateCanvasShadowAsymmetry,
   detectLargestQuadInRoiCanvas,
+  detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
   fileToImage,
   getObjectContainVideoLayout,
@@ -2146,14 +2147,16 @@ export default function CalificarPage() {
               return;
             }
 
-            const roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
+            const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
+            const roiQuadRaw = stripQuad ?? detectLargestQuadInRoiCanvas(roiCanvas);
+            const stripAligned = stripQuad !== null;
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
             const quadValid =
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
-                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.34)
+                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.44)
                 : null;
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
@@ -2230,7 +2233,7 @@ export default function CalificarPage() {
               return;
             }
 
-            if (fillRatio < MOBILE_MIN_ROI_FILL_RATIO) {
+            if (fillRatio < (stripAligned ? 0.12 : MOBILE_MIN_ROI_FILL_RATIO)) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
@@ -2244,7 +2247,7 @@ export default function CalificarPage() {
               return;
             }
 
-            if (fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) {
+            if (!stripAligned && fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
@@ -2894,8 +2897,8 @@ export default function CalificarPage() {
       if (isMobile) {
         stopLiveCamera();
         setPhase('ver_resultados');
-        setZipGradeModalOpen(true);
-        setZipGradeReviewOpen(false);
+        setZipGradeModalOpen(false);
+        setZipGradeReviewOpen(true);
       } else {
         setAutoGradeDialogOpen(true);
         setPhase('elegir');
@@ -3075,7 +3078,9 @@ export default function CalificarPage() {
         });
       }
       if (!roiQuad && roiCapture) {
-        const detected = detectLargestQuadInRoiCanvas(roiCapture.roiCanvas);
+        const detected =
+          detectAnswerSheetQuadViaAlignStrips(roiCapture.roiCanvas) ??
+          detectLargestQuadInRoiCanvas(roiCapture.roiCanvas);
         if (
           detected &&
           isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)
@@ -3122,9 +3127,16 @@ export default function CalificarPage() {
       if (chunk.length > 0 && warped) {
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
-        const { meta, orangeFrameNorm, scanCanvas } = runFastWarpedScan(warped);
+        let { meta } = runFastWarpedScan(warped);
+        const minResolved = Math.max(6, Math.floor(omrRowCount * 0.35));
 
-        if (meta.geometry && omrPicksMeetInstantThreshold(meta.picks, 0.68)) {
+        if (!meta.geometry || countResolvedOmrPicks(meta.picks) < minResolved) {
+          const scanCanvas2 = downscaleCanvasForOmrScan(warped, 960);
+          const best = scanWarpedWithBestTableFrame(scanCanvas2, omrCols, omrRowCount);
+          meta = best.meta;
+        }
+
+        if (meta.geometry) {
           const mapped = mapRawToDraft([...meta.picks], chunk);
           const result = await finalizeCapturedSheet(warped, undefined, {
             preWarped: true,
@@ -3145,40 +3157,6 @@ export default function CalificarPage() {
             return;
           }
         }
-
-        if (meta.geometry) {
-          const mapped = mapRawToDraft([...meta.picks], chunk);
-          const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? '';
-          mobileReviewOpenRef.current = true;
-          setMobileCaptureReview({
-            sourceCanvas: fullCanvas,
-            frameQuad,
-            warped,
-            alignment,
-          });
-          setMobileReviewAlign({
-            warped,
-            alignment,
-            geometry: meta.geometry,
-            picks: [...meta.picks],
-            draft: mapped.draft,
-            previewUrl,
-            orangeFrameNorm,
-          });
-          const stats = gradeMcDraftAgainstKey(
-            mapped.draft,
-            questions,
-            examVirtualKeyByQuestionId
-          );
-          if (stats.total > 0 && stats.correct / stats.total >= 0.72) {
-            const token = ++autoFinalizeTokenRef.current;
-            window.setTimeout(() => {
-              if (token !== autoFinalizeTokenRef.current) return;
-              void finalizeMobileReviewGradeRef.current();
-            }, 220);
-          }
-          return;
-        }
       }
 
       mobileReviewOpenRef.current = true;
@@ -3192,11 +3170,10 @@ export default function CalificarPage() {
     },
     [
       applyControlNumberFromRead,
-      examVirtualKeyByQuestionId,
       finalizeCapturedSheet,
       mapRawToDraft,
+      omrCols,
       omrRowCount,
-      questions,
       runFastWarpedScan,
       setTorchEnabled,
       sheets,
@@ -3264,14 +3241,6 @@ export default function CalificarPage() {
           orangeFrameNorm,
         });
         setReviewStatus(null);
-        const stats = gradeMcDraftAgainstKey(mapped.draft, questions, examVirtualKeyByQuestionId);
-        if (stats.total > 0 && stats.correct / stats.total >= 0.72) {
-          const token = ++autoFinalizeTokenRef.current;
-          window.setTimeout(() => {
-            if (token !== autoFinalizeTokenRef.current) return;
-            void finalizeMobileReviewGradeRef.current();
-          }, 220);
-        }
       } catch {
         if (scanGen !== reviewScanGenRef.current) return;
         setReviewStatus('Error al leer la hoja. Intenta Ajustar las esquinas.');
@@ -4405,7 +4374,7 @@ export default function CalificarPage() {
             sheetCount={zipGradeSheets.length}
             onBack={() => {
               setZipGradeReviewOpen(false);
-              setZipGradeModalOpen(true);
+              exitMobileResultsView();
             }}
             onPrevSheet={() => setResultsSheetIdx((i) => Math.max(0, i - 1))}
             onNextSheet={() =>

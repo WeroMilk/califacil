@@ -2072,6 +2072,173 @@ function detectCornerMarkersOnRoiCanvas(
   return [tl, tr, br, bl];
 }
 
+function columnDarknessFraction(
+  data: Uint8ClampedArray,
+  w: number,
+  y0: number,
+  y1: number,
+  x: number,
+  darkLum = 82
+): number {
+  const x0 = Math.max(0, Math.min(w - 1, x));
+  let dark = 0;
+  let n = 0;
+  for (let y = y0; y < y1; y += 2) {
+    const i = (y * w + x0) * 4;
+    const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+    if (lum < darkLum) dark++;
+    n++;
+  }
+  return n > 0 ? dark / n : 0;
+}
+
+function smoothColumnProfile(profile: number[], radius = 2): number[] {
+  return profile.map((_, x) => {
+    let sum = 0;
+    let count = 0;
+    for (let dx = -radius; dx <= radius; dx++) {
+      const xi = x + dx;
+      if (xi >= 0 && xi < profile.length) {
+        sum += profile[xi]!;
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  });
+}
+
+function findDarkColumnRuns(
+  smooth: number[],
+  threshold: number
+): Array<{ start: number; end: number; peak: number }> {
+  const runs: Array<{ start: number; end: number; peak: number }> = [];
+  let start = -1;
+  let peak = 0;
+  for (let x = 0; x < smooth.length; x++) {
+    if (smooth[x]! >= threshold) {
+      if (start < 0) start = x;
+      peak = Math.max(peak, smooth[x]!);
+      continue;
+    }
+    if (start >= 0) {
+      runs.push({ start, end: x - 1, peak });
+      start = -1;
+      peak = 0;
+    }
+  }
+  if (start >= 0) runs.push({ start, end: smooth.length - 1, peak });
+  return runs;
+}
+
+/** Rechaza cuads que cubren casi todo el ROI (borde amarillo pegado a la pantalla). */
+function quadCoversFullRoi(
+  quad: [Point, Point, Point, Point],
+  roiW: number,
+  roiH: number
+): boolean {
+  const area = quadShoelaceArea(quad);
+  if (area > roiW * roiH * 0.88) return true;
+  const marginX = roiW * 0.018;
+  const marginY = roiH * 0.018;
+  const [tl, tr, br, bl] = quad;
+  const allOnBorder =
+    tl.x <= marginX &&
+    tr.x >= roiW - marginX &&
+    tl.y <= marginY &&
+    tr.y <= marginY &&
+    bl.y >= roiH - marginY &&
+    br.y >= roiH - marginY;
+  return allOnBorder;
+}
+
+/**
+ * Detecta la hoja usando las franjas negras verticales impresas (guías de alineación).
+ * Prioridad sobre contornos genéricos para el marco amarillo tipo Escáner de iOS.
+ */
+export function detectAnswerSheetQuadViaAlignStrips(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 80 || h < 88) return null;
+
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const y0 = Math.floor(h * 0.1);
+  const y1 = Math.floor(h * 0.9);
+
+  const profile: number[] = [];
+  for (let x = 0; x < w; x++) {
+    profile.push(columnDarknessFraction(data, w, y0, y1, x));
+  }
+  const smooth = smoothColumnProfile(profile, 2);
+
+  const minStripDark = 0.34;
+  const minStripW = Math.max(3, Math.round(w * 0.005));
+  const maxStripW = Math.max(10, Math.round(w * 0.04));
+  const runs = findDarkColumnRuns(smooth, minStripDark);
+
+  const leftRuns = runs.filter(
+    (r) => r.end < w * 0.48 && r.end - r.start + 1 >= minStripW && r.end - r.start + 1 <= maxStripW
+  );
+  const rightRuns = runs.filter(
+    (r) => r.start > w * 0.52 && r.end - r.start + 1 >= minStripW && r.end - r.start + 1 <= maxStripW
+  );
+  if (leftRuns.length === 0 || rightRuns.length === 0) return null;
+
+  const leftRun = leftRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
+  const rightRun = rightRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
+
+  const paperLeft = leftRun.start;
+  const paperRight = rightRun.end;
+  const paperW = paperRight - paperLeft;
+  if (paperW < w * 0.28 || paperW > w * 0.96) return null;
+
+  const sampleX0 = paperLeft + Math.round(paperW * 0.08);
+  const sampleX1 = paperRight - Math.round(paperW * 0.08);
+  const rowBright = (y: number): number => {
+    let sum = 0;
+    let n = 0;
+    for (let x = sampleX0; x < sampleX1; x += Math.max(2, Math.round(paperW / 48))) {
+      const i = (y * w + x) * 4;
+      sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      n++;
+    }
+    return n > 0 ? sum / n : 0;
+  };
+
+  let top = y0;
+  let bottom = y1;
+  for (let y = y0; y < y1; y++) {
+    if (rowBright(y) > 158) {
+      top = y;
+      break;
+    }
+  }
+  for (let y = y1 - 1; y >= top; y--) {
+    if (rowBright(y) > 158) {
+      bottom = y;
+      break;
+    }
+  }
+  if (bottom - top < h * 0.22) return null;
+
+  const quad: [Point, Point, Point, Point] = [
+    { x: paperLeft, y: top },
+    { x: paperRight, y: top },
+    { x: paperRight, y: bottom },
+    { x: paperLeft, y: bottom },
+  ];
+  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
+
+  const aspect = paperW / Math.max(1, bottom - top);
+  const target = califacilAnswerSheetAlignFrameAspect();
+  if (aspect < target * 0.55 || aspect > target * 1.45) return null;
+
+  return quad;
+}
+
 /** Detección de bordes (Sobel) + contorno rectangular más grande dentro del ROI. */
 function detectLargestQuadViaRoiEdges(
   canvas: HTMLCanvasElement
@@ -2132,7 +2299,7 @@ function detectLargestQuadViaRoiEdges(
 
 /**
  * Encuentra el cuadrilátero de hoja más grande dentro del ROI (baja resolución).
- * Orden: fiduciales → bordes/contornos → heurística de papel.
+ * Orden: franjas negras → fiduciales → bordes/contornos → heurística de papel.
  */
 export function detectLargestQuadInRoiCanvas(
   roiCanvas: HTMLCanvasElement
@@ -2145,18 +2312,28 @@ export function detectLargestQuadInRoiCanvas(
   const sources = preprocessed ? [preprocessed, roiCanvas] : [roiCanvas];
 
   let best: [Point, Point, Point, Point] | null = null;
-  let bestArea = 0;
+  let bestScore = 0;
   for (const src of sources) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(src);
+    if (stripQuad && isValidMobileRoiQuad(stripQuad, w, h) && !quadCoversFullRoi(stripQuad, w, h)) {
+      const area = quadShoelaceArea(stripQuad);
+      const score = area + w * h * 0.35;
+      if (score > bestScore) {
+        bestScore = score;
+        best = stripQuad;
+      }
+    }
+
     const candidates: ([Point, Point, Point, Point] | null)[] = [
       detectCornerMarkersOnRoiCanvas(src),
       detectLargestQuadViaRoiEdges(src),
       detectCalifacilQuad(src),
     ];
     for (const quad of candidates) {
-      if (!quad || !isValidMobileRoiQuad(quad, w, h)) continue;
+      if (!quad || !isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) continue;
       const area = quadShoelaceArea(quad);
-      if (area > bestArea) {
-        bestArea = area;
+      if (area > bestScore) {
+        bestScore = area;
         best = quad;
       }
     }
