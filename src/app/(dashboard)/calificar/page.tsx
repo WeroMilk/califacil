@@ -34,7 +34,6 @@ import {
   detectAnswerSheetFiducialsInRoi,
   estimateCanvasShadowAsymmetry,
   detectLargestQuadInRoiCanvas,
-  detectAnswerSheetQuadInRoi,
   detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
   fileToImage,
@@ -2151,8 +2150,8 @@ export default function CalificarPage() {
             }
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
-            const roiQuadRaw = detectAnswerSheetQuadInRoi(roiCanvas);
             const stripAligned = stripQuad !== null;
+            const roiQuadRaw = stripQuad;
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
             const quadValid =
@@ -2171,7 +2170,7 @@ export default function CalificarPage() {
             const fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuad);
             const fiducialCount = fiducialCorners.filter(Boolean).length;
             const now = performance.now();
-            if (roiCapture && layout && quadValid && roiQuad && fillRatio >= 0.08 && fillRatio <= 0.72) {
+            if (stripAligned && roiCapture && layout && quadValid && roiQuad) {
               const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
               documentPolygonHoldRef.current = {
                 polygon: viewportPoly,
@@ -2211,7 +2210,7 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            if (!quadValid || !roiQuad) {
+            if (!stripAligned || !quadValid || !roiQuad) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               if (!documentPolygonHoldRef.current) {
@@ -2228,15 +2227,15 @@ export default function CalificarPage() {
               ) {
                 autotorchTriedRef.current = true;
                 void setTorchEnabled(true);
-                setLiveStatus('Activé el flash. Coloca la hoja en el visor.');
+                setLiveStatus('Activé el flash. Centra la hoja con las franjas negras visibles.');
               } else {
-                setLiveStatus('Coloca el documento en el visor.');
+                setLiveStatus('Encuadra la hoja: deben verse las franjas negras laterales.');
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
 
-            if (fillRatio < (stripAligned ? 0.12 : MOBILE_MIN_ROI_FILL_RATIO)) {
+            if (fillRatio < (stripAligned ? 0.08 : MOBILE_MIN_ROI_FILL_RATIO)) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
@@ -2246,16 +2245,6 @@ export default function CalificarPage() {
                   ? 'Acerca un poco el teléfono.'
                   : 'Centra la hoja en el visor.'
               );
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            if (!stripAligned && fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) {
-              cornerStableTicksRef.current = 0;
-              setMobileStableTicks(0);
-              lastRoiQuadRef.current = roiQuad;
-              setCornersAlignedView(false);
-              setLiveStatus('Asegúrate de que se vean las esquinas negras de la hoja.');
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -3081,7 +3070,7 @@ export default function CalificarPage() {
         });
       }
       if (!roiQuad && roiCapture) {
-        const detected = detectAnswerSheetQuadInRoi(roiCapture.roiCanvas);
+        const detected = detectAnswerSheetQuadViaAlignStrips(roiCapture.roiCanvas);
         if (
           detected &&
           isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)

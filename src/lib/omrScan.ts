@@ -12,6 +12,8 @@ import {
   CALIFACIL_WARP_PAGE_FRAME_NORM,
   CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
   CALIFACIL_ALIGN_STRIPS_NORM,
+  CALIFACIL_LEFT_ALIGN_STRIP_NORM,
+  CALIFACIL_WARP_PAGE,
   califacilAnswerSheetAlignFrameAspect,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   getControlNumberBlockPageRatios,
@@ -2149,7 +2151,7 @@ function quadCoversFullRoi(
   return false;
 }
 
-/** Hoja blanca sobre fondo oscuro (mesa): bbox de píxeles claros. */
+/** Hoja blanca sobre fondo oscuro (mesa): bbox de píxeles claros — solo si parece hoja carta. */
 function detectPaperSheetQuadViaBrightness(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
@@ -2173,7 +2175,7 @@ function detectPaperSheetQuadViaBrightness(
     for (let x = Math.floor(w * 0.04); x < Math.floor(w * 0.96); x += step) {
       const i = (y * w + x) * 4;
       const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
-      if (lum > 148) {
+      if (lum > 168) {
         bright++;
         minX = Math.min(minX, x);
         maxX = Math.max(maxX, x);
@@ -2184,8 +2186,16 @@ function detectPaperSheetQuadViaBrightness(
   }
   if (bright < 12) return null;
 
-  const padX = Math.max(4, Math.round((maxX - minX) * 0.02));
-  const padY = Math.max(4, Math.round((maxY - minY) * 0.025));
+  const boxW = maxX - minX;
+  const boxH = maxY - minY;
+  if (boxW > w * 0.62 || boxH > h * 0.78) return null;
+
+  const pageAspect = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.heightPx;
+  const aspect = boxW / Math.max(1, boxH);
+  if (aspect < pageAspect * 0.55 || aspect > pageAspect * 1.35) return null;
+
+  const padX = Math.max(2, Math.round(boxW * 0.012));
+  const padY = Math.max(2, Math.round(boxH * 0.015));
   minX = Math.max(0, minX - padX);
   maxX = Math.min(w - 1, maxX + padX);
   minY = Math.max(0, minY - padY);
@@ -2199,6 +2209,70 @@ function detectPaperSheetQuadViaBrightness(
   ];
   if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
   return quad;
+}
+
+function measureStripVerticalSpan(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  colStart: number,
+  colEnd: number,
+  rowDarkFrac = 0.22
+): { top: number; bottom: number } | null {
+  const x0 = Math.max(0, colStart);
+  const x1 = Math.min(w - 1, colEnd);
+  if (x1 <= x0) return null;
+
+  let top = -1;
+  let bottom = -1;
+  for (let y = Math.floor(h * 0.04); y < Math.floor(h * 0.96); y++) {
+    let dark = 0;
+    let n = 0;
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      if (lum < 78) dark++;
+      n++;
+    }
+    if (n > 0 && dark / n >= rowDarkFrac) {
+      if (top < 0) top = y;
+      bottom = y;
+    }
+  }
+  if (top < 0 || bottom - top < h * 0.12) return null;
+  return { top, bottom };
+}
+
+type StripRun = { start: number; end: number; peak: number };
+
+function findBestStripPair(
+  smooth: number[],
+  w: number
+): { left: StripRun; right: StripRun; score: number } | null {
+  const minStripW = Math.max(2, Math.round(w * 0.0025));
+  const maxStripW = Math.max(14, Math.round(w * 0.07));
+  let best: { left: StripRun; right: StripRun; score: number } | null = null;
+
+  for (const threshold of [0.2, 0.26, 0.32, 0.38]) {
+    const runs = findDarkColumnRuns(smooth, threshold).filter((r) => {
+      const width = r.end - r.start + 1;
+      return width >= minStripW && width <= maxStripW && r.peak >= threshold;
+    });
+
+    for (const left of runs) {
+      if (left.end >= w * 0.46) continue;
+      for (const right of runs) {
+        if (right.start <= w * 0.54) continue;
+        const gap = right.start - left.end;
+        if (gap < w * 0.12 || gap > w * 0.72) continue;
+        const score = left.peak + right.peak + (gap / w) * 0.35;
+        if (!best || score > best.score) {
+          best = { left, right, score };
+        }
+      }
+    }
+  }
+  return best;
 }
 
 /**
@@ -2215,89 +2289,66 @@ export function detectAnswerSheetQuadViaAlignStrips(
   if (w < 80 || h < 88) return null;
 
   const { data } = ctx.getImageData(0, 0, w, h);
-  const y0 = Math.floor(h * 0.1);
-  const y1 = Math.floor(h * 0.9);
+  const stripBandTop = Math.floor(h * 0.12);
+  const stripBandBot = Math.floor(h * 0.88);
 
   const profile: number[] = [];
   for (let x = 0; x < w; x++) {
-    profile.push(columnDarknessFraction(data, w, y0, y1, x));
+    profile.push(columnDarknessFraction(data, w, stripBandTop, stripBandBot, x, 88));
   }
-  const smooth = smoothColumnProfile(profile, 3);
+  const smooth = smoothColumnProfile(profile, 4);
 
-  const thresholds = [0.28, 0.34, 0.4];
-  const minStripW = Math.max(2, Math.round(w * 0.003));
-  const maxStripW = Math.max(12, Math.round(w * 0.065));
+  const pair = findBestStripPair(smooth, w);
+  if (!pair) return null;
 
-  for (const minStripDark of thresholds) {
-    const runs = findDarkColumnRuns(smooth, minStripDark);
+  const { left: leftRun, right: rightRun } = pair;
+  let paperLeft = leftRun.start;
+  let paperRight = rightRun.end;
+  const innerW = paperRight - paperLeft;
+  if (innerW < w * 0.14 || innerW > w * 0.72) return null;
 
-    const leftRuns = runs.filter(
-      (r) =>
-        r.end < w * 0.5 &&
-        r.end - r.start + 1 >= minStripW &&
-        r.end - r.start + 1 <= maxStripW
-    );
-    const rightRuns = runs.filter(
-      (r) =>
-        r.start > w * 0.5 &&
-        r.end - r.start + 1 >= minStripW &&
-        r.end - r.start + 1 <= maxStripW
-    );
-    if (leftRuns.length === 0 || rightRuns.length === 0) continue;
+  const spanL = measureStripVerticalSpan(data, w, h, leftRun.start, leftRun.end);
+  const spanR = measureStripVerticalSpan(data, w, h, rightRun.start, rightRun.end);
+  if (!spanL || !spanR) return null;
 
-    const leftRun = leftRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
-    const rightRun = rightRuns.reduce((a, b) => (a.peak >= b.peak ? a : b));
+  const stripTop = Math.min(spanL.top, spanR.top);
+  const stripBottom = Math.max(spanL.bottom, spanR.bottom);
+  const stripPixelLen = Math.max(8, stripBottom - stripTop);
 
-    const paperLeft = leftRun.start;
-    const paperRight = rightRun.end;
-    const paperW = paperRight - paperLeft;
-    if (paperW < w * 0.22 || paperW > w * 0.94) continue;
+  const stripNorm = CALIFACIL_LEFT_ALIGN_STRIP_NORM;
+  const fullPageH = stripPixelLen / Math.max(0.35, stripNorm.height);
+  let top = Math.round(stripTop - stripNorm.top * fullPageH);
+  let bottom = Math.round(top + fullPageH);
 
-    const sampleX0 = paperLeft + Math.round(paperW * 0.06);
-    const sampleX1 = paperRight - Math.round(paperW * 0.06);
-    const rowBright = (y: number): number => {
-      let sum = 0;
-      let n = 0;
-      for (let x = sampleX0; x < sampleX1; x += Math.max(2, Math.round(paperW / 52))) {
-        const i = (y * w + x) * 4;
-        sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
-        n++;
-      }
-      return n > 0 ? sum / n : 0;
-    };
-
-    let top = y0;
-    let bottom = y1;
-    for (let y = y0; y < y1; y++) {
-      if (rowBright(y) > 145) {
-        top = y;
-        break;
-      }
-    }
-    for (let y = y1 - 1; y >= top; y--) {
-      if (rowBright(y) > 145) {
-        bottom = y;
-        break;
-      }
-    }
-    if (bottom - top < h * 0.18) continue;
-
-    const quad: [Point, Point, Point, Point] = [
-      { x: paperLeft, y: top },
-      { x: paperRight, y: top },
-      { x: paperRight, y: bottom },
-      { x: paperLeft, y: bottom },
-    ];
-    if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) continue;
-
-    const aspect = paperW / Math.max(1, bottom - top);
-    const target = califacilAnswerSheetAlignFrameAspect();
-    if (aspect < target * 0.42 || aspect > target * 1.65) continue;
-
-    return quad;
+  const pageAspect = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.heightPx;
+  const expectedW = fullPageH * pageAspect;
+  const widthDelta = expectedW - innerW;
+  if (Math.abs(widthDelta) > innerW * 0.08) {
+    const cx = (paperLeft + paperRight) * 0.5;
+    paperLeft = Math.round(cx - expectedW * 0.5);
+    paperRight = Math.round(cx + expectedW * 0.5);
   }
 
-  return null;
+  const padX = Math.max(1, Math.round(innerW * 0.008));
+  paperLeft = Math.max(0, paperLeft - padX);
+  paperRight = Math.min(w - 1, paperRight + padX);
+  top = Math.max(0, top);
+  bottom = Math.min(h - 1, bottom);
+
+  if (bottom - top < h * 0.14) return null;
+
+  const quad: [Point, Point, Point, Point] = [
+    { x: paperLeft, y: top },
+    { x: paperRight, y: top },
+    { x: paperRight, y: bottom },
+    { x: paperLeft, y: bottom },
+  ];
+  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
+
+  const aspect = (paperRight - paperLeft) / Math.max(1, bottom - top);
+  if (aspect < pageAspect * 0.48 || aspect > pageAspect * 1.42) return null;
+
+  return quad;
 }
 
 /** Detección de bordes (Sobel) + contorno rectangular más grande dentro del ROI. */
@@ -2359,7 +2410,7 @@ function detectLargestQuadViaRoiEdges(
 }
 
 /**
- * Detección prioritaria para cámara móvil: franjas negras → papel blanco → contornos.
+ * Detección prioritaria para cámara móvil: solo franjas negras CaliFácil.
  */
 export function detectAnswerSheetQuadInRoi(
   roiCanvas: HTMLCanvasElement
@@ -2374,10 +2425,8 @@ export function detectAnswerSheetQuadInRoi(
   for (const src of sources) {
     const stripQuad = detectAnswerSheetQuadViaAlignStrips(src);
     if (stripQuad && !quadCoversFullRoi(stripQuad, w, h)) return stripQuad;
-    const paperQuad = detectPaperSheetQuadViaBrightness(src);
-    if (paperQuad && !quadCoversFullRoi(paperQuad, w, h)) return paperQuad;
   }
-  return detectLargestQuadInRoiCanvas(roiCanvas);
+  return null;
 }
 
 /**
@@ -2627,7 +2676,7 @@ export function isValidMobileRoiQuad(
   if (avgW < roiW * 0.2 || avgH < roiH * 0.2) return false;
 
   const aspect = avgW / Math.max(1, avgH);
-  if (aspect < 0.45 || aspect > 1.15) return false;
+  if (aspect < 0.38 || aspect > 1.22) return false;
 
   return true;
 }
