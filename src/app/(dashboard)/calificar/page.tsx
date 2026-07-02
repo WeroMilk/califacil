@@ -630,7 +630,11 @@ export default function CalificarPage() {
   const triggerMobileSheetCaptureRef = useRef<
     (
       video: HTMLVideoElement,
-      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      opts?: {
+        roiQuad?: RoiQuad | null;
+        roiCapture?: MobileGuideRoiCapture | null;
+        force?: boolean;
+      }
     ) => void
   >(() => {});
   const phaseRef = useRef<Phase>('elegir');
