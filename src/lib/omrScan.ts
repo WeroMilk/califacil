@@ -416,6 +416,42 @@ export function califacilViewfinderGuideInViewportPx(
   };
 }
 
+/**
+ * Marco guía del escáner móvil en coords. de pantalla (no del sensor).
+ * Deja hueco para tarjeta superior y HUD inferior (~80–86 % del área útil).
+ */
+export function califacilMobileScannerGuideInViewportPx(
+  viewportW: number,
+  viewportH: number
+): { left: number; top: number; width: number; height: number } {
+  const aspect = CALIFACIL_VIEWFINDER_GUIDE.aspectRatio;
+  const topInset = Math.max(52, viewportH * 0.1);
+  const bottomInset = Math.max(80, viewportH * 0.13);
+  const sideInset = Math.max(12, viewportW * 0.06);
+  const maxW = Math.max(80, viewportW - sideInset * 2);
+  const maxH = Math.max(120, viewportH - topInset - bottomInset);
+  let rectH = maxH * 0.92;
+  let rectW = rectH * aspect;
+  if (rectW > maxW) {
+    rectW = maxW;
+    rectH = rectW / aspect;
+  }
+  const left = (viewportW - rectW) / 2;
+  const top = topInset + (maxH - rectH) * 0.42;
+  return { left, top, width: rectW, height: rectH };
+}
+
+/** Detección unificada para loop en vivo en móvil (franjas + contornos). */
+export function detectMobileLiveSheetQuad(
+  roiCanvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const w = roiCanvas.width;
+  const h = roiCanvas.height;
+  const strip = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
+  if (strip && isValidMobileRoiQuad(strip, w, h)) return strip;
+  return detectLargestQuadInRoiCanvas(roiCanvas);
+}
+
 function countDarkCornerPatches(
   ctx: CanvasRenderingContext2D,
   corners: { x: number; y: number }[],
@@ -2357,7 +2393,7 @@ export function detectAnswerSheetQuadViaAlignStrips(
   let paperLeft = leftRun.start;
   let paperRight = rightRun.end;
   const innerW = paperRight - paperLeft;
-  if (innerW < w * 0.14 || innerW > w * 0.94) return null;
+  if (innerW < w * 0.12) return null;
 
   const spanL = measureStripVerticalSpan(data, w, h, leftRun.start, leftRun.end);
   const spanR = measureStripVerticalSpan(data, w, h, rightRun.start, rightRun.end);
@@ -2717,7 +2753,7 @@ export function isValidMobileRoiQuad(
   }
 
   const area = quadShoelaceArea(quad);
-  if (area < roiW * roiH * 0.14) return false;
+  if (area < roiW * roiH * 0.1) return false;
 
   const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
   const bottomW = Math.hypot(br.x - bl.x, br.y - bl.y);
@@ -2725,10 +2761,10 @@ export function isValidMobileRoiQuad(
   const rightH = Math.hypot(br.x - tr.x, br.y - tr.y);
   const avgW = (topW + bottomW) * 0.5;
   const avgH = (leftH + rightH) * 0.5;
-  if (avgW < roiW * 0.2 || avgH < roiH * 0.2) return false;
+  if (avgW < roiW * 0.15 || avgH < roiH * 0.15) return false;
 
   const aspect = avgW / Math.max(1, avgH);
-  if (aspect < 0.38 || aspect > 1.22) return false;
+  if (aspect < 0.3 || aspect > 1.45) return false;
 
   return true;
 }

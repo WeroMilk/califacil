@@ -30,10 +30,11 @@ import {
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
   califacilMobileAnswerSheetGuideInViewportPx,
-  califacilViewfinderGuideInViewportPx,
+  califacilMobileScannerGuideInViewportPx,
   captureVideoFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
+  detectMobileLiveSheetQuad,
   estimateCanvasShadowAsymmetry,
   detectLargestQuadInRoiCanvas,
   detectAnswerSheetQuadViaAlignStrips,
@@ -534,6 +535,7 @@ export default function CalificarPage() {
   const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
+  const [scannerViewportPx, setScannerViewportPx] = useState({ w: 0, h: 0 });
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [mobileSheetFillRatio, setMobileSheetFillRatio] = useState(0);
@@ -727,9 +729,11 @@ export default function CalificarPage() {
   );
 
   const mobileViewfinderGuideRect = useMemo(() => {
-    if (!liveVideoLayout) return null;
-    return califacilViewfinderGuideInViewportPx(liveVideoLayout);
-  }, [liveVideoLayout]);
+    const w = scannerViewportPx.w;
+    const h = scannerViewportPx.h;
+    if (w < 40 || h < 40) return null;
+    return califacilMobileScannerGuideInViewportPx(w, h);
+  }, [scannerViewportPx]);
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
@@ -869,6 +873,7 @@ export default function CalificarPage() {
     if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
     const { width: cw, height: ch } = container.getBoundingClientRect();
     if (cw < 20 || ch < 20) return;
+    setScannerViewportPx({ w: cw, h: ch });
     setLiveVideoLayout(
       getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
     );
@@ -2170,13 +2175,9 @@ export default function CalificarPage() {
             setMobileScannerLowLight(false);
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
-            let roiQuadRaw: RoiQuad | null = stripQuad;
+            let roiQuadRaw: RoiQuad | null = detectMobileLiveSheetQuad(roiCanvas);
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
-
-            if (!roiQuadRaw) {
-              roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
-            }
 
             let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
             let fiducialCount = fiducialCorners.filter(Boolean).length;

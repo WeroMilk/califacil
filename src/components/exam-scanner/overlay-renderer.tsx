@@ -52,6 +52,7 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
     !smoothPoly && guideRect && guideRect.width > 40
       ? guideRectToViewportQuad(guideRect)
       : null;
+  const guidePoints = guideQuad?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
   const cornerGuides = useMemo(() => {
     if (smoothPoly) {
@@ -93,11 +94,25 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
             />
             {cornerPaths(smoothPoly, bracketLen, bracketStroke, 3.5)}
           </>
-        ) : (
+        ) : guideQuad ? (
           <>
-            <rect width="100%" height="100%" fill="rgba(0,0,0,0.38)" className="exam-scanner-dim" />
-            {guideQuad ? cornerPaths(guideQuad, bracketLen, bracketStroke, 3.25) : null}
+            <defs>
+              <mask id={maskId}>
+                <rect width="100%" height="100%" fill="white" />
+                <polygon points={guidePoints} fill="black" />
+              </mask>
+            </defs>
+            <rect
+              width="100%"
+              height="100%"
+              fill="rgba(0,0,0,0.45)"
+              mask={`url(#${maskId})`}
+              className="exam-scanner-dim"
+            />
+            {cornerPaths(guideQuad, bracketLen, bracketStroke, 3.25)}
           </>
+        ) : (
+          <rect width="100%" height="100%" fill="rgba(0,0,0,0.18)" className="exam-scanner-dim" />
         )}
       </svg>
 
