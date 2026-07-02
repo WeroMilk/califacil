@@ -1,12 +1,26 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  califacilStaticFiducialCornerGuidesInViewportPx,
+  type CalifacilSheetCornerGuidePx,
+} from '@/lib/omrScan';
 
 export type ViewportPoint = { x: number; y: number };
 
+export type ViewfinderGuideRectPx = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 type Props = {
   documentPolygon?: ViewportPoint[] | null;
+  /** Marco guía carta en pantalla (cuando aún no hay detección de franjas). */
+  guideRect?: ViewfinderGuideRectPx | null;
+  fiducialCorners?: [boolean, boolean, boolean, boolean];
   detected?: boolean;
   hint?: string;
   examTitle?: string;
@@ -60,26 +74,50 @@ function useSmoothedPolygon(target: ViewportPoint[] | null): ViewportPoint[] | n
   return display;
 }
 
-/** Esquinas estilo ZipGrade: marcos negros en L en cada vértice del documento. */
-function zipgradeCornerBrackets(
-  poly: ViewportPoint[],
-  len = 32,
-  stroke = 'rgba(0,0,0,0.88)',
-  sw = 3.25
-) {
-  const [tl, tr, br, bl] = poly;
+function viewportPolygonToGuideRect(poly: ViewportPoint[]): ViewfinderGuideRectPx {
+  const xs = poly.map((p) => p.x);
+  const ys = poly.map((p) => p.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+  return {
+    left,
+    top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+  };
+}
+
+function ZipgradeCornerFrame({
+  guide,
+  detected,
+  sheetDetected,
+}: {
+  guide: CalifacilSheetCornerGuidePx;
+  detected: boolean;
+  sheetDetected: boolean;
+}) {
   return (
-    <>
-      <path d={`M ${tl.x} ${tl.y + len} L ${tl.x} ${tl.y} L ${tl.x + len} ${tl.y}`} fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round" />
-      <path d={`M ${tr.x - len} ${tr.y} L ${tr.x} ${tr.y} L ${tr.x} ${tr.y + len}`} fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round" />
-      <path d={`M ${br.x} ${br.y - len} L ${br.x} ${br.y} L ${br.x - len} ${br.y}`} fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round" />
-      <path d={`M ${bl.x + len} ${bl.y} L ${bl.x} ${bl.y} L ${bl.x} ${bl.y - len}`} fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round" />
-    </>
+    <div
+      className={cn(
+        'absolute z-20 rounded-lg border-[2.5px]',
+        detected
+          ? 'border-emerald-400 bg-white/55 shadow-[0_0_0_2px_rgba(52,211,153,0.4)]'
+          : sheetDetected
+            ? 'border-black/80 bg-white/45 shadow-[0_2px_10px_rgba(0,0,0,0.22)]'
+            : 'border-white/90 bg-white/40 shadow-[0_2px_12px_rgba(0,0,0,0.25)]'
+      )}
+      style={{ left: guide.left, top: guide.top, width: guide.size, height: guide.size }}
+      aria-hidden
+    />
   );
 }
 
 export function IphoneDocumentScannerOverlay({
   documentPolygon,
+  guideRect,
+  fiducialCorners = [false, false, false, false],
   detected = false,
   hint = 'Encuadra la hoja dentro del visor.',
   examTitle,
@@ -88,6 +126,19 @@ export function IphoneDocumentScannerOverlay({
   const poly =
     documentPolygon && documentPolygon.length === 4 ? documentPolygon : null;
   const smoothPoly = useSmoothedPolygon(poly);
+  const sheetTracked = smoothPoly !== null;
+
+  const activeGuideRect = useMemo(() => {
+    if (smoothPoly) return viewportPolygonToGuideRect(smoothPoly);
+    return guideRect ?? null;
+  }, [smoothPoly, guideRect]);
+
+  const cornerGuides = useMemo(() => {
+    if (!activeGuideRect || activeGuideRect.width < 40 || activeGuideRect.height < 40) {
+      return null;
+    }
+    return califacilStaticFiducialCornerGuidesInViewportPx(activeGuideRect);
+  }, [activeGuideRect]);
 
   const statusLine = detected
     ? captureProgress >= 1
@@ -99,36 +150,18 @@ export function IphoneDocumentScannerOverlay({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10">
-      {smoothPoly ? (
-        <svg className="absolute inset-0 h-full w-full" aria-hidden>
-          {zipgradeCornerBrackets(
-            smoothPoly,
-            detected ? 34 : 28,
-            detected ? 'rgba(0,0,0,0.92)' : 'rgba(255,255,255,0.82)',
-            detected ? 3.5 : 3
-          )}
-        </svg>
-      ) : (
-        <>
-          {[
-            { left: '10%', top: '12%' },
-            { right: '10%', top: '12%' },
-            { right: '10%', bottom: '14%' },
-            { left: '10%', bottom: '14%' },
-          ].map((style, i) => (
-            <div
-              key={i}
-              className="absolute h-14 w-14 rounded-lg border-[2.5px] border-white/55"
-              style={style}
-              aria-hidden
-            />
-          ))}
-        </>
-      )}
+      {cornerGuides?.map((g, index) => (
+        <ZipgradeCornerFrame
+          key={index}
+          guide={g}
+          detected={fiducialCorners[index] ?? false}
+          sheetDetected={sheetTracked || detected}
+        />
+      ))}
 
       {(examTitle || statusLine) && (
         <div
-          className="absolute left-1/2 z-20 max-w-[min(92%,20rem)] -translate-x-1/2 text-center"
+          className="absolute left-1/2 z-30 max-w-[min(92%,20rem)] -translate-x-1/2 text-center"
           style={{ top: 'max(3.25rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' }}
         >
           <div

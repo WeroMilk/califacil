@@ -29,6 +29,7 @@ import {
   califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
+  califacilMobileAnswerSheetGuideInViewportPx,
   captureVideoFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -714,6 +715,11 @@ export default function CalificarPage() {
         : null,
     [reviewOmrGeometry, currentChunk.length]
   );
+
+  const mobileViewfinderGuideRect = useMemo(() => {
+    if (!liveVideoLayout) return null;
+    return califacilMobileAnswerSheetGuideInViewportPx(liveVideoLayout);
+  }, [liveVideoLayout]);
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
@@ -3955,6 +3961,8 @@ export default function CalificarPage() {
                     </div>
                     <IphoneDocumentScannerOverlay
                       documentPolygon={mobileDocumentPolygon}
+                      guideRect={mobileViewfinderGuideRect}
+                      fiducialCorners={mobileFiducialCorners}
                       detected={cornersAlignedView}
                       hint="Encuadra la hoja: deben verse las franjas negras laterales."
                       examTitle={exam.title}

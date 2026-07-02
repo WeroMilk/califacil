@@ -24,8 +24,8 @@ export const CALIFACIL_VIEWFINDER_GUIDE = {
   /** Fracción máxima de alto del fotograma (carta vertical). */
   maxHeightFrac: 0.92,
   centerXFrac: 0.5,
-  /** Ligeramente arriba del centro para dejar espacio al botón de captura. */
-  centerYFrac: 0.47,
+  /** Centrado vertical (sin barra de obturador en móvil). */
+  centerYFrac: 0.5,
   /** Relación ancho÷alto del papel (carta vertical). */
   aspectRatio: 8.5 / 11,
 } as const;
