@@ -2192,7 +2192,7 @@ function findDarkColumnRuns(
   return runs;
 }
 
-/** Rechaza cuads pegados al borde del ROI (mesa/fondo), no hojas bien encuadradas que llenan el visor. */
+/** Rechaza cuads que cubren casi todo el ROI sin margen (fondo/mesa, no hoja encuadrada). */
 function quadCoversFullRoi(
   quad: [Point, Point, Point, Point],
   roiW: number,
@@ -2200,20 +2200,7 @@ function quadCoversFullRoi(
 ): boolean {
   const area = quadShoelaceArea(quad);
   const roiArea = Math.max(1, roiW * roiH);
-  if (area > roiArea * 0.97) return true;
-  const marginX = roiW * 0.012;
-  const marginY = roiH * 0.012;
-  const [tl, tr, br, bl] = quad;
-  const flushWithRoi =
-    tl.x <= marginX &&
-    bl.x <= marginX &&
-    tr.x >= roiW - marginX &&
-    br.x >= roiW - marginX &&
-    tl.y <= marginY &&
-    tr.y <= marginY &&
-    bl.y >= roiH - marginY &&
-    br.y >= roiH - marginY;
-  return flushWithRoi && area > roiArea * 0.88;
+  return area > roiArea * 0.995;
 }
 
 /** Hoja blanca sobre fondo oscuro (mesa): bbox de píxeles claros — solo si parece hoja carta. */
@@ -2272,7 +2259,7 @@ function detectPaperSheetQuadViaBrightness(
     { x: maxX, y: maxY },
     { x: minX, y: maxY },
   ];
-  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
+  if (!isValidMobileRoiQuad(quad, w, h)) return null;
   return quad;
 }
 
@@ -2370,7 +2357,7 @@ export function detectAnswerSheetQuadViaAlignStrips(
   let paperLeft = leftRun.start;
   let paperRight = rightRun.end;
   const innerW = paperRight - paperLeft;
-  if (innerW < w * 0.14 || innerW > w * 0.72) return null;
+  if (innerW < w * 0.14 || innerW > w * 0.94) return null;
 
   const spanL = measureStripVerticalSpan(data, w, h, leftRun.start, leftRun.end);
   const spanR = measureStripVerticalSpan(data, w, h, rightRun.start, rightRun.end);
@@ -2408,7 +2395,7 @@ export function detectAnswerSheetQuadViaAlignStrips(
     { x: paperRight, y: bottom },
     { x: paperLeft, y: bottom },
   ];
-  if (!isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) return null;
+  if (!isValidMobileRoiQuad(quad, w, h)) return null;
 
   const aspect = (paperRight - paperLeft) / Math.max(1, bottom - top);
   if (aspect < pageAspect * 0.48 || aspect > pageAspect * 1.42) return null;
@@ -2489,7 +2476,7 @@ export function detectAnswerSheetQuadInRoi(
 
   for (const src of sources) {
     const stripQuad = detectAnswerSheetQuadViaAlignStrips(src);
-    if (stripQuad && !quadCoversFullRoi(stripQuad, w, h)) return stripQuad;
+    if (stripQuad) return stripQuad;
   }
   return null;
 }
@@ -2512,7 +2499,7 @@ export function detectLargestQuadInRoiCanvas(
   let bestScore = 0;
   for (const src of sources) {
     const stripQuad = detectAnswerSheetQuadViaAlignStrips(src);
-    if (stripQuad && isValidMobileRoiQuad(stripQuad, w, h) && !quadCoversFullRoi(stripQuad, w, h)) {
+    if (stripQuad && isValidMobileRoiQuad(stripQuad, w, h)) {
       const area = quadShoelaceArea(stripQuad);
       const score = area + w * h * 0.35;
       if (score > bestScore) {
@@ -2527,7 +2514,7 @@ export function detectLargestQuadInRoiCanvas(
       detectCalifacilQuad(src),
     ];
     for (const quad of candidates) {
-      if (!quad || !isValidMobileRoiQuad(quad, w, h) || quadCoversFullRoi(quad, w, h)) continue;
+      if (!quad || !isValidMobileRoiQuad(quad, w, h)) continue;
       const area = quadShoelaceArea(quad);
       if (area > bestScore) {
         bestScore = area;

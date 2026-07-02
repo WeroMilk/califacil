@@ -1,4 +1,4 @@
-export const CAPTURE_STABLE_TICKS_REQUIRED = 4;
+export const CAPTURE_STABLE_TICKS_REQUIRED = 3;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;

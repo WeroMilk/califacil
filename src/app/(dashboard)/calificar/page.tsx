@@ -574,6 +574,7 @@ export default function CalificarPage() {
   const fiducialStableTicksRef = useRef(0);
   /** Último cuadrilátero detectado en el ROI (coordenadas del canvas ROI). */
   const lastRoiQuadRef = useRef<RoiQuad | null>(null);
+  const lastRawRoiQuadRef = useRef<RoiQuad | null>(null);
   const smoothedRoiQuadRef = useRef<RoiQuad | null>(null);
   /** Metadatos del último ROI válido (para warp en alta resolución). */
   const lastRoiCaptureMetaRef = useRef<MobileGuideRoiCapture | null>(null);
@@ -993,6 +994,7 @@ export default function CalificarPage() {
     cornerStableTicksRef.current = 0;
     fiducialStableTicksRef.current = 0;
     lastRoiQuadRef.current = null;
+    lastRawRoiQuadRef.current = null;
     smoothedRoiQuadRef.current = null;
     lastRoiCaptureMetaRef.current = null;
     documentPolygonHoldRef.current = null;
@@ -1831,7 +1833,15 @@ export default function CalificarPage() {
     const ro = new ResizeObserver(() => updateLiveVideoLayout());
     ro.observe(container);
     updateLiveVideoLayout();
-    return () => ro.disconnect();
+    const video = videoRef.current;
+    const onVideoLayout = () => updateLiveVideoLayout();
+    video?.addEventListener('loadedmetadata', onVideoLayout);
+    video?.addEventListener('resize', onVideoLayout);
+    return () => {
+      ro.disconnect();
+      video?.removeEventListener('loadedmetadata', onVideoLayout);
+      video?.removeEventListener('resize', onVideoLayout);
+    };
   }, [cameraOpen, updateLiveVideoLayout]);
 
   useEffect(() => {
@@ -2116,6 +2126,9 @@ export default function CalificarPage() {
             nextDelay = 150;
             return;
           }
+          if (isMobile && !liveVideoLayoutRef.current) {
+            updateLiveVideoLayout();
+          }
           if (!isMobile && !scanCtx) return;
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
@@ -2147,6 +2160,7 @@ export default function CalificarPage() {
               setLiveShowBubbleOverlay(false);
               cornerStableTicksRef.current = 0;
               lastRoiQuadRef.current = null;
+              lastRawRoiQuadRef.current = null;
               smoothedRoiQuadRef.current = null;
               lastRoiCaptureMetaRef.current = null;
               nextDelay = 200;
@@ -2159,6 +2173,10 @@ export default function CalificarPage() {
             let roiQuadRaw: RoiQuad | null = stripQuad;
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
+
+            if (!roiQuadRaw) {
+              roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
+            }
 
             let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
             let fiducialCount = fiducialCorners.filter(Boolean).length;
@@ -2174,9 +2192,9 @@ export default function CalificarPage() {
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
-                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.44)
+                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.38)
                 : null;
-            const fiducialsLocked = fiducialCount >= 4;
+            const fiducialsLocked = fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
@@ -2249,6 +2267,7 @@ export default function CalificarPage() {
                   setShutterFlash(true);
                   window.setTimeout(() => setShutterFlash(false), 220);
                   triggerMobileSheetCaptureRef.current(video, {
+                    roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
                     roiCapture,
                     force: true,
                   });
@@ -2262,6 +2281,7 @@ export default function CalificarPage() {
               setMobileStableTicks(0);
               if (!documentPolygonHoldRef.current) {
                 lastRoiQuadRef.current = null;
+                lastRawRoiQuadRef.current = null;
               }
               setCornersAlignedView(false);
               lowVisibilityTicksRef.current += 1;
@@ -2284,7 +2304,7 @@ export default function CalificarPage() {
 
             fiducialStableTicksRef.current = 0;
 
-            if (fillRatio < (stripAligned ? 0.08 : MOBILE_MIN_ROI_FILL_RATIO)) {
+            if (fillRatio < (stripAligned ? 0.06 : MOBILE_MIN_ROI_FILL_RATIO)) {
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               lastRoiQuadRef.current = roiQuad;
@@ -2298,7 +2318,8 @@ export default function CalificarPage() {
               return;
             }
 
-            if (!lastRoiQuadRef.current) {
+            if (!lastRawRoiQuadRef.current) {
+              lastRawRoiQuadRef.current = roiQuadRaw;
               lastRoiQuadRef.current = roiQuad;
               cornerStableTicksRef.current = 1;
               setMobileStableTicks(1);
@@ -2309,12 +2330,13 @@ export default function CalificarPage() {
             }
 
             const stable = mobileRoiQuadsAreStable(
-              lastRoiQuadRef.current,
-              roiQuad,
+              lastRawRoiQuadRef.current,
+              roiQuadRaw!,
               roiW,
               roiH,
-              0.11
+              0.15
             );
+            lastRawRoiQuadRef.current = roiQuadRaw!;
             lastRoiQuadRef.current = roiQuad;
             if (!stable) {
               cornerStableTicksRef.current = 0;
@@ -2716,6 +2738,7 @@ export default function CalificarPage() {
     stopLiveCamera,
     sheets,
     supportsCalifacil,
+    updateLiveVideoLayout,
   ]);
 
   startLiveCameraRef.current = startLiveCamera;
@@ -3953,9 +3976,9 @@ export default function CalificarPage() {
               examTitle={exam.title}
               documentPolygon={mobileDocumentPolygon}
               guideRect={mobileViewfinderGuideRect}
-              aligned={cornersAlignedView || mobileFiducialCount >= 4}
+              aligned={cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS}
               stableProgress={
-                cornersAlignedView || mobileFiducialCount >= 4
+                cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
                   ? Math.min(1, mobileStableTicks / CAPTURE_STABLE_TICKS_REQUIRED)
                   : 0
               }

@@ -10,7 +10,8 @@ export type ScannerUiInput = {
 
 export function deriveDetectionPhase(input: ScannerUiInput): DocumentDetectionPhase {
   if (input.scanBusy) return 'capturing';
-  if (input.lowLight || !input.documentVisible) return 'lost';
+  if (input.lowLight) return 'lost';
+  if (!input.documentVisible && !input.aligned) return 'lost';
   if (input.aligned && input.stableProgress >= 0.92) return 'stable';
   return 'searching';
 }
@@ -21,6 +22,7 @@ export function deriveStatusLabel(
 ): string {
   if (phase === 'capturing') return '✅ Capturando...';
   if (phase === 'lost') return 'Coloca el examen dentro del marco';
+  if (phase === 'searching' && stableProgress > 0.05) return 'Mantén quieto...';
   if (phase === 'searching') return 'Buscando examen...';
   if (stableProgress < 1) return 'Mantén quieto...';
   return '✅ Capturando...';
