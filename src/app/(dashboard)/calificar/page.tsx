@@ -84,6 +84,7 @@ import {
   IphoneDocumentScannerOverlay,
   IosCaptureFlashOverlay,
 } from '@/components/iphone-document-scanner-overlay';
+import { CalificarMobileHome } from '@/components/calificar-mobile-home';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
 import {
   MobileZipGradeReviewScreen,
@@ -3316,10 +3317,35 @@ export default function CalificarPage() {
     setPhase('elegir');
   }, [clearMobileSnapshots]);
 
+  useEffect(() => {
+    const immersive =
+      isMobile &&
+      (phase === 'capturar' ||
+        mobileCaptureReview !== null ||
+        zipGradeReviewOpen ||
+        (phase === 'ver_resultados' && (zipGradeModalOpen || zipGradeReviewOpen)));
+    document.documentElement.classList.toggle('calificar-immersive', immersive);
+    return () => {
+      document.documentElement.classList.remove('calificar-immersive');
+    };
+  }, [
+    isMobile,
+    phase,
+    mobileCaptureReview,
+    zipGradeReviewOpen,
+    zipGradeModalOpen,
+  ]);
+
   if (!user) return null;
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8">
+    <div
+      className={cn(
+        'mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8',
+        isMobile && 'max-w-none gap-0 pb-0 lg:gap-3 lg:pb-8',
+        isMobile && phase === 'elegir' && 'bg-[#f2f2f7] lg:bg-transparent'
+      )}
+    >
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -3455,6 +3481,39 @@ export default function CalificarPage() {
         </DialogContent>
       </Dialog>
 
+      {isMobile && phase === 'elegir' && (
+        <CalificarMobileHome
+          exams={publishedExams}
+          examsLoading={examsLoading}
+          examId={examId}
+          exam={exam}
+          examLoading={examLoading}
+          students={sortedStudents}
+          selectedStudentId={selectedStudentId}
+          selectedStudentName={selectedStudentName}
+          detectedControlNumber={detectedControlNumber}
+          autoIdentifyByControl={autoIdentifyByControl}
+          canGradeStudents={canGradeStudents}
+          supportsCalifacil={supportsCalifacil}
+          virtualKeyReady={virtualKeyReadyCount}
+          virtualKeyTotal={virtualKeyMcTotal}
+          sheetIndex={sheetIndex}
+          totalSheets={totalSheets}
+          scanBusy={scanBusy}
+          onSelectExam={(id) => {
+            setExamId(id);
+            resetFlow();
+          }}
+          onSelectStudent={handleStudentChange}
+          onScan={openMobileCapture}
+        />
+      )}
+
+      <div
+        className={cn(
+          isMobile && (phase === 'elegir' || phase === 'ver_resultados') && 'hidden lg:block'
+        )}
+      >
       <div>
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
@@ -3701,6 +3760,7 @@ export default function CalificarPage() {
 
         </CardContent>
       </Card>
+      </div>
 
       {useLiveCameraUi &&
         phase === 'capturar' &&

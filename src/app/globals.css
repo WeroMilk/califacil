@@ -262,6 +262,30 @@ select:-webkit-autofill:focus {
   }
 }
 
+/* Calificar: modo inmersivo (cámara / revisión) — oculta tab bar móvil */
+html.calificar-immersive nav[aria-label='Navegación principal'] {
+  display: none;
+}
+
+html.calificar-immersive main {
+  padding-bottom: 0 !important;
+}
+
+@keyframes calificar-mobile-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.calificar-mobile-enter {
+  animation: calificar-mobile-enter 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* QR Code styles */
 .qr-container {
   background: white;

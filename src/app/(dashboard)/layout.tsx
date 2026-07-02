@@ -96,6 +96,9 @@ export default function DashboardLayout({
     { href: '/calificar', label: 'Calificar', icon: Camera },
   ] as const;
 
+  const isCalificarRoute =
+    pathname === '/calificar' || pathname.startsWith('/calificar/');
+
   return (
     <div className="h-full min-h-0 overflow-hidden bg-orange-50/25 backdrop-blur-[1px]">
       {/* Escritorio: barra lateral */}
@@ -151,7 +154,12 @@ export default function DashboardLayout({
 
       <div className="flex h-full min-h-0 flex-col overflow-hidden lg:ml-64">
         {/* Móvil: cabecera compacta + cuenta */}
-        <header className="z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden">
+        <header
+          className={cn(
+            'z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden',
+            isCalificarRoute && 'hidden'
+          )}
+        >
           <div
             className="flex items-center justify-between gap-2 px-3 py-2"
             style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
@@ -193,7 +201,10 @@ export default function DashboardLayout({
 
         <main
           className={cn(
-            'mx-auto min-h-0 w-full max-w-[1500px] flex-1 overscroll-contain px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-5 sm:pt-4 lg:px-6 lg:pb-4 xl:px-8',
+            'mx-auto min-h-0 w-full max-w-[1500px] flex-1 overscroll-contain sm:px-5 sm:pt-4 lg:px-6 lg:pb-4 xl:px-8',
+            isCalificarRoute
+              ? 'px-0 pt-0 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:px-6 lg:pt-4 lg:pb-4'
+              : 'px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3',
             dashboardHome ? 'flex flex-col overflow-hidden' : 'app-scroll overflow-y-auto'
           )}
         >
