@@ -4636,6 +4636,16 @@ const FRAME_GRID_SCAN_THRESHOLDS: ScanThresholds = {
   ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
 };
 
+/** Umbrales relajados para lectura en hoja ya enderezada (foto móvil / sombras). */
+const MOBILE_WARPED_SCAN_THRESHOLDS: ScanThresholds = {
+  minMarkDarkness: 0.052,
+  minBestVsSecondGap: 0.026,
+  minBestVsSecondRatio: 1.2,
+  minCenterVsRingDelta: 0.026,
+  minSolidCenterDarkness: 0.15,
+  ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
+};
+
 /** Umbrales más permisivos para burbujas del número de control (tinta más suave / foto móvil). */
 const CONTROL_NUMBER_SCAN_THRESHOLDS: ScanThresholds = {
   minMarkDarkness: 0.05,
@@ -5017,7 +5027,7 @@ function expandControlNumberGeometryForSampling(
   geometry: CalifacilControlNumberGeometry
 ): CalifacilControlNumberGeometry {
   const expandX = 0.2;
-  const expandY = 0.42;
+  const expandY = 0.48;
   const cells = geometry.cells.map((col) =>
     col.map((cell) => {
       const x = Math.max(0, cell.x - cell.w * (expandX / 2));
@@ -5039,10 +5049,13 @@ export function readAnswerSheetControlNumberFromCanvas(
   if (canvas.width < 40 || canvas.height < 40) {
     return { digits: [], controlNumber: null };
   }
-  const canvases: HTMLCanvasElement[] = [canvas];
-  if (Math.max(canvas.width, canvas.height) > 720) {
-    const down = downscaleCanvasForOmrScan(canvas, 720);
-    if (down !== canvas) canvases.push(down);
+  const canvases: HTMLCanvasElement[] = [];
+  const pre = prepareAnswerSheetCaptureCanvas(canvas);
+  if (pre) canvases.push(pre);
+  if (!canvases.includes(canvas)) canvases.push(canvas);
+  if (Math.max(canvas.width, canvas.height) > 900) {
+    const down = downscaleCanvasForOmrScan(canvas, 960);
+    if (down !== canvas && !canvases.includes(down)) canvases.push(down);
   }
   const shifts = [
     { dx: 0, dy: 0 },
@@ -6743,14 +6756,7 @@ export function scanWarpedMobileAnswerSheetFast(
   if (!gridValidation.ok) {
     geometry = buildAnswerSheetOmrGeometry(rows, columns, warped.width, warped.height);
   }
-  const thresholds: ScanThresholds = {
-    minMarkDarkness: 0.072,
-    minBestVsSecondGap: 0.038,
-    minBestVsSecondRatio: 1.35,
-    minCenterVsRingDelta: 0.04,
-    minSolidCenterDarkness: 0.24,
-    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
-  };
+  const thresholds: ScanThresholds = MOBILE_WARPED_SCAN_THRESHOLDS;
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
     warped,
     geometry,
@@ -6767,6 +6773,86 @@ export function scanWarpedMobileAnswerSheetFast(
     reviewSourceCanvas: warped,
     controlNumberDigits: [],
     controlNumber: null,
+  };
+}
+
+/**
+ * Lectura móvil post-captura: prueba CLAHE, varias escalas y algoritmos;
+ * elige el mejor resultado y el número de control más completo.
+ */
+export function scanWarpedMobileCaptureSheet(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const emptyRows = (): OmrScanRowDetail[] =>
+    Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  const empty: OmrScanMetaResult = {
+    picks: Array(rows).fill(null),
+    rows: emptyRows(),
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: null,
+    reviewSourceCanvas: warped,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+  if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
+    return empty;
+  }
+
+  const sources: HTMLCanvasElement[] = [warped];
+  const pre = prepareAnswerSheetCaptureCanvas(warped);
+  if (pre && pre !== warped) sources.push(pre);
+
+  let bestMeta: OmrScanMetaResult | null = null;
+  let bestScore = -1;
+  let bestControl = readAnswerSheetControlNumberFromCanvas(warped, rows);
+  let bestCtrlScore =
+    scoreControlNumberDigits(bestControl.digits) + (bestControl.controlNumber ? 1500 : 0);
+
+  for (const src of sources) {
+    const ctrl = readAnswerSheetControlNumberFromCanvas(src, rows);
+    const ctrlScore =
+      scoreControlNumberDigits(ctrl.digits) + (ctrl.controlNumber ? 1500 : 0);
+    if (ctrlScore > bestCtrlScore) {
+      bestCtrlScore = ctrlScore;
+      bestControl = ctrl;
+    }
+
+    const mid = downscaleCanvasForOmrScan(src, 960);
+    const hi = downscaleCanvasForOmrScan(src, 1100);
+    const tableFrame = califacilOmrTableFrameNormRect(rows);
+    const candidates: OmrScanMetaResult[] = [
+      scanWarpedMobileAnswerSheetFast(hi, columns, rows),
+      scanWarpedMobileAnswerSheetFast(mid, columns, rows),
+      scanWarpedWithNormTableFrame(mid, columns, rows, tableFrame),
+      scanWarpedWithBestTableFrame(mid, columns, rows).meta,
+      scanCalifacilOmrSheetWithMeta(src, columns, {
+        skipGuideCrop: true,
+        geometryMode: 'fullSheet',
+        preserveInputCanvas: true,
+        fixedTemplateAnchor: true,
+        answerSheetTemplateOnly: true,
+        rowCount: rows,
+      }),
+    ];
+
+    for (const meta of candidates) {
+      const score = scoreOmrMetaPicks(meta, rows);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMeta = meta;
+      }
+    }
+  }
+
+  if (!bestMeta) return empty;
+  return {
+    ...bestMeta,
+    controlNumberDigits: bestControl.digits,
+    controlNumber: bestControl.controlNumber,
   };
 }
 
