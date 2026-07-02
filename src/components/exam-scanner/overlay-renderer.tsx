@@ -5,7 +5,12 @@ import {
   califacilFiducialCornerGuidesOnViewportQuad,
   califacilStaticFiducialCornerGuidesInViewportPx,
 } from '@/lib/omrScan';
-import { phaseStrokeColor, guideRectToViewportQuad } from '@/components/exam-scanner/document-detector';
+import {
+  createStaticScannerGuide,
+  guideRectToViewportQuad,
+  phaseStrokeColor,
+  readScannerViewportPx,
+} from '@/components/exam-scanner/document-detector';
 import { useSmoothedPolygon } from '@/components/exam-scanner/use-smoothed-polygon';
 import type {
   DocumentDetectionPhase,
@@ -39,37 +44,42 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
   const stroke = phaseStrokeColor(phase);
   const points = smoothPoly?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
+  const staticGuide = useMemo(() => {
+    if (guideRect && guideRect.width > 40) return guideRect;
+    const { w, h } = readScannerViewportPx();
+    return createStaticScannerGuide(w, h);
+  }, [guideRect]);
+
+  const showDetectedMask = Boolean(smoothPoly) && (phase === 'stable' || phase === 'capturing');
+
   const bracketLen = useMemo(() => {
-    if (typeof window === 'undefined') return smoothPoly ? 38 : 30;
+    if (typeof window === 'undefined') return showDetectedMask ? 38 : 30;
     const vw = window.innerWidth;
-    return smoothPoly
+    return showDetectedMask
       ? Math.round(Math.min(44, Math.max(30, vw * 0.1)))
       : Math.round(Math.min(36, Math.max(26, vw * 0.085)));
-  }, [smoothPoly]);
+  }, [showDetectedMask]);
 
-  const bracketStroke = smoothPoly ? stroke : phaseStrokeColor(phase);
-  const guideQuad =
-    !smoothPoly && guideRect && guideRect.width > 40
-      ? guideRectToViewportQuad(guideRect)
-      : null;
+  const bracketStroke = showDetectedMask ? stroke : phaseStrokeColor(phase);
+  const guideQuad = staticGuide ? guideRectToViewportQuad(staticGuide) : null;
   const guidePoints = guideQuad?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
   const cornerGuides = useMemo(() => {
-    if (smoothPoly) {
+    if (showDetectedMask && smoothPoly) {
       return califacilFiducialCornerGuidesOnViewportQuad(
         smoothPoly as [ViewportPoint, ViewportPoint, ViewportPoint, ViewportPoint]
       );
     }
-    if (guideRect && guideRect.width > 40) {
-      return califacilStaticFiducialCornerGuidesInViewportPx(guideRect);
+    if (staticGuide) {
+      return califacilStaticFiducialCornerGuidesInViewportPx(staticGuide);
     }
     return null;
-  }, [smoothPoly, guideRect]);
+  }, [showDetectedMask, smoothPoly, staticGuide]);
 
   return (
     <div className="exam-scanner-overlay pointer-events-none absolute inset-0 z-10">
       <svg className="absolute inset-0 h-full w-full" aria-hidden>
-        {smoothPoly ? (
+        {showDetectedMask && smoothPoly ? (
           <>
             <defs>
               <mask id={maskId}>
@@ -88,7 +98,7 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
               points={points}
               fill="rgba(255,255,255,0.04)"
               stroke={stroke}
-              strokeWidth={phase === 'stable' || phase === 'capturing' ? 3.25 : 2.75}
+              strokeWidth={phase === 'capturing' ? 3.25 : 3}
               className="exam-scanner-border"
               style={{ stroke }}
             />
@@ -110,13 +120,26 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
               className="exam-scanner-dim"
             />
             {cornerPaths(guideQuad, bracketLen, bracketStroke, 3.25)}
+            {smoothPoly ? (
+              <>
+                <polygon
+                  points={points}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={2.5}
+                  className="exam-scanner-border"
+                  style={{ stroke }}
+                />
+                {cornerPaths(smoothPoly, bracketLen, stroke, 3)}
+              </>
+            ) : null}
           </>
         ) : (
           <rect width="100%" height="100%" fill="rgba(0,0,0,0.18)" className="exam-scanner-dim" />
         )}
       </svg>
 
-      {cornerGuides && !smoothPoly && phase === 'searching' && !guideQuad
+      {cornerGuides && !showDetectedMask && phase === 'searching' && !guideQuad
         ? cornerGuides.map((g, i) => (
             <div
               key={i}

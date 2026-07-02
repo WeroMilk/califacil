@@ -30,7 +30,6 @@ import {
   califacilImageToJpegDataUrl,
   califacilViewfinderNormRect,
   califacilMobileAnswerSheetGuideInViewportPx,
-  califacilMobileScannerGuideInViewportPx,
   captureVideoFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -88,6 +87,10 @@ import {
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
 import { ExamScannerScreen } from '@/components/exam-scanner';
+import {
+  createStaticScannerGuide,
+  readScannerViewportPx,
+} from '@/components/exam-scanner/document-detector';
 import {
   CAPTURE_STABLE_TICKS_REQUIRED,
   shouldTriggerAutoCapture,
@@ -535,7 +538,11 @@ export default function CalificarPage() {
   const [liveScanLockedRows, setLiveScanLockedRows] = useState<boolean[]>([]);
   const [liveScanAmbiguousRows, setLiveScanAmbiguousRows] = useState<boolean[]>([]);
   const [liveVideoLayout, setLiveVideoLayout] = useState<LiveVideoLetterbox | null>(null);
-  const [scannerViewportPx, setScannerViewportPx] = useState({ w: 0, h: 0 });
+  const [staticScannerGuideRect, setStaticScannerGuideRect] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const { w, h } = readScannerViewportPx();
+    return createStaticScannerGuide(w, h);
+  });
   const [liveShowBubbleOverlay, setLiveShowBubbleOverlay] = useState(false);
   const [cornersAlignedView, setCornersAlignedView] = useState(false);
   const [mobileSheetFillRatio, setMobileSheetFillRatio] = useState(0);
@@ -728,12 +735,23 @@ export default function CalificarPage() {
     [reviewOmrGeometry, currentChunk.length]
   );
 
-  const mobileViewfinderGuideRect = useMemo(() => {
-    const w = scannerViewportPx.w;
-    const h = scannerViewportPx.h;
-    if (w < 40 || h < 40) return null;
-    return califacilMobileScannerGuideInViewportPx(w, h);
-  }, [scannerViewportPx]);
+  const lockStaticScannerGuide = useCallback(() => {
+    setStaticScannerGuideRect((prev) => {
+      if (prev) return prev;
+      const container = mobileVideoViewportRef.current;
+      const measured = container?.getBoundingClientRect();
+      const w =
+        measured && measured.width >= 40 ? measured.width : readScannerViewportPx().w;
+      const h =
+        measured && measured.height >= 40 ? measured.height : readScannerViewportPx().h;
+      return createStaticScannerGuide(w, h);
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isMobile || phase !== 'capturar') return;
+    lockStaticScannerGuide();
+  }, [isMobile, phase, cameraOpen, cameraPortalReady, lockStaticScannerGuide]);
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
@@ -873,11 +891,11 @@ export default function CalificarPage() {
     if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
     const { width: cw, height: ch } = container.getBoundingClientRect();
     if (cw < 20 || ch < 20) return;
-    setScannerViewportPx({ w: cw, h: ch });
+    lockStaticScannerGuide();
     setLiveVideoLayout(
       getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
     );
-  }, []);
+  }, [lockStaticScannerGuide]);
 
   const setTorchEnabled = useCallback(
     async (enabled: boolean) => {
@@ -1065,6 +1083,7 @@ export default function CalificarPage() {
     setFlashMode('auto');
     flashModeRef.current = 'auto';
     setMobileDocumentPolygon(null);
+    setStaticScannerGuideRect(null);
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     clearAutoSnapshot();
@@ -3976,7 +3995,7 @@ export default function CalificarPage() {
               shutterFlash={shutterFlash}
               examTitle={exam.title}
               documentPolygon={mobileDocumentPolygon}
-              guideRect={mobileViewfinderGuideRect}
+              guideRect={staticScannerGuideRect}
               aligned={cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS}
               stableProgress={
                 cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
