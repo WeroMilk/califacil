@@ -286,6 +286,28 @@ html.calificar-immersive main {
   animation: calificar-mobile-enter 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.exam-scanner-border {
+  transition: stroke 200ms ease, stroke-width 200ms ease, fill 200ms ease;
+}
+
+.exam-scanner-dim {
+  transition: opacity 200ms ease;
+}
+
+.exam-scanner-status,
+.exam-scanner-hud,
+.exam-scanner-hud-btn,
+.exam-scanner-corner-fallback {
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.exam-scanner-root {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+
 /* QR Code styles */
 .qr-container {
   background: white;

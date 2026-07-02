@@ -1,0 +1,39 @@
+import type { DocumentDetectionPhase } from '@/components/exam-scanner/types';
+
+export type ScannerUiInput = {
+  documentVisible: boolean;
+  aligned: boolean;
+  stableProgress: number;
+  scanBusy: boolean;
+  lowLight?: boolean;
+};
+
+export function deriveDetectionPhase(input: ScannerUiInput): DocumentDetectionPhase {
+  if (input.scanBusy) return 'capturing';
+  if (input.lowLight || !input.documentVisible) return 'lost';
+  if (input.aligned && input.stableProgress >= 0.92) return 'stable';
+  return 'searching';
+}
+
+export function deriveStatusLabel(
+  phase: DocumentDetectionPhase,
+  stableProgress: number
+): string {
+  if (phase === 'capturing') return '✅ Capturando...';
+  if (phase === 'lost') return 'Coloca el examen dentro del marco';
+  if (phase === 'searching') return 'Buscando examen...';
+  if (stableProgress < 1) return 'Mantén quieto...';
+  return '✅ Capturando...';
+}
+
+export function phaseStrokeColor(phase: DocumentDetectionPhase): string {
+  switch (phase) {
+    case 'stable':
+    case 'capturing':
+      return 'rgb(52, 211, 153)';
+    case 'searching':
+      return 'rgb(255, 214, 10)';
+    default:
+      return 'rgb(255, 69, 58)';
+  }
+}

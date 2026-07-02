@@ -86,10 +86,11 @@ import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
+import { ExamScannerScreen } from '@/components/exam-scanner';
 import {
-  IphoneDocumentScannerOverlay,
-  IosCaptureFlashOverlay,
-} from '@/components/iphone-document-scanner-overlay';
+  CAPTURE_STABLE_TICKS_REQUIRED,
+  shouldTriggerAutoCapture,
+} from '@/components/exam-scanner/capture-controller';
 import { CalificarMobileHome } from '@/components/calificar-mobile-home';
 import {
   MobileZipGradeReviewScreen,
@@ -218,13 +219,12 @@ const SHADOW_AUTOTORCH_TICKS = 2;
 /** Ticks consecutivos en validación estricta antes de mostrar burbujas en vivo. */
 const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Fotogramas estables antes de auto-captura (~0,2 s con loop a 50 ms). */
-const CORNER_ALIGN_STABLE_TICKS = 4;
 /** Intervalo del loop de detección de documento en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 50;
 /** Mantiene el polígono visible un instante si la detección parpadea (fluidez iOS). */
 const DOCUMENT_POLYGON_HOLD_MS = 420;
 /** Tiempo mínimo de espera con hoja alineada antes de auto-captura. */
-const MOBILE_ALIGN_HOLD_MS = CORNER_ALIGN_STABLE_TICKS * MOBILE_CORNER_LOOP_MS;
+const MOBILE_ALIGN_HOLD_MS = CAPTURE_STABLE_TICKS_REQUIRED * MOBILE_CORNER_LOOP_MS;
 /** Tolerancia de alineación fiducial en captura móvil (más permisivo que escritorio). */
 const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 18;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
@@ -542,6 +542,7 @@ export default function CalificarPage() {
     [boolean, boolean, boolean, boolean]
   >([false, false, false, false]);
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
+  const [mobileScannerLowLight, setMobileScannerLowLight] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
@@ -2136,6 +2137,7 @@ export default function CalificarPage() {
             const { roiCanvas } = roiCapture;
             if (estimateCanvasMeanLuminance(roiCanvas) < MIN_FRAME_LUMINANCE) {
               setCornersAlignedView(false);
+              setMobileScannerLowLight(true);
               setMobileSheetFillRatio(0);
               setMobileFiducialCount(0);
               setMobileFiducialCorners([false, false, false, false]);
@@ -2154,6 +2156,7 @@ export default function CalificarPage() {
               setLiveStatus('Mejora la iluminación o activa el flash.');
               return;
             }
+            setMobileScannerLowLight(false);
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
             let roiQuadRaw: RoiQuad | null = stripQuad;
@@ -2232,14 +2235,16 @@ export default function CalificarPage() {
                 setMobileStableTicks(fiducialStableTicksRef.current);
                 setCornersAlignedView(true);
                 setLiveStatus(
-                  fiducialStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS
+                  fiducialStableTicksRef.current < CAPTURE_STABLE_TICKS_REQUIRED
                     ? 'Mantén quieto — captura automática…'
                     : 'Calificando…'
                 );
                 if (
-                  autoShutterEnabledRef.current &&
-                  !mobileCaptureBusyRef.current &&
-                  fiducialStableTicksRef.current >= CORNER_ALIGN_STABLE_TICKS
+                  shouldTriggerAutoCapture({
+                    autoShutterEnabled: autoShutterEnabledRef.current,
+                    captureBusy: mobileCaptureBusyRef.current,
+                    stableTicks: fiducialStableTicksRef.current,
+                  })
                 ) {
                   fiducialStableTicksRef.current = 0;
                   setMobileStableTicks(0);
@@ -2327,11 +2332,11 @@ export default function CalificarPage() {
             lowVisibilityTicksRef.current = 0;
             setMobileStableTicks(cornerStableTicksRef.current);
             setCornersAlignedView(true);
-            if (cornerStableTicksRef.current < CORNER_ALIGN_STABLE_TICKS) {
+            if (cornerStableTicksRef.current < CAPTURE_STABLE_TICKS_REQUIRED) {
               const secsLeft = Math.max(
                 1,
                 Math.ceil(
-                  ((CORNER_ALIGN_STABLE_TICKS - cornerStableTicksRef.current) *
+                  ((CAPTURE_STABLE_TICKS_REQUIRED - cornerStableTicksRef.current) *
                     MOBILE_CORNER_LOOP_MS) /
                     1000
                 )
@@ -2346,9 +2351,11 @@ export default function CalificarPage() {
             }
 
             if (
-              autoShutterEnabledRef.current &&
-              !mobileCaptureBusyRef.current &&
-              cornerStableTicksRef.current >= CORNER_ALIGN_STABLE_TICKS
+              shouldTriggerAutoCapture({
+                autoShutterEnabled: autoShutterEnabledRef.current,
+                captureBusy: mobileCaptureBusyRef.current,
+                stableTicks: cornerStableTicksRef.current,
+              })
             ) {
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
               const captureRoi = lastRoiCaptureMetaRef.current;
@@ -3931,14 +3938,7 @@ export default function CalificarPage() {
         cameraPortalReady &&
         typeof document !== 'undefined' &&
         createPortal(
-          <div
-            ref={mobileCameraShellRef}
-            className={cn(
-              'fixed inset-0 z-[200] bg-black text-white',
-              cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS,
-              cameraFullscreenMode === 'pseudo' && '!bg-black'
-            )}
-          >
+          <>
             <input
               ref={galleryInputRef}
               type="file"
@@ -3946,93 +3946,41 @@ export default function CalificarPage() {
               className="sr-only"
               onChange={handleGalleryFile}
             />
-
-            <div ref={mobileVideoViewportRef} className="relative h-[100dvh] w-full overflow-hidden bg-black">
-              {!cameraOpen ? (
-                <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
-                  <div className="flex items-center gap-2 text-sm text-white/80">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Abriendo cámara…
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="w-full max-w-xs"
-                    onClick={() => void startLiveCamera({ skipPhaseGuard: true })}
-                  >
-                    Reintentar cámara
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="relative h-full w-full">
-                    <div
-                      className="absolute overflow-hidden bg-black"
-                      style={
-                        liveVideoLayout
-                          ? {
-                              left: liveVideoLayout.offsetX,
-                              top: liveVideoLayout.offsetY,
-                              width: liveVideoLayout.displayW,
-                              height: liveVideoLayout.displayH,
-                            }
-                          : { inset: 0 }
-                      }
-                    >
-                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className={cn(
-                          'h-full w-full bg-black object-center',
-                          liveVideoLayout ? 'object-cover' : 'object-contain'
-                        )}
-                      />
-                    </div>
-                    <IphoneDocumentScannerOverlay
-                      documentPolygon={mobileDocumentPolygon}
-                      guideRect={mobileViewfinderGuideRect}
-                      fiducialCorners={mobileFiducialCorners}
-                      detected={cornersAlignedView || mobileFiducialCount >= 4}
-                      hint="Encuadra la hoja: deben verse las franjas negras laterales."
-                      examTitle={exam.title}
-                      captureProgress={
-                        cornersAlignedView || mobileFiducialCount >= 4
-                          ? Math.min(1, mobileStableTicks / CORNER_ALIGN_STABLE_TICKS)
-                          : 0
-                      }
-                    />
-                    <IosCaptureFlashOverlay active={shutterFlash} />
-                  </div>
-
-                  <button
-                    type="button"
-                    className="absolute left-3 z-[70] flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm"
-                    style={{ top: 'max(0.65rem, env(safe-area-inset-top, 0px))' }}
-                    aria-label="Cerrar cámara"
-                    disabled={scanBusy}
-                    onClick={() => {
-                      stopLiveCamera();
-                      setPhase('elegir');
-                    }}
-                  >
-                    <X className="h-5 w-5" strokeWidth={2.5} />
-                  </button>
-
-                  {scanBusy ? (
-                    <div className="pointer-events-none absolute inset-0 z-[65] flex items-center justify-center bg-black/35">
-                      <Loader2
-                        className="h-10 w-10 animate-spin text-white motion-reduce:animate-none [animation-duration:750ms]"
-                        aria-hidden
-                      />
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </div>,
+            <ExamScannerScreen
+              shellRef={mobileCameraShellRef}
+              viewportRef={mobileVideoViewportRef}
+              videoRef={videoRef}
+              cameraOpen={cameraOpen}
+              scanBusy={scanBusy}
+              shutterFlash={shutterFlash}
+              examTitle={exam.title}
+              documentPolygon={mobileDocumentPolygon}
+              guideRect={mobileViewfinderGuideRect}
+              aligned={cornersAlignedView || mobileFiducialCount >= 4}
+              stableProgress={
+                cornersAlignedView || mobileFiducialCount >= 4
+                  ? Math.min(1, mobileStableTicks / CAPTURE_STABLE_TICKS_REQUIRED)
+                  : 0
+              }
+              lowLight={mobileScannerLowLight}
+              liveLayout={liveVideoLayout}
+              cameraFullscreenMode={cameraFullscreenMode}
+              flashMode={flashMode}
+              flashOn={flashOn}
+              flashSupported={flashSupported}
+              onClose={() => {
+                stopLiveCamera();
+                setPhase('elegir');
+              }}
+              onChangeExam={() => {
+                stopLiveCamera();
+                setPhase('elegir');
+              }}
+              onFlash={() => void cycleFlashMode()}
+              onSettings={() => galleryInputRef.current?.click()}
+              onRetryCamera={() => void startLiveCamera({ skipPhaseGuard: true })}
+            />
+          </>,
           document.body
         )}
 
