@@ -15,6 +15,7 @@ import {
   califacilAnswerSheetAlignFrameAspect,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   getControlNumberBlockPageRatios,
+  getAnswerSheetNameFieldPageRatios,
   markerAnchoredTemplateToPageRatios,
 } from '@/lib/printExam';
 import { controlNumberDigitsToString } from '@/lib/controlNumberOmr';
@@ -4707,6 +4708,31 @@ export function readAnswerSheetControlNumberFromCanvas(
     }
   }
   return { digits: best.digits, controlNumber: best.controlNumber };
+}
+
+/** Recorte JPEG de la línea de nombre manuscrito (vista tipo ZipGrade). */
+export function cropAnswerSheetNameSnippetDataUrl(
+  canvas: HTMLCanvasElement,
+  maxWidth = 260
+): string | null {
+  if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
+    return null;
+  }
+  const bounds = getAnswerSheetNameFieldPageRatios();
+  const W = canvas.width;
+  const H = canvas.height;
+  const sx = Math.max(0, Math.floor(bounds.left * W));
+  const sy = Math.max(0, Math.floor(bounds.top * H));
+  const sw = Math.max(8, Math.min(W - sx, Math.round(bounds.width * W)));
+  const sh = Math.max(6, Math.min(H - sy, Math.round(bounds.height * H)));
+  const out = document.createElement('canvas');
+  const scale = Math.min(1, maxWidth / sw);
+  out.width = Math.max(1, Math.round(sw * scale));
+  out.height = Math.max(1, Math.round(sh * scale));
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  return out.toDataURL('image/jpeg', 0.9);
 }
 
 function tableFrameFromBubbleGeometry(

@@ -62,6 +62,7 @@ import {
   scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   canvasPreviewDataUrl,
+  cropAnswerSheetNameSnippetDataUrl,
   downscaleCanvasForOmrScan,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
@@ -84,6 +85,12 @@ import {
   IosCaptureFlashOverlay,
 } from '@/components/iphone-document-scanner-overlay';
 import { MobileSheetScanReview } from '@/components/mobile-sheet-scan-review';
+import {
+  MobileZipGradeReviewScreen,
+  MobileZipGradeScanCompleteModal,
+  MobileZipGradeStudentPicker,
+  type ZipGradeSheetData,
+} from '@/components/mobile-zipgrade-results';
 import {
   type ExamFullscreenMode,
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -166,6 +173,8 @@ type MobileSheetSnapshot = {
   answerSheetLayout?: boolean;
   /** Métricas de alineación homografía (depuración / validación). */
   warpAlignment?: WarpAlignmentReport | null;
+  /** Recorte de la línea de nombre manuscrito (estilo ZipGrade). */
+  nameCropUrl?: string | null;
 };
 
 async function cloneObjectUrl(url: string): Promise<string | null> {
@@ -582,6 +591,9 @@ export default function CalificarPage() {
   } | null>(null);
 
   const [mobileSheetSnapshots, setMobileSheetSnapshots] = useState<MobileSheetSnapshot[]>([]);
+  const [zipGradeModalOpen, setZipGradeModalOpen] = useState(false);
+  const [zipGradeReviewOpen, setZipGradeReviewOpen] = useState(false);
+  const [zipGradeStudentPickerOpen, setZipGradeStudentPickerOpen] = useState(false);
   const [mobileResultsDraft, setMobileResultsDraft] = useState<Record<string, string>>({});
   const [resultsSheetIdx, setResultsSheetIdx] = useState(0);
   const [mobileCaptureReview, setMobileCaptureReview] = useState<MobileCaptureReviewState | null>(
@@ -709,6 +721,42 @@ export default function CalificarPage() {
 
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
+
+  const zipGradeSheets = useMemo((): ZipGradeSheetData[] => {
+    return mobileSheetSnapshots.map((snap) => {
+      const chunk = sheets[snap.sheetIndex] ?? [];
+      const expectedPicks = draftSelectionsToColumnPicks(chunk, examVirtualKeyByQuestionId);
+      const picks =
+        snap.columnPicks.length > 0
+          ? snap.columnPicks
+          : draftSelectionsToColumnPicks(chunk, snap.selectionsByQuestionId);
+      let correct = 0;
+      for (const q of chunk) {
+        const draftText = mobileResultsDraft[q.id]?.trim() || snap.selectionsByQuestionId[q.id]?.trim() || '';
+        const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
+        if (!expectedText) continue;
+        const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
+        const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
+        if (pi !== null && ei !== null && pi === ei) correct++;
+      }
+      const total = chunk.length;
+      const pct = total > 0 ? calculatePercentage(correct, total) : 0;
+      return {
+        previewUrl: snap.previewUrl,
+        nameCropUrl: snap.nameCropUrl,
+        geometry: snap.geometry,
+        picks,
+        expectedPicks,
+        rowCount: chunk.length,
+        correct,
+        total,
+        pct,
+      };
+    });
+  }, [mobileSheetSnapshots, sheets, examVirtualKeyByQuestionId, mobileResultsDraft]);
+
+  const currentZipGradeSheet = zipGradeSheets[resultsSheetIdx] ?? null;
+
   const virtualKeyMcTotal = questions.filter((q) => q.type === 'multiple_choice').length;
   const virtualKeyReadyCount = Object.keys(examVirtualKeyByQuestionId).length;
   const virtualKeyComplete =
@@ -1106,6 +1154,10 @@ export default function CalificarPage() {
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
         }
+        const nameCropUrl =
+          snapSource instanceof HTMLCanvasElement
+            ? cropAnswerSheetNameSnippetDataUrl(snapSource)
+            : null;
         if (snapUrl && opts.precomputedGeometry) {
           let geom: CalifacilOmrScanGeometry;
           try {
@@ -1113,19 +1165,24 @@ export default function CalificarPage() {
           } catch {
             geom = JSON.parse(JSON.stringify(opts.precomputedGeometry)) as CalifacilOmrScanGeometry;
           }
-          setMobileSheetSnapshots((prev) => [
-            ...prev,
-            {
-              sheetIndex: sheetIndexRef.current,
-              previewUrl: snapUrl!,
-              geometry: geom,
-              questionIds: chunk.map((q) => q.id),
-              selectionsByQuestionId: { ...fullChunkDraft },
-              columnPicks: picksInChunk,
-              answerSheetLayout: true,
-              warpAlignment: opts?.warpAlignment,
-            },
-          ]);
+          setMobileSheetSnapshots((prev) => {
+            const next = [
+              ...prev,
+              {
+                sheetIndex: sheetIndexRef.current,
+                previewUrl: snapUrl!,
+                geometry: geom,
+                questionIds: chunk.map((q) => q.id),
+                selectionsByQuestionId: { ...fullChunkDraft },
+                columnPicks: picksInChunk,
+                answerSheetLayout: true,
+                warpAlignment: opts?.warpAlignment,
+                nameCropUrl,
+              },
+            ];
+            setResultsSheetIdx(next.length - 1);
+            return next;
+          });
         }
         try {
           await presentInstantCaptureGradeRef.current(fullChunkDraft, gradeStudentId || undefined);
@@ -1492,6 +1549,10 @@ export default function CalificarPage() {
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
         }
+        const nameCropUrl =
+          snapSource instanceof HTMLCanvasElement
+            ? cropAnswerSheetNameSnippetDataUrl(snapSource)
+            : null;
         if (snapUrl && meta.geometry) {
           let geom: CalifacilOmrScanGeometry;
           try {
@@ -1499,19 +1560,24 @@ export default function CalificarPage() {
           } catch {
             geom = JSON.parse(JSON.stringify(meta.geometry)) as CalifacilOmrScanGeometry;
           }
-          setMobileSheetSnapshots((prev) => [
-            ...prev,
-            {
-              sheetIndex: sheetIndexRef.current,
-              previewUrl: snapUrl!,
-              geometry: geom,
-              questionIds: chunk.map((q) => q.id),
-              selectionsByQuestionId: { ...fullChunkDraft },
-              columnPicks: picksInChunk,
-              answerSheetLayout: true,
-              warpAlignment: OMR_DEBUG_ENABLED ? warpAlignment : undefined,
-            },
-          ]);
+          setMobileSheetSnapshots((prev) => {
+            const next = [
+              ...prev,
+              {
+                sheetIndex: sheetIndexRef.current,
+                previewUrl: snapUrl!,
+                geometry: geom,
+                questionIds: chunk.map((q) => q.id),
+                selectionsByQuestionId: { ...fullChunkDraft },
+                columnPicks: picksInChunk,
+                answerSheetLayout: true,
+                warpAlignment: OMR_DEBUG_ENABLED ? warpAlignment : undefined,
+                nameCropUrl,
+              },
+            ];
+            setResultsSheetIdx(next.length - 1);
+            return next;
+          });
         }
         try {
           await presentInstantCaptureGradeRef.current(fullChunkDraft, gradeStudentId || undefined);
@@ -2766,11 +2832,8 @@ export default function CalificarPage() {
 
       if (isMobile) {
         setPhase('ver_resultados');
-        setResultsSheetIdx(0);
-        toast.success(
-          `${stats.pct}% · ${stats.correct}/${stats.total} aciertos`,
-          { description: persisted ? 'Guardado en la nube.' : 'Revisa y guarda si hace falta.' }
-        );
+        setZipGradeModalOpen(true);
+        setZipGradeReviewOpen(false);
       } else {
         setAutoGradeDialogOpen(true);
         setPhase('elegir');
@@ -3247,6 +3310,9 @@ export default function CalificarPage() {
     clearMobileSnapshots();
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
+    setZipGradeModalOpen(false);
+    setZipGradeReviewOpen(false);
+    setZipGradeStudentPickerOpen(false);
     setPhase('elegir');
   }, [clearMobileSnapshots]);
 
@@ -4084,166 +4150,101 @@ export default function CalificarPage() {
       )}
 
       {isMobile && phase === 'ver_resultados' && exam && mobileSheetSnapshots.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg">Resultados guardados</CardTitle>
-            <CardDescription>
-              {selectedStudentName.trim() || 'Alumno'} · Revisa cada hoja; puedes corregir y volver a guardar en la
-              nube.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Tabs
-              value={String(resultsSheetIdx)}
-              onValueChange={(v) => {
-                const n = Number(v);
-                setResultsSheetIdx(Number.isFinite(n) ? n : 0);
-              }}
-            >
-              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-                {mobileSheetSnapshots.map((snap, i) => (
-                  <TabsTrigger key={`rs-tab-${snap.sheetIndex}-${i}`} value={String(i)} className="text-xs">
-                    Hoja {snap.sheetIndex + 1}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              {mobileSheetSnapshots.map((snap, tabIdx) => {
-                const chunk = sheets[snap.sheetIndex] ?? [];
-                const orangeFrameRect = califacilReviewOrangeFrameRect(
-                  snap.geometry,
-                  chunk.length
-                );
-                let rCorrect = 0;
-                for (const q of chunk) {
-                  const draftText = mobileResultsDraft[q.id]?.trim() ?? '';
-                  const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
-                  if (!expectedText) continue;
-                  const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
-                  const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
-                  if (pi !== null && ei !== null && pi === ei) rCorrect++;
-                }
-                const rTotal = chunk.length;
-                const rPct = rTotal > 0 ? calculatePercentage(rCorrect, rTotal) : 0;
-                const tabExpectedPicks = draftSelectionsToColumnPicks(chunk, examVirtualKeyByQuestionId);
-                const tabPicks =
-                  snap.columnPicks.length > 0
-                    ? snap.columnPicks
-                    : draftSelectionsToColumnPicks(chunk, mobileResultsDraft);
-                return (
-                  <TabsContent key={`rs-content-${tabIdx}`} value={String(tabIdx)} className="mt-4 space-y-4">
-                    <CalifacilReviewImageStack
-                      previewUrl={snap.previewUrl}
-                      alt={`Hoja ${snap.sheetIndex + 1}`}
-                      geometry={snap.geometry}
-                      orangeFrameRect={orangeFrameRect}
-                      overlay={
-                        <>
-                          <CalifacilOmrReviewOverlay
-                            geometry={snap.geometry}
-                            picks={tabPicks}
-                            expectedPicks={tabExpectedPicks}
-                            expectedOpacity={overlayOpacity / 100}
-                            rowCount={chunk.length}
-                            clipRect={null}
-                          />
-                          {OMR_DEBUG_ENABLED && snap.warpAlignment ? (
-                            <CalifacilOmrDebugOverlay
-                              imageWidth={snap.geometry.imageWidth}
-                              imageHeight={snap.geometry.imageHeight}
-                              template={buildCalifacilAnswerSheetOmrTemplate(chunk.length)}
-                              alignment={snap.warpAlignment}
-                            />
-                          ) : null}
-                        </>
-                      }
-                    />
-                    {OMR_DEBUG_ENABLED && snap.warpAlignment ? (
-                      <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-center text-[11px] text-amber-950">
-                        {formatWarpAlignmentSummary(snap.warpAlignment)}
-                      </p>
-                    ) : null}
-                    {canGradeStudents && chunk.length > 0 ? (
-                      <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
-                        <div className="text-sm font-semibold text-emerald-950">
-                          <span className="tabular-nums">{rCorrect}</span>
-                          <span className="text-emerald-800"> / </span>
-                          <span className="tabular-nums">{rTotal}</span>
-                          <span className="mx-1.5 text-emerald-700">·</span>
-                          <span className={`tabular-nums ${getGradeColor(rPct)}`}>{rPct}%</span>
-                        </div>
-                        <p className="mt-1 text-[11px] leading-snug text-emerald-900/85">
-                          Verde = acierto, rojo = opción leída incorrecta, círculo naranja = respuesta correcta esperada, rojo punteado = sin lectura.
-                        </p>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 w-full border-orange-300 bg-white text-orange-800 hover:bg-orange-50"
-                          onClick={() => retakeMobileSheetPhoto(snap.sheetIndex)}
-                        >
-                          Tomar otra foto de esta hoja
-                        </Button>
-                      </div>
-                    ) : null}
-                    {chunk.map((q, idx) => {
-                      const globalNum = idx + 1;
-                      const opts = q.options ?? [];
-                      const val = mobileResultsDraft[q.id]?.trim() ?? '';
-                      return (
-                        <div key={`${tabIdx}-${q.id}`} className="flex flex-col gap-1">
-                          <Label className="text-xs text-gray-600">Pregunta {globalNum}</Label>
-                          <Select
-                            value={val ? val : SELECT_NO_OPTION}
-                            onValueChange={(v) => {
-                              setMobileResultsDraft((prev) => ({
-                                ...prev,
-                                [q.id]: v === SELECT_NO_OPTION ? '' : v,
-                              }));
-                            }}
-                          >
-                            <SelectTrigger className="w-full max-w-md">
-                              <SelectValue placeholder="Elegir opción leída" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={SELECT_NO_OPTION}>Elegir opción leída</SelectItem>
-                              {opts.map((opt, oi) => (
-                                <SelectItem key={opt} value={opt}>
-                                  {String.fromCharCode(65 + oi)}. {opt}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      );
-                    })}
-                  </TabsContent>
-                );
-              })}
-            </Tabs>
-            <div className="flex flex-col gap-2 pt-2 sm:flex-row">
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1 border-orange-300 text-orange-800 hover:bg-orange-50"
-                disabled={scanBusy}
-                onClick={() => retakeMobileSheetPhoto(mobileSheetSnapshots[resultsSheetIdx]?.sheetIndex ?? sheetIndex)}
-              >
-                Tomar otra foto
-              </Button>
-              <Button
-                type="button"
-                className="flex-1 bg-orange-600 hover:bg-orange-700"
-                disabled={scanBusy}
-                onClick={() => void saveMobileResultsEdits()}
-              >
-                Guardar cambios
-              </Button>
-              <Button type="button" variant="outline" className="flex-1" onClick={exitMobileResultsView}>
-                Listo
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <>
+          <MobileZipGradeScanCompleteModal
+            open={zipGradeModalOpen && !zipGradeReviewOpen}
+            score={
+              autoGradeStats ?? {
+                correct: currentZipGradeSheet?.correct ?? 0,
+                total: currentZipGradeSheet?.total ?? 0,
+                pct: currentZipGradeSheet?.pct ?? 0,
+              }
+            }
+            nameCropUrl={currentZipGradeSheet?.nameCropUrl}
+            studentName={selectedStudentName}
+            controlNumber={detectedControlNumber}
+            onDelete={() => {
+              setZipGradeModalOpen(false);
+              retakeMobileSheetPhoto(
+                mobileSheetSnapshots[resultsSheetIdx]?.sheetIndex ?? sheetIndex
+              );
+            }}
+            onStudent={() => setZipGradeStudentPickerOpen(true)}
+            onReview={() => {
+              setZipGradeModalOpen(false);
+              setZipGradeReviewOpen(true);
+            }}
+          />
+          <MobileZipGradeReviewScreen
+            open={zipGradeReviewOpen}
+            examTitle={exam.title}
+            sheet={currentZipGradeSheet}
+            studentName={selectedStudentName}
+            controlNumber={detectedControlNumber}
+            sheetIndex={resultsSheetIdx}
+            sheetCount={zipGradeSheets.length}
+            onBack={() => {
+              setZipGradeReviewOpen(false);
+              setZipGradeModalOpen(true);
+            }}
+            onPrevSheet={() => setResultsSheetIdx((i) => Math.max(0, i - 1))}
+            onNextSheet={() =>
+              setResultsSheetIdx((i) => Math.min(zipGradeSheets.length - 1, i + 1))
+            }
+            onRetake={() => {
+              setZipGradeReviewOpen(false);
+              retakeMobileSheetPhoto(
+                mobileSheetSnapshots[resultsSheetIdx]?.sheetIndex ?? sheetIndex
+              );
+            }}
+            onSave={() => void saveMobileResultsEdits()}
+            questionsContent={
+              (() => {
+                const snap = mobileSheetSnapshots[resultsSheetIdx];
+                const chunk = snap ? (sheets[snap.sheetIndex] ?? []) : [];
+                return chunk.map((q, idx) => {
+                  const val = mobileResultsDraft[q.id]?.trim() ?? '';
+                  const opts = q.options ?? [];
+                  return (
+                    <div key={q.id} className="rounded-xl bg-white p-3 shadow-sm">
+                      <Label className="text-xs font-medium text-gray-500">
+                        Pregunta {idx + 1}
+                      </Label>
+                      <Select
+                        value={val ? val : SELECT_NO_OPTION}
+                        onValueChange={(v) => {
+                          setMobileResultsDraft((prev) => ({
+                            ...prev,
+                            [q.id]: v === SELECT_NO_OPTION ? '' : v,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="mt-1.5 w-full">
+                          <SelectValue placeholder="Opción leída" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={SELECT_NO_OPTION}>Sin lectura</SelectItem>
+                          {opts.map((opt, oi) => (
+                            <SelectItem key={opt} value={opt}>
+                              {String.fromCharCode(65 + oi)}. {opt}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                });
+              })()
+            }
+          />
+          <MobileZipGradeStudentPicker
+            open={zipGradeStudentPickerOpen}
+            students={sortedStudents}
+            selectedId={selectedStudentId}
+            onSelect={(id) => setSelectedStudentId(id)}
+            onClose={() => setZipGradeStudentPickerOpen(false)}
+          />
+        </>
       )}
 
       {phase === 'guardando' && (

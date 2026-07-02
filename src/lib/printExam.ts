@@ -1486,6 +1486,34 @@ export function getControlNumberBlockPageRatios(
   };
 }
 
+/** Recorte normalizado de la línea «Nombre del alumno» en hoja warp 850×1100. */
+export function getAnswerSheetNameFieldPageRatios(): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+} {
+  const pageW = CALIFACIL_WARP_PAGE.widthPx;
+  const pageH = CALIFACIL_WARP_PAGE.heightPx;
+  const { cornerSizePt, cornerGapPt, alignStripWidthPt } = ANSWER_SHEET_LAYOUT;
+  const bodyInsetPx = ptToWarpPx(cornerSizePt + cornerGapPt);
+  const sideMarginPx = bodyInsetPx + ptToWarpPx(alignStripWidthPt) + ptToWarpPx(cornerGapPt);
+  const headerPx = ptToWarpPx(8.5 * 1.1 + 7 + 1 + 2 + 2 + 0.75);
+  const metaRowTopPx = bodyInsetPx + headerPx;
+  const nameLabelPx = ptToWarpPx(54);
+  const fieldGapPx = ptToWarpPx(3);
+  const lineHPx = ptToWarpPx(15);
+  const contentW = pageW - 2 * sideMarginPx;
+  const fieldW = contentW * 0.54;
+
+  return {
+    left: (sideMarginPx + nameLabelPx + fieldGapPx) / pageW,
+    top: metaRowTopPx / pageH,
+    width: fieldW / pageW,
+    height: lineHPx / pageH,
+  };
+}
+
 export type CalifacilAnswerSheetOmrTemplate = {
   tableLeftRatio: number;
   tableTopRatio: number;
