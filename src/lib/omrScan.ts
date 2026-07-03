@@ -2960,8 +2960,12 @@ export function syncCalifacilOmrGeometryImageSize(
   };
 }
 
-function finishMobileScannedDocumentCanvas(src: HTMLCanvasElement): HTMLCanvasElement {
+function finishMobileScannedDocumentCanvas(
+  src: HTMLCanvasElement,
+  opts?: { skipPrintCrop?: boolean }
+): HTMLCanvasElement {
   const trimmed = trimCanvasContentBorders(src) ?? src;
+  if (opts?.skipPrintCrop) return trimmed;
   return cropWarpedAnswerSheetToPrintBounds(trimmed);
 }
 
@@ -2970,7 +2974,8 @@ function finishMobileScannedDocumentCanvas(src: HTMLCanvasElement): HTMLCanvasEl
  * El preprocesado OMR (CLAHE) se aplica solo internamente al leer casillas.
  */
 export function prepareMobileScannedDocumentCanvas(
-  canvas: HTMLCanvasElement
+  canvas: HTMLCanvasElement,
+  opts?: { skipPrintCrop?: boolean }
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   let src = canvas;
@@ -2978,12 +2983,13 @@ export function prepareMobileScannedDocumentCanvas(
     const refined = refineWarpedCalifacilSheet(canvas, { fast: false });
     src = deskewWarpedCalifacilSheet(refined.canvas);
   }
-  return finishMobileScannedDocumentCanvas(src);
+  return finishMobileScannedDocumentCanvas(src, opts);
 }
 
 /** Variante rápida para captura en vivo (sin deskew lento). */
 export function prepareMobileScannedDocumentCanvasFast(
-  canvas: HTMLCanvasElement
+  canvas: HTMLCanvasElement,
+  opts?: { skipPrintCrop?: boolean }
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   let src = canvas;
@@ -2991,7 +2997,7 @@ export function prepareMobileScannedDocumentCanvasFast(
     const refined = refineWarpedCalifacilSheet(canvas, { fast: true });
     src = refined.canvas;
   }
-  return finishMobileScannedDocumentCanvas(src);
+  return finishMobileScannedDocumentCanvas(src, opts);
 }
 
 function buildAnswerSheetCaptureVariants(
@@ -7062,6 +7068,33 @@ export function scanCalifacilOmrSheet(
 }
 
 /**
+ * Lectura OMR estilo ZipGrade: plantilla fija + centros en picos de burbuja (sin barrido heurístico).
+ * Requiere hoja enderezada 850×1100 con fiduciales alineados.
+ */
+export function scanWarpedMobileAnswerSheetPrecise(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  if (!isCalifacilWarpedLetterCanvas(warped)) {
+    return scanWarpedMobileAnswerSheetFast(warped, columns, rows);
+  }
+  return scanWarpedWithNormTableFrame(
+    warped,
+    columns,
+    rows,
+    califacilOmrTableFrameNormRect(rows)
+  );
+}
+
+function mobileWarpAlignmentIsPrecise(alignment: WarpAlignmentReport | null | undefined): boolean {
+  if (!alignment?.ok) return false;
+  if (!Number.isFinite(alignment.maxErrorPx)) return false;
+  return alignment.maxErrorPx <= MAX_WARP_ALIGNMENT_ERROR_PX + 2;
+}
+
+/**
  * Lectura OMR rápida en hoja ya enderezada (p. ej. 850×1100) para vista previa móvil.
  * Evita el barrido pesado de {@link scanCalifacilOmrSheetWithMeta}.
  */
@@ -7128,13 +7161,20 @@ export function buildMobileAnswerSheetReviewFromWarp(
   warped: HTMLCanvasElement,
   columns: number,
   rowCount?: number,
-  opts?: { scanCanvas?: HTMLCanvasElement }
+  opts?: { scanCanvas?: HTMLCanvasElement; warpAlignment?: WarpAlignmentReport | null }
 ): MobileAnswerSheetReviewAssets | null {
   if (!isMobileWarpedAnswerSheetReady(warped)) return null;
+  const alignment =
+    opts?.warpAlignment ?? measureWarpedFiducialAlignment(warped, MAX_WARP_ALIGNMENT_ERROR_PX);
+  const precise = mobileWarpAlignmentIsPrecise(alignment);
   const prepared =
-    opts?.scanCanvas ?? prepareMobileScannedDocumentCanvasFast(warped) ?? prepareMobileScannedDocumentCanvas(warped);
-  const scanCanvas = prepared ?? warped;
-  const meta = scanWarpedMobileAnswerSheetFast(scanCanvas, columns, rowCount);
+    opts?.scanCanvas ??
+    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: precise }) ??
+    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: precise });
+  const scanCanvas = precise && isCalifacilWarpedLetterCanvas(warped) ? warped : (prepared ?? warped);
+  const meta = precise
+    ? scanWarpedMobileAnswerSheetPrecise(scanCanvas, columns, rowCount)
+    : scanWarpedMobileCaptureSheet(scanCanvas, columns, rowCount);
   if (!meta.geometry) return null;
   const geometry = syncCalifacilOmrGeometryImageSize(
     meta.geometry,
@@ -7161,7 +7201,7 @@ export function buildMobileZipGradePreviewPack(
   source: HTMLCanvasElement,
   columns: number,
   rowCount?: number,
-  opts?: { maxPreviewSide?: number }
+  opts?: { maxPreviewSide?: number; warpAlignment?: WarpAlignmentReport | null }
 ): {
   displayCanvas: HTMLCanvasElement;
   previewDataUrl: string;
@@ -7169,11 +7209,18 @@ export function buildMobileZipGradePreviewPack(
   picks: (number | null)[];
   nameCropUrl: string | null;
 } | null {
-  const doc = prepareMobileScannedDocumentCanvasFast(source) ?? source;
-  const meta = scanWarpedMobileAnswerSheetFast(doc, columns, rowCount);
+  const alignment =
+    opts?.warpAlignment ?? measureWarpedFiducialAlignment(source, MAX_WARP_ALIGNMENT_ERROR_PX);
+  const precise = mobileWarpAlignmentIsPrecise(alignment);
+  const doc =
+    prepareMobileScannedDocumentCanvasFast(source, { skipPrintCrop: precise }) ?? source;
+  const omrCanvas = precise && isCalifacilWarpedLetterCanvas(source) ? source : doc;
+  const meta = precise
+    ? scanWarpedMobileAnswerSheetPrecise(omrCanvas, columns, rowCount)
+    : scanWarpedMobileCaptureSheet(omrCanvas, columns, rowCount);
   if (!meta.geometry) return null;
   const maxSide = opts?.maxPreviewSide ?? 1400;
-  const previewCanvas = drawSourceToCanvas(doc, maxSide) ?? doc;
+  const previewCanvas = drawSourceToCanvas(omrCanvas, maxSide) ?? omrCanvas;
   let previewDataUrl: string | null = null;
   try {
     previewDataUrl = previewCanvas.toDataURL('image/jpeg', 0.92);
@@ -7182,7 +7229,7 @@ export function buildMobileZipGradePreviewPack(
   }
   if (!previewDataUrl) return null;
   return {
-    displayCanvas: doc,
+    displayCanvas: omrCanvas,
     previewDataUrl,
     geometry: syncCalifacilOmrGeometryImageSize(
       meta.geometry,
@@ -7190,7 +7237,7 @@ export function buildMobileZipGradePreviewPack(
       previewCanvas.height
     ),
     picks: meta.picks,
-    nameCropUrl: cropAnswerSheetNameSnippetDataUrl(doc),
+    nameCropUrl: cropAnswerSheetNameSnippetDataUrl(omrCanvas),
   };
 }
 

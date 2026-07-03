@@ -241,7 +241,7 @@ const DOCUMENT_POLYGON_HOLD_MS = 420;
 /** Tiempo mínimo de espera con hoja alineada antes de auto-captura. */
 const MOBILE_ALIGN_HOLD_MS = CAPTURE_STABLE_TICKS_REQUIRED * MOBILE_CORNER_LOOP_MS;
 /** Tolerancia de alineación fiducial en captura móvil (más permisivo que escritorio). */
-const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 18;
+const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 10;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.07;
 /** Superpone plantilla PDF y error fiducial en px (`.env`: `NEXT_PUBLIC_CALIFACIL_OMR_DEBUG=true`). */
@@ -1355,7 +1355,9 @@ export default function CalificarPage() {
         let geom: CalifacilOmrScanGeometry | null = opts.precomputedGeometry ?? null;
         const previewCanvas = opts?.displaySource ?? examCanvas;
         if (previewCanvas instanceof HTMLCanvasElement) {
-          const pack = buildMobileZipGradePreviewPack(previewCanvas, omrCols, omrRowCount);
+          const pack = buildMobileZipGradePreviewPack(previewCanvas, omrCols, omrRowCount, {
+            warpAlignment: opts?.warpAlignment,
+          });
           if (pack) {
             snapUrl = pack.previewDataUrl;
             nameCropUrl = pack.nameCropUrl;
@@ -1757,7 +1759,9 @@ export default function CalificarPage() {
         let nameCropUrl: string | null = null;
         let geom: CalifacilOmrScanGeometry | null = meta.geometry;
         if (snapSource instanceof HTMLCanvasElement) {
-          const pack = buildMobileZipGradePreviewPack(snapSource, omrCols, omrRowCount);
+          const pack = buildMobileZipGradePreviewPack(snapSource, omrCols, omrRowCount, {
+            warpAlignment: warpAlignment,
+          });
           if (pack) {
             snapUrl = pack.previewDataUrl;
             nameCropUrl = pack.nameCropUrl;
@@ -3344,7 +3348,21 @@ export default function CalificarPage() {
         return;
       }
 
-      const scanCanvas = prepareMobileScannedDocumentCanvasFast(warped) ?? warped;
+      const refinedSheet = refineWarpedCalifacilSheet(warped, {
+        maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+        fast: false,
+      });
+      warped = refinedSheet.canvas;
+      alignment = refinedSheet.alignment;
+
+      const alignmentPrecise =
+        Boolean(alignment?.ok) &&
+        Number.isFinite(alignment?.maxErrorPx) &&
+        (alignment?.maxErrorPx ?? 99) <= MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 2;
+
+      const scanCanvas =
+        prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: alignmentPrecise }) ??
+        warped;
       const scanPreview = canvasPreviewDataUrl(scanCanvas, 1800, 0.92);
       if (scanPreview) {
         flushSync(() => setMobileScanPreviewUrl(scanPreview));
@@ -3373,6 +3391,7 @@ export default function CalificarPage() {
       setLiveStatus('Leyendo respuestas…');
       const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, omrRowCount, {
         scanCanvas,
+        warpAlignment: alignment,
       });
       const meta = reviewAssets
         ? {
@@ -3381,7 +3400,7 @@ export default function CalificarPage() {
             controlNumber: reviewAssets.controlNumber,
             controlNumberDigits: reviewAssets.controlNumberDigits,
           }
-        : scanWarpedMobileCaptureSheetFast(scanCanvas, omrCols, omrRowCount);
+        : scanWarpedMobileCaptureSheet(scanCanvas, omrCols, omrRowCount);
       const controlRead = {
         controlNumber: meta.controlNumber,
         digits: meta.controlNumberDigits,
