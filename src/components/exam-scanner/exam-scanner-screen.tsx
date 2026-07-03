@@ -109,53 +109,64 @@ export function ExamScannerScreen({
         </div>
       ) : (
         <>
-          <CameraView
-            ref={viewportRef as RefObject<HTMLDivElement> | undefined}
-            videoRef={videoRef}
-          />
-          <OverlayRenderer
-            phase={phase}
-            documentPolygon={documentPolygon}
-            guideRect={guideRect}
-          />
-
-          <div
-            className="exam-scanner-topbar pointer-events-auto absolute inset-x-0 z-[60] flex items-start gap-2.5 px-3"
-            style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
-          >
-            <button
-              type="button"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-all duration-200 active:scale-95"
-              style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
-              aria-label="Cerrar escáner"
-              disabled={scanBusy}
-              onClick={onClose}
-            >
-              <X className="h-4.5 w-4.5" strokeWidth={2.5} />
-            </button>
-            <StatusCard
-              examTitle={examTitle}
-              statusLabel={statusLabel}
-              stableProgress={progress}
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <CameraView
+              ref={viewportRef as RefObject<HTMLDivElement> | undefined}
+              videoRef={videoRef}
+            />
+            <OverlayRenderer
               phase={phase}
+              documentPolygon={documentPolygon}
+              guideRect={guideRect}
             />
           </div>
 
+          <div className="exam-scanner-controls pointer-events-none absolute inset-0 z-[120]">
+            <div
+              className="exam-scanner-topbar pointer-events-auto absolute inset-x-0 flex items-start gap-2.5 px-3"
+              style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+            >
+              <button
+                type="button"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-all duration-200 active:scale-95"
+                style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
+                aria-label="Cerrar escáner"
+                disabled={scanBusy}
+                onClick={(event) => event.preventDefault()}
+                onPointerUp={(event) => {
+                  if (scanBusy || (event.pointerType === 'mouse' && event.button !== 0)) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onClose();
+                }}
+              >
+                <X className="h-4.5 w-4.5" strokeWidth={2.5} />
+              </button>
+              <StatusCard
+                examTitle={examTitle}
+                statusLabel={statusLabel}
+                stableProgress={progress}
+                phase={phase}
+              />
+            </div>
+
+            {!scanBusy ? (
+              <ScanHud
+                flashMode={flashMode}
+                flashOn={flashOn}
+                flashSupported={flashSupported}
+                captureReady={captureReady}
+                onChangeExam={onChangeExam}
+                onFlash={onFlash}
+                onCapture={onCapture}
+              />
+            ) : null}
+          </div>
+
           <CaptureFlash active={shutterFlash} />
-          {!scanBusy ? (
-            <ScanHud
-              flashMode={flashMode}
-              flashOn={flashOn}
-              flashSupported={flashSupported}
-              captureReady={captureReady}
-              onChangeExam={onChangeExam}
-              onFlash={onFlash}
-              onCapture={onCapture}
-            />
-          ) : null}
 
           {scanBusy ? (
-            <div className="pointer-events-none absolute inset-0 z-[45] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
+            <div className="pointer-events-none absolute inset-0 z-[110] flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
               <Loader2
                 className="h-9 w-9 animate-spin text-white/90 motion-reduce:animate-none [animation-duration:650ms]"
                 aria-hidden

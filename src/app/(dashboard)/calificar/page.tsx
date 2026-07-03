@@ -1280,7 +1280,10 @@ export default function CalificarPage() {
           snapSource instanceof HTMLCanvasElement
             ? cropAnswerSheetNameSnippetDataUrl(snapSource)
             : null;
-        if (snapUrl && opts.precomputedGeometry) {
+        if (opts.precomputedGeometry) {
+          if (!snapUrl && snapSource instanceof HTMLCanvasElement) {
+            snapUrl = canvasPreviewDataUrl(snapSource, 800);
+          }
           let geom: CalifacilOmrScanGeometry;
           try {
             geom = structuredClone(opts.precomputedGeometry);
@@ -1292,7 +1295,7 @@ export default function CalificarPage() {
               ...prev,
               {
                 sheetIndex: sheetIndexRef.current,
-                previewUrl: snapUrl!,
+                previewUrl: snapUrl ?? '',
                 geometry: geom,
                 questionIds: chunk.map((q) => q.id),
                 selectionsByQuestionId: { ...fullChunkDraft },
@@ -1670,12 +1673,15 @@ export default function CalificarPage() {
             snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
+          if (!snapUrl) {
+            snapUrl = canvasPreviewDataUrl(snapSource, 1100);
+          }
         }
         const nameCropUrl =
           snapSource instanceof HTMLCanvasElement
             ? cropAnswerSheetNameSnippetDataUrl(snapSource)
             : null;
-        if (snapUrl && meta.geometry) {
+        if (meta.geometry) {
           let geom: CalifacilOmrScanGeometry;
           try {
             geom = structuredClone(meta.geometry);
@@ -1687,7 +1693,7 @@ export default function CalificarPage() {
               ...prev,
               {
                 sheetIndex: sheetIndexRef.current,
-                previewUrl: snapUrl!,
+                previewUrl: snapUrl ?? '',
                 geometry: geom,
                 questionIds: chunk.map((q) => q.id),
                 selectionsByQuestionId: { ...fullChunkDraft },
@@ -3275,6 +3281,43 @@ export default function CalificarPage() {
         }
       }
 
+      if (meta.geometry && resolvedCount >= 1) {
+        const mapped = mapRawToDraft([...meta.picks], chunk);
+        const result = await finalizeCapturedSheet(warped, undefined, {
+          preWarped: true,
+          warpAlignment: alignment,
+          skipReviewUi: true,
+          skipSheetValidation: true,
+          precomputedDraft: mapped.draft,
+          precomputedPicks: meta.picks,
+          precomputedGeometry: meta.geometry,
+          precomputedControlNumber: controlRead.controlNumber,
+        });
+        if (result.success) {
+          playScanCompleteChime();
+          mobileReviewOpenRef.current = false;
+          setMobileCaptureReview(null);
+          setMobileReviewAlign(null);
+          stopLiveCamera();
+          return;
+        }
+      }
+
+      const fallbackResult = await finalizeCapturedSheet(warped, undefined, {
+        preWarped: true,
+        warpAlignment: alignment,
+        skipReviewUi: true,
+        skipSheetValidation: true,
+      });
+      if (fallbackResult.success) {
+        playScanCompleteChime();
+        mobileReviewOpenRef.current = false;
+        setMobileCaptureReview(null);
+        setMobileReviewAlign(null);
+        stopLiveCamera();
+        return;
+      }
+
       toast.error(
         resolvedCount > 0
           ? `Lectura insuficiente (${resolvedCount}/${omrRowCount}). Mejora la luz y vuelve a capturar.`
@@ -3516,9 +3559,21 @@ export default function CalificarPage() {
   }, []);
 
   const captureMobilePhotoManually = useCallback(() => {
-    if (!isMobile) return;
-    requestMobileAutoCapture();
-  }, [isMobile, requestMobileAutoCapture]);
+    if (!isMobile || phaseRef.current !== 'capturar') return;
+    const video = videoRef.current;
+    if (!video) {
+      toast.error('Cámara no disponible.');
+      return;
+    }
+    setShutterFlash(true);
+    window.setTimeout(() => setShutterFlash(false), 220);
+    playAutoCaptureClickSound();
+    triggerMobileSheetCaptureRef.current(video, {
+      roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
+      roiCapture: lastRoiCaptureMetaRef.current,
+      force: true,
+    });
+  }, [isMobile]);
 
   useEffect(() => {
     if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
@@ -4281,7 +4336,7 @@ export default function CalificarPage() {
         </Card>
       )}
 
-      {isMobile && phase === 'ver_resultados' && exam && mobileSheetSnapshots.length > 0 && (
+      {isMobile && phase === 'ver_resultados' && exam && (zipGradeModalOpen || zipGradeReviewOpen || mobileSheetSnapshots.length > 0) && (
         <>
           <MobileZipGradeScanCompleteModal
             open={zipGradeModalOpen && !zipGradeReviewOpen}

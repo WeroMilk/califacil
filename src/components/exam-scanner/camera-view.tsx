@@ -11,14 +11,17 @@ const CameraViewInner = forwardRef<HTMLDivElement, Props>(function CameraViewInn
   ref
 ) {
   return (
-    <div ref={ref} className="exam-scanner-camera absolute inset-0 overflow-hidden bg-black">
+    <div
+      ref={ref}
+      className="exam-scanner-camera pointer-events-none absolute inset-0 overflow-hidden bg-black"
+    >
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <video
         ref={videoRef as RefObject<HTMLVideoElement>}
         autoPlay
         playsInline
         muted
-        className="absolute inset-0 h-full w-full object-cover object-center"
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
         style={{ transform: 'translateZ(0)' }}
       />
     </div>

@@ -271,6 +271,11 @@ html.calificar-immersive main {
   padding-bottom: 0 !important;
 }
 
+html.calificar-immersive,
+html.calificar-immersive body {
+  touch-action: manipulation !important;
+}
+
 @keyframes calificar-mobile-enter {
   from {
     opacity: 0;
@@ -320,11 +325,21 @@ html.calificar-immersive main {
   background: #000 !important;
   padding: 0 !important;
   z-index: 9999 !important;
+  touch-action: manipulation !important;
+}
+
+.exam-scanner-camera,
+.exam-scanner-camera video {
+  pointer-events: none !important;
 }
 
 .exam-scanner-camera video {
   -webkit-transform: translateZ(0);
   transform: translateZ(0);
+}
+
+.exam-scanner-controls {
+  isolation: isolate;
 }
 
 .exam-scanner-topbar {

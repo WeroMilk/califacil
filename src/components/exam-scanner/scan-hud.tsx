@@ -42,7 +42,19 @@ function HudButton({
       )}
       style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
       aria-label={label}
-      onClick={onClick}
+      onClick={(event) => event.preventDefault()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      onPointerUp={(event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      }}
     >
       {children}
       <span>{label}</span>
@@ -61,7 +73,7 @@ function ScanHudInner({
 }: Props) {
   return (
     <div
-      className="exam-scanner-hud pointer-events-auto absolute inset-x-0 z-[60] flex justify-center"
+      className="exam-scanner-hud pointer-events-auto absolute inset-x-0 z-[130] flex justify-center"
       style={{ bottom: 'max(0.85rem, env(safe-area-inset-bottom, 0px))' }}
     >
       <div className="pointer-events-auto flex items-center gap-1.5 rounded-[1.35rem] border border-white/12 bg-black/50 px-1.5 py-1.5 shadow-2xl backdrop-blur-2xl sm:gap-2 sm:px-2 sm:py-2">
