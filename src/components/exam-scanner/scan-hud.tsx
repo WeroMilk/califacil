@@ -1,8 +1,9 @@
 'use client';
 
-import { type ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
 import { Camera, FileStack, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { runScannerAction, type ScannerActions } from '@/components/exam-scanner/scanner-actions';
 
 type FlashMode = 'auto' | 'on' | 'off';
 
@@ -12,15 +13,13 @@ type Props = {
   flashSupported: boolean;
   captureReady: boolean;
   disabled?: boolean;
-  onChangeExam: () => void;
-  onFlash: () => void;
-  onCapture: () => void;
+  actionsRef: React.MutableRefObject<ScannerActions>;
 };
 
 function HudButton({
   label,
-  onPress,
   action,
+  actionsRef,
   active,
   highlight,
   disabled,
@@ -28,32 +27,49 @@ function HudButton({
   large,
 }: {
   label: string;
-  onPress: () => void;
-  action: string;
+  action: keyof ScannerActions;
+  actionsRef: React.MutableRefObject<ScannerActions>;
   active?: boolean;
   highlight?: boolean;
   disabled?: boolean;
   children: ReactNode;
   large?: boolean;
 }) {
+  const lastTapRef = useRef(0);
+
+  const activate = () => {
+    if (disabled) return;
+    const now = Date.now();
+    if (now - lastTapRef.current < 280) return;
+    lastTapRef.current = now;
+    runScannerAction(actionsRef.current, action);
+  };
+
   return (
     <button
       type="button"
       data-scanner-action={action}
-      disabled={disabled}
       className={cn(
-        'exam-scanner-hud-btn flex min-h-[48px] min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-xl px-3 py-2.5 text-[10px] font-semibold text-white/95 transition-transform duration-150 active:scale-95 disabled:opacity-45',
-        large && 'min-h-[56px] min-w-[76px] px-4',
+        'exam-scanner-hud-btn flex min-h-[52px] min-w-[60px] flex-col items-center justify-center gap-1 rounded-xl px-3 py-2.5 text-[10px] font-semibold text-white',
+        large && 'min-h-[58px] min-w-[80px] px-4',
         highlight
           ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/40'
           : active
-            ? 'bg-white/22'
-            : 'bg-white/12'
+            ? 'bg-white/25'
+            : 'bg-white/15',
+        disabled ? 'opacity-50' : 'active:scale-95'
       )}
       aria-label={label}
+      aria-disabled={disabled}
       onClick={(event) => {
+        event.preventDefault();
         event.stopPropagation();
-        if (!disabled) onPress();
+        activate();
+      }}
+      onTouchEnd={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        activate();
       }}
     >
       {children}
@@ -68,25 +84,28 @@ export function ScanHud({
   flashSupported,
   captureReady,
   disabled = false,
-  onChangeExam,
-  onFlash,
-  onCapture,
+  actionsRef,
 }: Props) {
   return (
     <footer
-      className="exam-scanner-hud pointer-events-none fixed inset-x-0 bottom-0 z-[10006] flex justify-center"
+      className="exam-scanner-hud fixed inset-x-0 bottom-0 z-[100010] flex justify-center"
       style={{
-        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+        paddingBottom: 'max(0.85rem, env(safe-area-inset-bottom, 0px))',
       }}
     >
-      <div className="pointer-events-auto flex items-center gap-2 rounded-[1.4rem] border border-white/15 bg-black/62 px-2 py-2 shadow-2xl">
-        <HudButton label="Cambiar examen" action="change-exam" onPress={onChangeExam} disabled={disabled}>
+      <div className="flex items-center gap-2 rounded-[1.4rem] border border-white/20 bg-black/70 px-2.5 py-2 shadow-2xl">
+        <HudButton
+          label="Cambiar examen"
+          action="changeExam"
+          actionsRef={actionsRef}
+          disabled={disabled}
+        >
           <FileStack className="h-5 w-5" strokeWidth={2} />
         </HudButton>
         <HudButton
           label="Capturar"
           action="capture"
-          onPress={onCapture}
+          actionsRef={actionsRef}
           highlight={captureReady}
           disabled={disabled}
           large
@@ -96,7 +115,7 @@ export function ScanHud({
         <HudButton
           label="Flash"
           action="flash"
-          onPress={onFlash}
+          actionsRef={actionsRef}
           active={flashOn || flashMode === 'on'}
           disabled={disabled}
         >

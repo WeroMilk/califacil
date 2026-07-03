@@ -96,6 +96,7 @@ import {
   mobileCaptureMinResolvedRows,
   shouldTriggerAutoCapture,
 } from '@/components/exam-scanner/capture-controller';
+import type { ScannerActions } from '@/components/exam-scanner/scanner-actions';
 import { CalificarMobileHome } from '@/components/calificar-mobile-home';
 import {
   MobileZipGradeReviewScreen,
@@ -562,6 +563,12 @@ export default function CalificarPage() {
   const flashModeRef = useRef<FlashMode>('auto');
   const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
   const mobileCameraShellRef = useRef<HTMLDivElement>(null);
+  const scannerActionsRef = useRef<ScannerActions>({
+    capture: () => {},
+    flash: () => {},
+    changeExam: () => {},
+    close: () => {},
+  });
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
@@ -3644,6 +3651,17 @@ export default function CalificarPage() {
     setPhase('elegir');
   }, [stopLiveCamera]);
 
+  scannerActionsRef.current = {
+    capture: () => {
+      void captureMobilePhotoManually();
+    },
+    flash: () => {
+      void cycleFlashMode();
+    },
+    changeExam: handleScannerChangeExam,
+    close: handleScannerClose,
+  };
+
   useEffect(() => {
     if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
     const alignedEnough =
@@ -3739,45 +3757,6 @@ export default function CalificarPage() {
       document.documentElement.classList.remove('calificar-scanner-open');
     };
   }, [scannerPortalOpen]);
-
-  useEffect(() => {
-    if (!scannerPortalOpen) return;
-    const root = mobileCameraShellRef.current;
-    if (!root) return;
-
-    const handleScannerAction = (event: Event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const actionEl = target.closest('[data-scanner-action]');
-      if (!actionEl || !root.contains(actionEl)) return;
-      const action = actionEl.getAttribute('data-scanner-action');
-      if (!action) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (action === 'capture') {
-        void captureMobilePhotoManually();
-      } else if (action === 'flash') {
-        void cycleFlashMode();
-      } else if (action === 'change-exam') {
-        handleScannerChangeExam();
-      } else if (action === 'close') {
-        handleScannerClose();
-      }
-    };
-
-    root.addEventListener('click', handleScannerAction, true);
-    root.addEventListener('touchend', handleScannerAction, { capture: true, passive: false });
-    return () => {
-      root.removeEventListener('click', handleScannerAction, true);
-      root.removeEventListener('touchend', handleScannerAction, true);
-    };
-  }, [
-    scannerPortalOpen,
-    captureMobilePhotoManually,
-    cycleFlashMode,
-    handleScannerChangeExam,
-    handleScannerClose,
-  ]);
 
   if (!user) return null;
 
@@ -4220,6 +4199,7 @@ export default function CalificarPage() {
               shellRef={mobileCameraShellRef}
               viewportRef={mobileVideoViewportRef}
               videoRef={videoRef}
+              actionsRef={scannerActionsRef}
               cameraOpen={cameraOpen}
               scanBusy={scanBusy}
               shutterFlash={shutterFlash}
@@ -4237,10 +4217,6 @@ export default function CalificarPage() {
               flashMode={flashMode}
               flashOn={flashOn}
               flashSupported={flashSupported}
-              onClose={handleScannerClose}
-              onChangeExam={handleScannerChangeExam}
-              onFlash={() => void cycleFlashMode()}
-              onCapture={() => void captureMobilePhotoManually()}
               onVideoMount={bindVideoElement}
               captureReady={
                 cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS

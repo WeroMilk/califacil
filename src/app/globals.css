@@ -336,7 +336,7 @@ html.calificar-scanner-open [data-sonner-toaster] {
 .exam-scanner-root.exam-pseudo-fullscreen {
   background: #000 !important;
   padding: 0 !important;
-  z-index: 10000 !important;
+  z-index: 100000 !important;
   touch-action: manipulation !important;
 }
 
@@ -356,16 +356,13 @@ html.calificar-scanner-open [data-sonner-toaster] {
 .exam-scanner-status {
   touch-action: manipulation !important;
   -webkit-tap-highlight-color: transparent;
+  pointer-events: auto !important;
 }
 
-.exam-scanner-hud,
-.exam-scanner-topbar {
-  pointer-events: none;
-}
-
-.exam-scanner-hud > *,
-.exam-scanner-topbar > * {
-  pointer-events: auto;
+.exam-scanner-hud-btn {
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .exam-scanner-topbar {
