@@ -4448,6 +4448,7 @@ export default function CalificarPage() {
             open={zipGradeModalOpen && !zipGradeReviewOpen}
             examTitle={exam.title}
             previewUrl={currentZipGradeSheet?.previewUrl}
+            previewGeometry={currentZipGradeSheet?.geometry ?? null}
             score={
               autoGradeStats ?? {
                 correct: currentZipGradeSheet?.correct ?? 0,

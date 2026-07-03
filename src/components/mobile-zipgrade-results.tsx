@@ -1,10 +1,13 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Menu, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
+import {
+  califacilFiducialCornerGuidesForObjectContainImage,
+  type CalifacilOmrScanGeometry,
+} from '@/lib/omrScan';
 import { CalifacilZipGradeReviewOverlay } from '@/components/califacil-zipgrade-review-overlay';
 import type { Student } from '@/types';
 
@@ -26,6 +29,7 @@ type ScanCompleteModalProps = {
   open: boolean;
   examTitle?: string;
   previewUrl?: string | null;
+  previewGeometry?: CalifacilOmrScanGeometry | null;
   score: { correct: number; total: number; pct: number };
   nameCropUrl?: string | null;
   studentName?: string;
@@ -35,25 +39,48 @@ type ScanCompleteModalProps = {
   onReview: () => void;
 };
 
-function ZipGradeResultCornerGuides() {
-  const inset = 'max(0.75rem, env(safe-area-inset-left, 0px))';
-  const corners = [
-    { left: inset, top: 'max(3.5rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' },
-    { right: inset, top: 'max(3.5rem, calc(env(safe-area-inset-top, 0px) + 2.75rem))' },
-    { right: inset, bottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' },
-    { left: inset, bottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' },
-  ];
+function ZipGradeResultCornerGuides({
+  imageW,
+  imageH,
+}: {
+  imageW: number;
+  imageH: number;
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+
+  useEffect(() => {
+    const node = hostRef.current;
+    if (!node) return;
+    const update = () => {
+      const rect = node.getBoundingClientRect();
+      setSize({ w: rect.width, h: rect.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+
+  const guides = useMemo(
+    () =>
+      size.w > 0 && size.h > 0
+        ? califacilFiducialCornerGuidesForObjectContainImage(imageW, imageH, size.w, size.h)
+        : [],
+    [imageH, imageW, size.h, size.w]
+  );
+
   return (
-    <>
-      {corners.map((style, i) => (
+    <div ref={hostRef} className="pointer-events-none absolute inset-0">
+      {guides.map((g, i) => (
         <div
           key={i}
-          className="pointer-events-none absolute z-[5] h-14 w-14 rounded-lg border-[2.5px] border-black/85 bg-white/30"
-          style={style}
+          className="absolute rounded-lg border-[2.5px] border-black/85 bg-white/25"
+          style={{ left: g.left, top: g.top, width: g.size, height: g.size }}
           aria-hidden
         />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -61,6 +88,7 @@ export function MobileZipGradeScanCompleteModal({
   open,
   examTitle,
   previewUrl,
+  previewGeometry,
   score,
   nameCropUrl,
   studentName,
@@ -87,7 +115,12 @@ export function MobileZipGradeScanCompleteModal({
             alt=""
             className="h-full w-full object-contain"
           />
-          <ZipGradeResultCornerGuides />
+          {previewGeometry ? (
+            <ZipGradeResultCornerGuides
+              imageW={previewGeometry.imageWidth}
+              imageH={previewGeometry.imageHeight}
+            />
+          ) : null}
         </div>
       ) : null}
 

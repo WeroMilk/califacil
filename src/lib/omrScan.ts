@@ -335,6 +335,23 @@ export type CalifacilSheetCornerGuidePx = {
   size: number;
 };
 
+/** Esquinas de fiduciales sobre imagen object-contain en un contenedor. */
+export function califacilFiducialCornerGuidesForObjectContainImage(
+  imageW: number,
+  imageH: number,
+  containerW: number,
+  containerH: number
+): CalifacilSheetCornerGuidePx[] {
+  if (imageW < 1 || imageH < 1 || containerW < 1 || containerH < 1) return [];
+  const layout = getObjectContainVideoLayout(imageW, imageH, containerW, containerH);
+  return califacilStaticFiducialCornerGuidesInViewportPx({
+    left: layout.offsetX,
+    top: layout.offsetY,
+    width: layout.displayW,
+    height: layout.displayH,
+  });
+}
+
 /** Visores de esquina en marco axis-aligned (carta completa en pantalla). */
 export function califacilStaticFiducialCornerGuidesInViewportPx(
   guideRect: { left: number; top: number; width: number; height: number }
@@ -2828,7 +2845,7 @@ function enhanceCanvasScannerLook(canvas: HTMLCanvasElement): HTMLCanvasElement 
     d[i + 2] = Math.min(255, d[i + 2]! * mix);
   }
   const copy = new Uint8ClampedArray(d);
-  const amount = 0.28;
+  const amount = 0.18;
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       for (let c = 0; c < 3; c++) {
@@ -2873,10 +2890,6 @@ export function prepareMobileScannedDocumentCanvas(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src, 0, 0, out.width, out.height);
-  const clahe = applyOmrcheckerStylePreprocess(out);
-  if (clahe && clahe.width === out.width && clahe.height === out.height) {
-    ctx.drawImage(clahe, 0, 0);
-  }
   return enhanceCanvasScannerLook(out);
 }
 
