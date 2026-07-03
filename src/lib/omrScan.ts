@@ -1224,6 +1224,8 @@ function drawSourceToCanvas(
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source as CanvasImageSource, 0, 0, w, h);
   return canvas;
 }
@@ -2056,6 +2058,8 @@ export function captureVideoFullFrame(
   fullCanvas.height = fh;
   const ctx = fullCanvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(video, 0, 0, fw, fh);
 
   const maxSide = opts?.maxSide;
@@ -2774,6 +2778,92 @@ export function prepareAnswerSheetDisplayCanvas(
   ctx.drawImage(canvas, 0, 0, out.width, out.height);
   ctx.filter = 'none';
   return out;
+}
+
+function percentileGrayFromHist(hist: Uint32Array, total: number, p: number): number {
+  const target = Math.max(0, Math.min(total - 1, Math.floor(total * p)));
+  let cum = 0;
+  for (let i = 0; i < 256; i++) {
+    cum += hist[i]!;
+    if (cum > target) return i;
+  }
+  return 255;
+}
+
+/** Contraste + nitidez suave para vista previa móvil estilo escáner de documentos. */
+function enhanceCanvasScannerLook(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const w = canvas.width;
+  const h = canvas.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  const hist = new Uint32Array(256);
+  const gray = new Uint8Array(w * h);
+  for (let i = 0, g = 0; i < d.length; i += 4, g++) {
+    const lum = Math.round(d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114);
+    gray[g] = lum;
+    hist[lum]++;
+  }
+  const lo = percentileGrayFromHist(hist, gray.length, 0.03);
+  const hi = percentileGrayFromHist(hist, gray.length, 0.97);
+  const range = Math.max(18, hi - lo);
+  for (let i = 0, g = 0; i < d.length; i += 4, g++) {
+    const lum = gray[g]!;
+    const stretched = Math.min(255, Math.max(0, ((lum - lo) / range) * 255));
+    const mix = lum > 8 ? stretched / lum : 1.08;
+    d[i] = Math.min(255, d[i]! * mix);
+    d[i + 1] = Math.min(255, d[i + 1]! * mix);
+    d[i + 2] = Math.min(255, d[i + 2]! * mix);
+  }
+  const copy = new Uint8ClampedArray(d);
+  const amount = 0.28;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      for (let c = 0; c < 3; c++) {
+        const center = (y * w + x) * 4 + c;
+        const blurred =
+          (copy[center - w * 4 - 4]! +
+            copy[center - w * 4]! +
+            copy[center - w * 4 + 4]! +
+            copy[center - 4]! +
+            copy[center]! +
+            copy[center + 4]! +
+            copy[center + w * 4 - 4]! +
+            copy[center + w * 4]! +
+            copy[center + w * 4 + 4]!) /
+          9;
+        d[center] = Math.min(255, Math.max(0, copy[center]! + (copy[center]! - blurred) * amount));
+      }
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  return canvas;
+}
+
+/**
+ * Hoja enderezada con aspecto de escáner: deskew, papel blanco y nitidez.
+ * Solo para vista previa del usuario; el canvas original se usa para OMR.
+ */
+export function prepareMobileScannedDocumentCanvas(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  let src = canvas;
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  if (canvas.height >= 600 && aspect > 0.72 && aspect < 0.86) {
+    const refined = refineWarpedCalifacilSheet(canvas, { fast: false });
+    src = deskewWarpedCalifacilSheet(refined.canvas);
+  }
+  const out = document.createElement('canvas');
+  out.width = src.width;
+  out.height = src.height;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, out.width, out.height);
+  return enhanceCanvasScannerLook(out);
 }
 
 function buildAnswerSheetCaptureVariants(
@@ -7242,10 +7332,12 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
 
-  /** La vista previa usa la foto enderezada (no la variante CLAHE del barrido OMR). */
+  /** La vista previa usa documento enderezado con aspecto de escáner. */
   const reviewCanvas =
     templateGridOnly || opts?.preserveInputCanvas
-      ? (prepareAnswerSheetDisplayCanvas(canvas) ?? canvas)
+      ? (prepareMobileScannedDocumentCanvas(canvas) ??
+        prepareAnswerSheetDisplayCanvas(canvas) ??
+        canvas)
       : (bestReviewCanvas ?? canvas);
 
   if (templateGridOnly) {

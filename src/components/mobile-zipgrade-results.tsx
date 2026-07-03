@@ -80,14 +80,13 @@ export function MobileZipGradeScanCompleteModal({
       }}
     >
       {previewUrl ? (
-        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-white">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={previewUrl}
             alt=""
-            className="h-full w-full object-contain opacity-95"
+            className="h-full w-full object-contain"
           />
-          <div className="absolute inset-0 bg-black/18" aria-hidden />
           <ZipGradeResultCornerGuides />
         </div>
       ) : null}

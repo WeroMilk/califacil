@@ -58,6 +58,7 @@ import {
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
   prepareAnswerSheetDisplayCanvas,
+  prepareMobileScannedDocumentCanvas,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
@@ -706,6 +707,7 @@ export default function CalificarPage() {
         precomputedPicks?: (number | null)[];
         precomputedGeometry?: CalifacilOmrScanGeometry | null;
         precomputedControlNumber?: string | null;
+        displaySource?: HTMLCanvasElement;
       }
     ) => Promise<{ success: boolean; chunkDraft?: Record<string, string> }>
   >(async () => ({ success: false }));
@@ -1199,6 +1201,7 @@ export default function CalificarPage() {
         precomputedPicks?: (number | null)[];
         precomputedGeometry?: CalifacilOmrScanGeometry | null;
         precomputedControlNumber?: string | null;
+        displaySource?: HTMLCanvasElement;
       }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       if (!examId || !exam || !supportsCalifacil) {
@@ -1317,14 +1320,18 @@ export default function CalificarPage() {
           }
         }
         let snapUrl: string | null = null;
-        const snapSource = prepareAnswerSheetDisplayCanvas(examCanvas) ?? examCanvas;
+        const previewCanvas = opts?.displaySource ?? examCanvas;
+        const snapSource =
+          prepareMobileScannedDocumentCanvas(previewCanvas) ??
+          prepareAnswerSheetDisplayCanvas(previewCanvas) ??
+          previewCanvas;
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.94);
+            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
           if (!snapUrl) {
-            snapUrl = canvasPreviewDataUrl(snapSource, 1400, 0.92);
+            snapUrl = canvasPreviewDataUrl(snapSource, 2200, 0.94);
           }
         }
         const nameCropUrl =
@@ -1716,7 +1723,9 @@ export default function CalificarPage() {
         const snapSource =
           meta.reviewSourceCanvas ??
           (activeScanSource instanceof HTMLCanvasElement
-            ? (prepareAnswerSheetDisplayCanvas(activeScanSource) ?? activeScanSource)
+            ? (prepareMobileScannedDocumentCanvas(activeScanSource) ??
+              prepareAnswerSheetDisplayCanvas(activeScanSource) ??
+              activeScanSource)
             : activeScanSource);
         let snapUrl: string | null = null;
         if (snapSource instanceof HTMLCanvasElement) {
@@ -3263,7 +3272,13 @@ export default function CalificarPage() {
 
       let warped: HTMLCanvasElement | null = null;
       let alignment: WarpAlignmentReport | null = null;
-      if (roiCapture && roiQuad) {
+      const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+        maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+        fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
+      });
+      warped = primaryWarp.warped;
+      alignment = primaryWarp.alignment;
+      if (!warped && roiCapture && roiQuad) {
         ({ warped, alignment } = warpMobileCaptureWithFallback(fullCanvas, roiQuad, roiCapture));
       }
       if (!warped) {
@@ -3326,6 +3341,7 @@ export default function CalificarPage() {
       }
 
       const mapped = mapRawToDraft([...meta.picks], chunk);
+      const displayCanvas = prepareMobileScannedDocumentCanvas(warped) ?? warped;
       const result = await finalizeCapturedSheet(warped, undefined, {
         preWarped: true,
         warpAlignment: alignment,
@@ -3335,6 +3351,7 @@ export default function CalificarPage() {
         precomputedPicks: meta.picks,
         precomputedGeometry: meta.geometry,
         precomputedControlNumber: controlRead.controlNumber,
+        displaySource: displayCanvas,
       });
       if (result.success) {
         playScanCompleteChime();
