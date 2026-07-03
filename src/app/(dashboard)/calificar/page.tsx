@@ -70,9 +70,11 @@ import {
   scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
+  buildMobileAnswerSheetReviewFromWarp,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
   downscaleCanvasForOmrScan,
+  isMobileWarpedAnswerSheetReady,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -1321,10 +1323,11 @@ export default function CalificarPage() {
         }
         let snapUrl: string | null = null;
         const previewCanvas = opts?.displaySource ?? examCanvas;
-        const snapSource =
-          prepareMobileScannedDocumentCanvas(previewCanvas) ??
-          prepareAnswerSheetDisplayCanvas(previewCanvas) ??
-          previewCanvas;
+        const snapSource = opts?.displaySource
+          ? previewCanvas
+          : (prepareMobileScannedDocumentCanvas(previewCanvas) ??
+            prepareAnswerSheetDisplayCanvas(previewCanvas) ??
+            previewCanvas);
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
             snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
@@ -3303,6 +3306,14 @@ export default function CalificarPage() {
         alignment = refined.alignment;
       }
 
+      if (!isMobileWarpedAnswerSheetReady(warped)) {
+        toast.error(
+          'No se pudo recortar la hoja. Encuadra el documento completo con las franjas negras a los lados.'
+        );
+        setLiveStatus('Centra la hoja completa dentro del marco antes de capturar.');
+        return;
+      }
+
       const chunk = sheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0 || !warped) {
         toast.error('No hay preguntas para calificar en esta hoja.');
@@ -3321,7 +3332,15 @@ export default function CalificarPage() {
       playAutoCaptureClickSound();
 
       setLiveStatus('Calificando…');
-      const meta = scanWarpedMobileCaptureSheetFast(warped, omrCols, omrRowCount);
+      const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, omrRowCount);
+      const meta = reviewAssets
+        ? {
+            picks: reviewAssets.picks,
+            geometry: reviewAssets.geometry,
+            controlNumber: reviewAssets.controlNumber,
+            controlNumberDigits: reviewAssets.controlNumberDigits,
+          }
+        : scanWarpedMobileCaptureSheetFast(warped, omrCols, omrRowCount);
       const controlRead = {
         controlNumber: meta.controlNumber,
         digits: meta.controlNumberDigits,
@@ -3341,7 +3360,7 @@ export default function CalificarPage() {
       }
 
       const mapped = mapRawToDraft([...meta.picks], chunk);
-      const displayCanvas = prepareMobileScannedDocumentCanvas(warped) ?? warped;
+      const displayCanvas = reviewAssets?.displayCanvas ?? prepareMobileScannedDocumentCanvas(warped) ?? warped;
       const result = await finalizeCapturedSheet(warped, undefined, {
         preWarped: true,
         warpAlignment: alignment,

@@ -479,6 +479,17 @@ function isWarpedLetterCanvas(W: number, H: number): boolean {
   return aspect > 0.72 && aspect < 0.86;
 }
 
+/** True si el canvas tiene tamaño carta enderezado (850×1100 aprox.). */
+export function isCalifacilWarpedLetterCanvas(canvas: HTMLCanvasElement): boolean {
+  return isWarpedLetterCanvas(canvas.width, canvas.height);
+}
+
+/** Hoja móvil enderezada lista para OMR y vista previa (carta + fiduciales). */
+export function isMobileWarpedAnswerSheetReady(canvas: HTMLCanvasElement): boolean {
+  if (!isCalifacilWarpedLetterCanvas(canvas)) return false;
+  return countCalifacilCornerMarkers(canvas) >= 3;
+}
+
 /** Parches de esquina en coords. de fiduciales impresos (hoja carta enderezada). */
 function printedFiducialCornerPatches(
   W: number,
@@ -2850,8 +2861,7 @@ export function prepareMobileScannedDocumentCanvas(
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   let src = canvas;
-  const aspect = canvas.width / Math.max(1, canvas.height);
-  if (canvas.height >= 600 && aspect > 0.72 && aspect < 0.86) {
+  if (isCalifacilWarpedLetterCanvas(canvas)) {
     const refined = refineWarpedCalifacilSheet(canvas, { fast: false });
     src = deskewWarpedCalifacilSheet(refined.canvas);
   }
@@ -2863,6 +2873,10 @@ export function prepareMobileScannedDocumentCanvas(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(src, 0, 0, out.width, out.height);
+  const clahe = applyOmrcheckerStylePreprocess(out);
+  if (clahe && clahe.width === out.width && clahe.height === out.height) {
+    ctx.drawImage(clahe, 0, 0);
+  }
   return enhanceCanvasScannerLook(out);
 }
 
@@ -6945,18 +6959,20 @@ export function scanWarpedMobileAnswerSheetFast(
   const rows = clampCalifacilOmrRowCount(rowCount);
   const emptyRows = (): OmrScanRowDetail[] =>
     Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  const empty: OmrScanMetaResult = {
+    picks: Array(rows).fill(null),
+    rows: emptyRows(),
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
   if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
-    return {
-      picks: Array(rows).fill(null),
-      rows: emptyRows(),
-      needsVisionAssist: false,
-      maxSameColumnCount: 0,
-      geometry: null,
-      reviewSourceCanvas: null,
-      controlNumberDigits: [],
-      controlNumber: null,
-    };
+    return empty;
   }
+  const readCanvas = prepareAnswerSheetCaptureCanvas(warped) ?? warped;
   let geometry = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
   const gridValidation = validateAnswerSheetGeometry(geometry, rows);
   if (!gridValidation.ok) {
@@ -6964,7 +6980,7 @@ export function scanWarpedMobileAnswerSheetFast(
   }
   const thresholds: ScanThresholds = MOBILE_WARPED_SCAN_THRESHOLDS;
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
-    warped,
+    readCanvas,
     geometry,
     thresholds,
     rows,
@@ -6979,6 +6995,45 @@ export function scanWarpedMobileAnswerSheetFast(
     reviewSourceCanvas: warped,
     controlNumberDigits: [],
     controlNumber: null,
+  };
+}
+
+export type MobileAnswerSheetReviewAssets = {
+  displayCanvas: HTMLCanvasElement;
+  geometry: CalifacilOmrScanGeometry;
+  picks: (number | null)[];
+  rows: OmrScanRowDetail[];
+  controlNumber: string | null;
+  controlNumberDigits: (number | null)[];
+};
+
+/**
+ * Hoja enderezada → vista previa escaneada + geometría OMR alineada al mismo canvas.
+ */
+export function buildMobileAnswerSheetReviewFromWarp(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): MobileAnswerSheetReviewAssets | null {
+  if (!isMobileWarpedAnswerSheetReady(warped)) return null;
+  const meta = scanWarpedMobileAnswerSheetFast(warped, columns, rowCount);
+  if (!meta.geometry) return null;
+  const displayCanvas = prepareMobileScannedDocumentCanvas(warped);
+  if (!displayCanvas) return null;
+  const readCanvas = prepareAnswerSheetCaptureCanvas(warped) ?? warped;
+  const control = readAnswerSheetControlNumberFromCanvas(readCanvas, clampCalifacilOmrRowCount(rowCount));
+  const geometry: CalifacilOmrScanGeometry = {
+    ...meta.geometry,
+    imageWidth: displayCanvas.width,
+    imageHeight: displayCanvas.height,
+  };
+  return {
+    displayCanvas,
+    geometry,
+    picks: meta.picks,
+    rows: meta.rows,
+    controlNumber: control.controlNumber,
+    controlNumberDigits: control.digits,
   };
 }
 
@@ -7084,14 +7139,29 @@ export function scanWarpedMobileCaptureSheetFast(
   if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
     return empty;
   }
-  const hi = downscaleCanvasForOmrScan(warped, 1200);
-  const meta = scanWarpedMobileAnswerSheetFast(hi, columns, rows);
-  const control = readAnswerSheetControlNumberFromCanvas(warped, rows);
+  const review = buildMobileAnswerSheetReviewFromWarp(warped, columns, rowCount);
+  if (!review) {
+    const meta = scanWarpedMobileAnswerSheetFast(warped, columns, rowCount);
+    const control = readAnswerSheetControlNumberFromCanvas(
+      prepareAnswerSheetCaptureCanvas(warped) ?? warped,
+      rows
+    );
+    return {
+      ...meta,
+      controlNumberDigits: control.digits,
+      controlNumber: control.controlNumber,
+      reviewSourceCanvas: warped,
+    };
+  }
   return {
-    ...meta,
-    controlNumberDigits: control.digits,
-    controlNumber: control.controlNumber,
-    reviewSourceCanvas: warped,
+    picks: review.picks,
+    rows: review.rows,
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: review.geometry,
+    reviewSourceCanvas: review.displayCanvas,
+    controlNumberDigits: review.controlNumberDigits,
+    controlNumber: review.controlNumber,
   };
 }
 

@@ -2,7 +2,11 @@ import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
 import type { WarpAlignmentReport } from '@/lib/omrScan';
 import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
+  countCalifacilCornerMarkers,
+  detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
+  isCalifacilWarpedLetterCanvas,
+  isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
   refineWarpedCalifacilSheet,
@@ -19,13 +23,25 @@ export type MobileWarpPipelineResult = {
   warped: HTMLCanvasElement | null;
   alignment: WarpAlignmentReport | null;
   /** Origen del cuadrilátero ganador (diagnóstico). */
-  source: 'roi' | 'full_res' | 'corner_markers' | 'none';
+  source: 'roi' | 'full_res' | 'corner_markers' | 'strips' | 'none';
 };
 
 function alignmentScore(alignment: WarpAlignmentReport | null): number {
   if (!alignment) return Number.POSITIVE_INFINITY;
   if (!Number.isFinite(alignment.maxErrorPx)) return Number.POSITIVE_INFINITY;
   return alignment.maxErrorPx;
+}
+
+function warpCandidateScore(
+  warped: HTMLCanvasElement | null,
+  alignment: WarpAlignmentReport | null
+): number {
+  if (!warped || !isCalifacilWarpedLetterCanvas(warped)) return Number.POSITIVE_INFINITY;
+  const corners = countCalifacilCornerMarkers(warped);
+  const align = alignmentScore(alignment);
+  if (corners < 2) return align + 400;
+  if (!isMobileWarpedAnswerSheetReady(warped)) return align + 120;
+  return align - corners * 3;
 }
 
 function finalizeWarpCandidate(
@@ -54,6 +70,17 @@ export function warpCalifacilMobileCaptureFast(
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
 
+  const preprocessed = preprocessForSheetDetection(fullCanvas);
+  for (const target of [preprocessed, fullCanvas].filter(Boolean) as HTMLCanvasElement[]) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
+    if (!stripQuad) continue;
+    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
+    const finalized = finalizeWarpCandidate(stripWarp.warped, stripWarp.alignment, maxErrorPx, true);
+    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
+      return { ...finalized, source: 'strips' };
+    }
+  }
+
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;
   if (roiQuad && roiCapture) {
@@ -69,7 +96,7 @@ export function warpCalifacilMobileCaptureFast(
     );
     const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
     const finalized = finalizeWarpCandidate(roiWarp.warped, roiWarp.alignment, maxErrorPx, true);
-    if (finalized.warped) {
+    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
       return { ...finalized, source: 'roi' };
     }
   }
@@ -91,7 +118,7 @@ export function warpCalifacilMobileCaptureFast(
 }
 
 /**
- * Pipeline móvil: ROI + detección en alta resolución con preprocesado, warp, refinamiento y deskew.
+ * Pipeline móvil: franjas negras + ROI + detección full-res + fiduciales.
  */
 export function warpCalifacilMobileCapture(
   fullCanvas: HTMLCanvasElement,
@@ -119,12 +146,24 @@ export function warpCalifacilMobileCapture(
     allowPx: number
   ) => {
     const finalized = finalizeWarpCandidate(warped, alignment, allowPx);
-    const score = alignmentScore(finalized.alignment);
+    const score = warpCandidateScore(finalized.warped, finalized.alignment);
     if (finalized.warped && score < bestScore) {
       bestScore = score;
       best = { ...finalized, source };
     }
   };
+
+  const preprocessed = preprocessForSheetDetection(fullCanvas);
+  const detectTargets: HTMLCanvasElement[] = preprocessed
+    ? [preprocessed, fullCanvas]
+    : [fullCanvas];
+
+  for (const target of detectTargets) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
+    if (!stripQuad) continue;
+    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
+    consider(stripWarp.warped, stripWarp.alignment, 'strips', maxErrorPx);
+  }
 
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;
@@ -143,21 +182,17 @@ export function warpCalifacilMobileCapture(
     consider(roiWarp.warped, roiWarp.alignment, 'roi', maxErrorPx);
   }
 
-  const preprocessed = preprocessForSheetDetection(fullCanvas);
-  const detectTargets: HTMLCanvasElement[] = preprocessed
-    ? [preprocessed, fullCanvas]
-    : [fullCanvas];
   for (const target of detectTargets) {
     const quad = detectCalifacilSheetCornerQuadRobust(target, { skipPreprocess: true });
     if (!quad) continue;
     const fullWarp = warpAndValidateCalifacilSheet(fullCanvas, quad, maxErrorPx);
     consider(fullWarp.warped, fullWarp.alignment, 'full_res', maxErrorPx);
-    if (best.alignment?.ok) break;
+    if (best.warped && isMobileWarpedAnswerSheetReady(best.warped) && best.alignment?.ok) break;
   }
 
   const cornerWarped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
   if (cornerWarped) {
-  const cornerRefined = refineWarpedCalifacilSheet(cornerWarped, {
+    const cornerRefined = refineWarpedCalifacilSheet(cornerWarped, {
       maxAllowedPx: fallbackMaxErrorPx,
     });
     consider(cornerRefined.canvas, cornerRefined.alignment, 'corner_markers', fallbackMaxErrorPx);
