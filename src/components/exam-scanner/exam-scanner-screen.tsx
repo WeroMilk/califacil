@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, type RefObject } from 'react';
+import { useMemo, type RefObject } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -16,7 +16,6 @@ import {
 import type { ViewfinderGuideRectPx, ViewportPoint } from '@/components/exam-scanner/types';
 import {
   EXAM_PSEUDO_FULLSCREEN_CLASS,
-  setExamImmersiveRoot,
   type ExamFullscreenMode,
 } from '@/lib/examFullscreen';
 
@@ -42,8 +41,9 @@ export type ExamScannerScreenProps = {
   onClose: () => void;
   onChangeExam: () => void;
   onFlash: () => void;
-  onSettings: () => void;
+  onCapture: () => void;
   onRetryCamera: () => void;
+  captureReady?: boolean;
 };
 
 export function ExamScannerScreen({
@@ -66,8 +66,9 @@ export function ExamScannerScreen({
   onClose,
   onChangeExam,
   onFlash,
-  onSettings,
+  onCapture,
   onRetryCamera,
+  captureReady = false,
 }: ExamScannerScreenProps) {
   const documentVisible = documentPolygon !== null && documentPolygon.length === 4;
 
@@ -89,12 +90,6 @@ export function ExamScannerScreen({
   );
 
   const progress = scanBusy ? 1 : stableProgress;
-
-  useEffect(() => {
-    if (!cameraOpen) return;
-    setExamImmersiveRoot(true);
-    return () => setExamImmersiveRoot(false);
-  }, [cameraOpen]);
 
   return (
     <div
@@ -125,12 +120,13 @@ export function ExamScannerScreen({
           />
 
           <div
-            className="exam-scanner-topbar absolute inset-x-0 z-40 flex items-start gap-2.5 px-3"
+            className="exam-scanner-topbar pointer-events-auto absolute inset-x-0 z-[60] flex items-start gap-2.5 px-3"
             style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
           >
             <button
               type="button"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition-all duration-200 active:scale-95"
+              style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
               aria-label="Cerrar escáner"
               disabled={scanBusy}
               onClick={onClose}
@@ -151,9 +147,10 @@ export function ExamScannerScreen({
               flashMode={flashMode}
               flashOn={flashOn}
               flashSupported={flashSupported}
+              captureReady={captureReady}
               onChangeExam={onChangeExam}
               onFlash={onFlash}
-              onSettings={onSettings}
+              onCapture={onCapture}
             />
           ) : null}
 

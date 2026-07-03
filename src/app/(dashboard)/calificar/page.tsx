@@ -93,6 +93,7 @@ import {
 } from '@/components/exam-scanner/document-detector';
 import {
   CAPTURE_STABLE_TICKS_REQUIRED,
+  mobileCaptureMinResolvedRows,
   shouldTriggerAutoCapture,
 } from '@/components/exam-scanner/capture-controller';
 import { CalificarMobileHome } from '@/components/calificar-mobile-home';
@@ -637,6 +638,7 @@ export default function CalificarPage() {
   const [reviewScanning, setReviewScanning] = useState(false);
   const [reviewStatus, setReviewStatus] = useState<string | null>(null);
   const mobileCaptureBusyRef = useRef(false);
+  const autoCaptureTriggeredRef = useRef(false);
   const mobileReviewOpenRef = useRef(false);
   const reviewScanGenRef = useRef(0);
   const autoFinalizeTokenRef = useRef(0);
@@ -1084,6 +1086,7 @@ export default function CalificarPage() {
     flashModeRef.current = 'auto';
     setMobileDocumentPolygon(null);
     setStaticScannerGuideRect(null);
+    autoCaptureTriggeredRef.current = false;
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     clearAutoSnapshot();
@@ -2359,10 +2362,12 @@ export default function CalificarPage() {
             lastRawRoiQuadRef.current = roiQuadRaw!;
             lastRoiQuadRef.current = roiQuad;
             if (!stable) {
-              cornerStableTicksRef.current = 0;
-              setMobileStableTicks(0);
-              setCornersAlignedView(false);
-              setLiveStatus('Mantén la hoja quieta…');
+              cornerStableTicksRef.current = Math.max(0, cornerStableTicksRef.current - 1);
+              setMobileStableTicks(cornerStableTicksRef.current);
+              if (cornerStableTicksRef.current === 0) {
+                setCornersAlignedView(false);
+                setLiveStatus('Mantén la hoja quieta…');
+              }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
@@ -3168,7 +3173,7 @@ export default function CalificarPage() {
         });
       }
       if (!roiQuad && roiCapture) {
-        const detected = detectAnswerSheetQuadViaAlignStrips(roiCapture.roiCanvas);
+        const detected = detectMobileLiveSheetQuad(roiCapture.roiCanvas);
         if (
           detected &&
           isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)
@@ -3224,8 +3229,9 @@ export default function CalificarPage() {
       };
       applyControlNumberFromRead(controlRead, { silent: true });
 
-      const minResolved = Math.max(10, Math.ceil(omrRowCount * 0.55));
-      if (meta.geometry && countResolvedOmrPicks(meta.picks) >= minResolved) {
+      const minResolved = mobileCaptureMinResolvedRows(omrRowCount);
+      const resolvedCount = countResolvedOmrPicks(meta.picks);
+      if (meta.geometry && resolvedCount >= minResolved) {
         const mapped = mapRawToDraft([...meta.picks], chunk);
         const result = await finalizeCapturedSheet(warped, undefined, {
           preWarped: true,
@@ -3247,7 +3253,33 @@ export default function CalificarPage() {
         }
       }
 
-      toast.error('No se pudo leer la hoja. Mejora la luz y encuadra las franjas negras.');
+      if (meta.geometry && resolvedCount >= 2) {
+        const mapped = mapRawToDraft([...meta.picks], chunk);
+        const result = await finalizeCapturedSheet(warped, undefined, {
+          preWarped: true,
+          warpAlignment: alignment,
+          skipReviewUi: true,
+          skipSheetValidation: true,
+          precomputedDraft: mapped.draft,
+          precomputedPicks: meta.picks,
+          precomputedGeometry: meta.geometry,
+          precomputedControlNumber: controlRead.controlNumber,
+        });
+        if (result.success) {
+          playScanCompleteChime();
+          mobileReviewOpenRef.current = false;
+          setMobileCaptureReview(null);
+          setMobileReviewAlign(null);
+          stopLiveCamera();
+          return;
+        }
+      }
+
+      toast.error(
+        resolvedCount > 0
+          ? `Lectura insuficiente (${resolvedCount}/${omrRowCount}). Mejora la luz y vuelve a capturar.`
+          : 'No se pudo leer la hoja. Mejora la luz y encuadra las franjas negras.'
+      );
       setLiveStatus('Intenta otra foto — franjas negras visibles a los lados.');
     },
     [
@@ -3437,6 +3469,7 @@ export default function CalificarPage() {
           toast.error('Error al capturar. Intenta de nuevo.');
         } finally {
           mobileCaptureBusyRef.current = false;
+          autoCaptureTriggeredRef.current = false;
           setScanBusy(false);
         }
       })();
@@ -3451,6 +3484,7 @@ export default function CalificarPage() {
     const timeout = window.setTimeout(() => {
       if (mobileCaptureBusyRef.current) {
         mobileCaptureBusyRef.current = false;
+        autoCaptureTriggeredRef.current = false;
         setScanBusy(false);
         toast.error('La captura tardó demasiado. Pulsa Capturar de nuevo.');
         setLiveStatus('Tiempo agotado. Pulsa Capturar de nuevo.');
@@ -3459,8 +3493,7 @@ export default function CalificarPage() {
     return () => window.clearTimeout(timeout);
   }, [scanBusy]);
 
-  const captureMobilePhotoManually = useCallback(() => {
-    if (!isMobile) return;
+  const requestMobileAutoCapture = useCallback(() => {
     const video = videoRef.current;
     if (!video) {
       toast.error('Cámara no disponible.');
@@ -3470,17 +3503,41 @@ export default function CalificarPage() {
       toast.error('La cámara está iniciando. Espera un segundo.');
       return;
     }
+    if (mobileCaptureBusyRef.current) return;
+    autoCaptureTriggeredRef.current = true;
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 220);
     playAutoCaptureClickSound();
-    mobileCaptureBusyRef.current = false;
-    setScanBusy(false);
-    triggerMobileSheetCapture(video, {
+    triggerMobileSheetCaptureRef.current(video, {
       roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
       roiCapture: lastRoiCaptureMetaRef.current,
       force: true,
     });
-  }, [isMobile, triggerMobileSheetCapture]);
+  }, []);
+
+  const captureMobilePhotoManually = useCallback(() => {
+    if (!isMobile) return;
+    requestMobileAutoCapture();
+  }, [isMobile, requestMobileAutoCapture]);
+
+  useEffect(() => {
+    if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
+    const alignedEnough =
+      cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
+    if (!alignedEnough || mobileStableTicks < CAPTURE_STABLE_TICKS_REQUIRED) return;
+    if (!autoShutterEnabledRef.current) return;
+    if (autoCaptureTriggeredRef.current || mobileCaptureBusyRef.current) return;
+    requestMobileAutoCapture();
+  }, [
+    cameraOpen,
+    phase,
+    isMobile,
+    scanBusy,
+    cornersAlignedView,
+    mobileFiducialCount,
+    mobileStableTicks,
+    requestMobileAutoCapture,
+  ]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -4016,7 +4073,10 @@ export default function CalificarPage() {
                 setPhase('elegir');
               }}
               onFlash={() => void cycleFlashMode()}
-              onSettings={() => galleryInputRef.current?.click()}
+              onCapture={captureMobilePhotoManually}
+              captureReady={
+                cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
+              }
               onRetryCamera={() => void startLiveCamera({ skipPhaseGuard: true })}
             />
           </>,

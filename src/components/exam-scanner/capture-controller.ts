@@ -1,4 +1,4 @@
-export const CAPTURE_STABLE_TICKS_REQUIRED = 3;
+export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;
@@ -15,4 +15,8 @@ export function shouldTriggerAutoCapture({
   requiredTicks = CAPTURE_STABLE_TICKS_REQUIRED,
 }: AutoCaptureGate): boolean {
   return autoShutterEnabled && !captureBusy && stableTicks >= requiredTicks;
+}
+
+export function mobileCaptureMinResolvedRows(omrRowCount: number): number {
+  return Math.max(4, Math.ceil(omrRowCount * 0.22));
 }
