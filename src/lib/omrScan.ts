@@ -2874,6 +2874,19 @@ export function prepareMobileScannedDocumentCanvas(
   return trimCanvasContentBorders(src) ?? src;
 }
 
+/** Variante rápida para captura en vivo (sin deskew lento). */
+export function prepareMobileScannedDocumentCanvasFast(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  let src = canvas;
+  if (isCalifacilWarpedLetterCanvas(canvas)) {
+    const refined = refineWarpedCalifacilSheet(canvas, { fast: true });
+    src = refined.canvas;
+  }
+  return trimCanvasContentBorders(src) ?? src;
+}
+
 function buildAnswerSheetCaptureVariants(
   canvas: HTMLCanvasElement
 ): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
@@ -7007,10 +7020,12 @@ export type MobileAnswerSheetReviewAssets = {
 export function buildMobileAnswerSheetReviewFromWarp(
   warped: HTMLCanvasElement,
   columns: number,
-  rowCount?: number
+  rowCount?: number,
+  opts?: { scanCanvas?: HTMLCanvasElement }
 ): MobileAnswerSheetReviewAssets | null {
   if (!isMobileWarpedAnswerSheetReady(warped)) return null;
-  const scanCanvas = prepareMobileScannedDocumentCanvas(warped);
+  const scanCanvas =
+    opts?.scanCanvas ?? prepareMobileScannedDocumentCanvasFast(warped) ?? prepareMobileScannedDocumentCanvas(warped);
   if (!scanCanvas) return null;
   const meta = scanWarpedMobileAnswerSheetFast(scanCanvas, columns, rowCount);
   if (!meta.geometry) return null;

@@ -59,6 +59,7 @@ import {
   type MobileGuideRoiCapture,
   prepareAnswerSheetDisplayCanvas,
   prepareMobileScannedDocumentCanvas,
+  prepareMobileScannedDocumentCanvasFast,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
@@ -83,7 +84,7 @@ import {
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
-import { warpCalifacilMobileCapture } from '@/lib/omr/pipeline';
+import { warpCalifacilMobileCapture, warpCalifacilMobileCaptureFast } from '@/lib/omr/pipeline';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -442,8 +443,38 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** Espera al siguiente fotograma estable de la cámara (autofocus / sin motion blur). */
-async function waitForStableVideoFrame(video: HTMLVideoElement): Promise<void> {
+/** Detiene el stream en vivo mientras se muestra el documento escaneado. */
+function pauseLiveVideoForScan(video: HTMLVideoElement): void {
+  try {
+    video.pause();
+  } catch {
+    /* ignore */
+  }
+  const stream = video.srcObject as MediaStream | null;
+  stream?.getVideoTracks().forEach((track) => {
+    track.enabled = false;
+  });
+}
+
+/** Reanuda la cámara tras un escaneo fallido o cancelado. */
+function resumeLiveVideoAfterScan(video: HTMLVideoElement): void {
+  const stream = video.srcObject as MediaStream | null;
+  stream?.getVideoTracks().forEach((track) => {
+    track.enabled = true;
+  });
+  void video.play().catch(() => {});
+}
+
+function clearMobileScanPreview(
+  video: HTMLVideoElement | null,
+  setPreview: (url: string | null) => void
+): void {
+  setPreview(null);
+  if (video) resumeLiveVideoAfterScan(video);
+}
+
+/** Un fotograma de video (escaneo instantáneo, sin espera larga). */
+async function grabVideoFrame(video: HTMLVideoElement): Promise<void> {
   const rvfc = (
     video as HTMLVideoElement & {
       requestVideoFrameCallback?: (cb: (now: number, meta: unknown) => void) => number;
@@ -453,13 +484,8 @@ async function waitForStableVideoFrame(video: HTMLVideoElement): Promise<void> {
     await new Promise<void>((resolve) => {
       rvfc.call(video, () => resolve());
     });
-    await new Promise<void>((resolve) => {
-      rvfc.call(video, () => resolve());
-    });
     return;
   }
-  await sleep(80);
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
@@ -561,6 +587,7 @@ export default function CalificarPage() {
   const [liveColorMode, setLiveColorMode] = useState<LiveColorMode>('color');
   const [liveFilterMenuOpen, setLiveFilterMenuOpen] = useState(false);
   const [shutterFlash, setShutterFlash] = useState(false);
+  const [mobileScanPreviewUrl, setMobileScanPreviewUrl] = useState<string | null>(null);
   const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
     Array<{ x: number; y: number }> | null
   >(null);
@@ -1144,6 +1171,7 @@ export default function CalificarPage() {
     autoCaptureTriggeredRef.current = false;
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
+    setMobileScanPreviewUrl(null);
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
 
@@ -3234,19 +3262,22 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      setLiveStatus('Capturando foto…');
-      await waitForStableVideoFrame(video);
+      setLiveStatus('Escaneando documento…');
+      playAutoCaptureClickSound();
+      await grabVideoFrame(video);
 
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
-        toast.error('No se pudo capturar el fotograma. Intenta de nuevo.');
-        setLiveStatus('Error de cámara. Pulsa Capturar de nuevo.');
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
+        toast.error('No se pudo escanear. Intenta de nuevo.');
+        setLiveStatus('Error de escaneo. Pulsa Capturar de nuevo.');
         return;
       }
 
       if (estimateCanvasMeanLuminance(fullCanvas) < MIN_FRAME_LUMINANCE) {
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
         toast.error('Muy oscuro. Activa el flash o mejora la luz.');
-        setLiveStatus('Mejora la iluminación y vuelve a capturar.');
+        setLiveStatus('Mejora la iluminación y vuelve a escanear.');
         return;
       }
 
@@ -3269,18 +3300,28 @@ export default function CalificarPage() {
 
       let warped: HTMLCanvasElement | null = null;
       let alignment: WarpAlignmentReport | null = null;
-      const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+      const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
+        roiQuad,
+        roiCapture,
         maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-        fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
       });
-      warped = primaryWarp.warped;
-      alignment = primaryWarp.alignment;
+      warped = fastWarp.warped;
+      alignment = fastWarp.alignment;
+      if (!warped) {
+        const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+          maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
+        });
+        warped = primaryWarp.warped;
+        alignment = primaryWarp.alignment;
+      }
       if (!warped && roiCapture && roiQuad) {
         ({ warped, alignment } = warpMobileCaptureWithFallback(fullCanvas, roiQuad, roiCapture));
       }
       if (!warped) {
         const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
         if (!warpedOnly) {
+          clearMobileScanPreview(video, setMobileScanPreviewUrl);
           toast.error('No se detectó la hoja. Encuadra las franjas negras laterales.');
           setLiveStatus('Centra la hoja: deben verse las franjas negras a los lados.');
           return;
@@ -3291,42 +3332,47 @@ export default function CalificarPage() {
         });
         warped = refined.canvas;
         alignment = refined.alignment;
-      } else if (alignment && !alignment.ok) {
-        const refined = refineWarpedCalifacilSheet(warped, {
-          maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fast: true,
-        });
-        warped = refined.canvas;
-        alignment = refined.alignment;
       }
 
       if (!isMobileWarpedAnswerSheetReady(warped)) {
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
         toast.error(
-          'No se pudo recortar la hoja. Encuadra el documento completo con las franjas negras a los lados.'
+          'No se pudo escanear la hoja. Encuadra el documento completo con las franjas negras a los lados.'
         );
-        setLiveStatus('Centra la hoja completa dentro del marco antes de capturar.');
+        setLiveStatus('Centra la hoja completa dentro del marco antes de escanear.');
         return;
+      }
+
+      const scanCanvas = prepareMobileScannedDocumentCanvasFast(warped) ?? warped;
+      const scanPreview = canvasPreviewDataUrl(scanCanvas, 1800, 0.92);
+      if (scanPreview) {
+        flushSync(() => setMobileScanPreviewUrl(scanPreview));
+        pauseLiveVideoForScan(video);
+        await yieldForSpinnerPaint();
       }
 
       const chunk = sheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0 || !warped) {
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
         toast.error('No hay preguntas para calificar en esta hoja.');
         return;
       }
 
-      const sharpness = estimateCanvasSharpness(warped);
+      const sharpness = estimateCanvasSharpness(scanCanvas);
       if (sharpness < MOBILE_MIN_WARPED_SHARPNESS) {
-        toast.error('Foto borrosa o movida. Mantén el teléfono quieto y vuelve a capturar.');
-        setLiveStatus('Mantén quieto el teléfono al pulsar Capturar.');
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
+        toast.error('Imagen borrosa. Mantén el teléfono quieto y vuelve a escanear.');
+        setLiveStatus('Mantén quieto el teléfono al escanear.');
         return;
       }
 
       void setTorchEnabled(false);
       setFlashOn(false);
-      playAutoCaptureClickSound();
 
-      setLiveStatus('Calificando…');
-      const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, omrRowCount);
+      setLiveStatus('Leyendo respuestas…');
+      const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, omrRowCount, {
+        scanCanvas,
+      });
       const meta = reviewAssets
         ? {
             picks: reviewAssets.picks,
@@ -3334,7 +3380,7 @@ export default function CalificarPage() {
             controlNumber: reviewAssets.controlNumber,
             controlNumberDigits: reviewAssets.controlNumberDigits,
           }
-        : scanWarpedMobileCaptureSheetFast(warped, omrCols, omrRowCount);
+        : scanWarpedMobileCaptureSheetFast(scanCanvas, omrCols, omrRowCount);
       const controlRead = {
         controlNumber: meta.controlNumber,
         digits: meta.controlNumberDigits,
@@ -3349,13 +3395,12 @@ export default function CalificarPage() {
             ? `Lectura insuficiente (${resolvedCount}/${omrRowCount}). Mejora la luz y el encuadre.`
             : 'No se leyeron respuestas. Encuadra la tabla al pie de la hoja.'
         );
-        setLiveStatus('Vuelve a capturar con la hoja bien iluminada y centrada.');
+        setLiveStatus('Vuelve a escanear con la hoja bien iluminada y centrada.');
+        clearMobileScanPreview(video, setMobileScanPreviewUrl);
         return;
       }
 
       const mapped = mapRawToDraft([...meta.picks], chunk);
-      const scanCanvas =
-        reviewAssets?.displayCanvas ?? prepareMobileScannedDocumentCanvas(warped) ?? warped;
       const result = await finalizeCapturedSheet(scanCanvas, undefined, {
         preWarped: true,
         warpAlignment: alignment,
@@ -3365,9 +3410,10 @@ export default function CalificarPage() {
         precomputedPicks: meta.picks,
         precomputedGeometry: meta.geometry,
         precomputedControlNumber: controlRead.controlNumber,
-        displaySource: scanCanvas,
+        displaySource: reviewAssets?.displayCanvas ?? scanCanvas,
       });
       if (result.success) {
+        setMobileScanPreviewUrl(null);
         playScanCompleteChime();
         mobileReviewOpenRef.current = false;
         setMobileCaptureReview(null);
@@ -3376,8 +3422,9 @@ export default function CalificarPage() {
         return;
       }
 
-      toast.error('No se pudo calificar esta captura. Intenta otra foto más nítida.');
-      setLiveStatus('Intenta otra foto — hoja completa y buena luz.');
+      toast.error('No se pudo calificar esta captura. Intenta escanear de nuevo.');
+      setLiveStatus('Intenta de nuevo — hoja completa y buena luz.');
+      clearMobileScanPreview(video, setMobileScanPreviewUrl);
     },
     [
       applyControlNumberFromRead,
@@ -3559,15 +3606,17 @@ export default function CalificarPage() {
       mobileCaptureBusyRef.current = true;
       flushSync(() => {
         setScanBusy(true);
-        setLiveStatus('Capturando foto…');
+        setMobileScanPreviewUrl(null);
+        setLiveStatus('Escaneando documento…');
       });
       setLiveFilterMenuOpen(false);
       void (async () => {
         try {
           await processMobileSheetCapture(video, opts);
         } catch {
-          toast.error('Error al capturar. Intenta de nuevo.');
-          setLiveStatus('Error al capturar. Pulsa Capturar de nuevo.');
+          toast.error('Error al escanear. Intenta de nuevo.');
+          setLiveStatus('Error al escanear. Pulsa Capturar de nuevo.');
+          clearMobileScanPreview(video, setMobileScanPreviewUrl);
         } finally {
           mobileCaptureBusyRef.current = false;
           autoCaptureTriggeredRef.current = false;
@@ -4232,6 +4281,10 @@ export default function CalificarPage() {
               onVideoMount={bindVideoElement}
               captureReady={
                 cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
+              }
+              scanPreviewUrl={mobileScanPreviewUrl}
+              scanStatusLabel={
+                mobileScanPreviewUrl ? 'Leyendo respuestas…' : 'Escaneando documento…'
               }
               onRetryCamera={() => void startLiveCamera({ skipPhaseGuard: true })}
             />

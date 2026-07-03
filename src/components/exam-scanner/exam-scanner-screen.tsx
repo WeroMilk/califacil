@@ -43,6 +43,9 @@ export type ExamScannerScreenProps = {
   onRetryCamera: () => void;
   onVideoMount?: (node: HTMLVideoElement | null) => void;
   captureReady?: boolean;
+  /** Documento ya escaneado (reemplaza la cámara mientras se lee OMR). */
+  scanPreviewUrl?: string | null;
+  scanStatusLabel?: string;
 };
 
 export function ExamScannerScreen({
@@ -66,8 +69,11 @@ export function ExamScannerScreen({
   onRetryCamera,
   onVideoMount,
   captureReady = false,
+  scanPreviewUrl = null,
+  scanStatusLabel = 'Leyendo respuestas…',
 }: ExamScannerScreenProps) {
   const documentVisible = documentPolygon !== null && documentPolygon.length === 4;
+  const showingScan = Boolean(scanPreviewUrl);
 
   const phase = useMemo(
     () =>
@@ -106,16 +112,38 @@ export function ExamScannerScreen({
         </div>
       ) : (
         <>
-          <CameraView
-            ref={viewportRef as RefObject<HTMLDivElement> | undefined}
-            videoRef={videoRef}
-            onVideoMount={onVideoMount}
-          />
-          <OverlayRenderer
-            phase={phase}
-            documentPolygon={documentPolygon}
-            guideRect={guideRect}
-          />
+          <div className={cn('absolute inset-0', showingScan && 'invisible')}>
+            <CameraView
+              ref={viewportRef as RefObject<HTMLDivElement> | undefined}
+              videoRef={videoRef}
+              onVideoMount={onVideoMount}
+            />
+            <OverlayRenderer
+              phase={phase}
+              documentPolygon={documentPolygon}
+              guideRect={guideRect}
+            />
+          </div>
+
+          {showingScan ? (
+            <div className="absolute inset-0 z-[100004] flex flex-col bg-[#f2f2f7]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={scanPreviewUrl!}
+                alt=""
+                className="min-h-0 flex-1 object-contain"
+              />
+              <div className="shrink-0 border-t border-black/10 bg-white/95 px-4 py-3 backdrop-blur-md">
+                <div className="flex items-center justify-center gap-2.5">
+                  <Loader2
+                    className="h-5 w-5 animate-spin text-emerald-600 motion-reduce:animate-none"
+                    aria-hidden
+                  />
+                  <p className="text-sm font-medium text-gray-800">{scanStatusLabel}</p>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <header
             className="exam-scanner-topbar fixed inset-x-0 top-0 z-[100008] flex items-start gap-2.5 px-3"
@@ -139,41 +167,52 @@ export function ExamScannerScreen({
             >
               <X className="h-5 w-5" strokeWidth={2.5} />
             </button>
-            <div className="min-w-0 flex-1">
-              <StatusCard
-                examTitle={examTitle}
-                statusLabel={statusLabel}
-                stableProgress={progress}
-                phase={phase}
-                onTapCapture={
-                  !scanBusy ? () => runScannerAction(actionsRef.current, 'capture') : undefined
-                }
-              />
-            </div>
+            {!showingScan ? (
+              <div className="min-w-0 flex-1">
+                <StatusCard
+                  examTitle={examTitle}
+                  statusLabel={statusLabel}
+                  stableProgress={progress}
+                  phase={phase}
+                  onTapCapture={
+                    !scanBusy ? () => runScannerAction(actionsRef.current, 'capture') : undefined
+                  }
+                />
+              </div>
+            ) : (
+              <div className="min-w-0 flex-1 rounded-2xl bg-white/95 px-3 py-2.5 shadow-sm backdrop-blur-md">
+                <p className="truncate text-xs font-medium uppercase tracking-wide text-gray-500">
+                  {examTitle}
+                </p>
+                <p className="truncate text-sm font-semibold text-gray-900">{scanStatusLabel}</p>
+              </div>
+            )}
           </header>
 
-          <ScanHud
-            flashMode={flashMode}
-            flashOn={flashOn}
-            flashSupported={flashSupported}
-            captureReady={captureReady}
-            disabled={scanBusy}
-            actionsRef={actionsRef}
-          />
+          {!showingScan ? (
+            <ScanHud
+              flashMode={flashMode}
+              flashOn={flashOn}
+              flashSupported={flashSupported}
+              captureReady={captureReady}
+              disabled={scanBusy}
+              actionsRef={actionsRef}
+            />
+          ) : null}
 
           <CaptureFlash active={shutterFlash} />
 
-          {scanBusy ? (
+          {scanBusy && !showingScan ? (
             <div
-              className="pointer-events-none fixed inset-0 z-[100005] flex items-center justify-center bg-black/25"
+              className="pointer-events-none fixed inset-0 z-[100005] flex items-center justify-center bg-black/40"
               aria-live="polite"
             >
-              <div className="rounded-2xl bg-black/55 px-5 py-4 text-center shadow-xl backdrop-blur-sm">
+              <div className="rounded-2xl bg-black/60 px-5 py-4 text-center shadow-xl backdrop-blur-sm">
                 <Loader2
                   className="mx-auto h-9 w-9 animate-spin text-white motion-reduce:animate-none [animation-duration:650ms]"
                   aria-hidden
                 />
-                <p className="mt-2 text-sm font-medium text-white/90">Calificando hoja…</p>
+                <p className="mt-2 text-sm font-medium text-white/90">Escaneando documento…</p>
               </div>
             </div>
           ) : null}

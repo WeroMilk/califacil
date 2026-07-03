@@ -20,12 +20,12 @@ export function deriveStatusLabel(
   phase: DocumentDetectionPhase,
   stableProgress: number
 ): string {
-  if (phase === 'capturing') return '✅ Capturando...';
+  if (phase === 'capturing') return 'Escaneando documento…';
   if (phase === 'lost') return 'Coloca el examen dentro del marco';
-  if (phase === 'searching' && stableProgress > 0.05) return 'Mantén quieto...';
-  if (phase === 'searching') return 'Buscando examen...';
-  if (stableProgress < 1) return 'Mantén quieto...';
-  return '✅ Capturando...';
+  if (phase === 'searching' && stableProgress > 0.05) return 'Mantén quieto…';
+  if (phase === 'searching') return 'Buscando documento…';
+  if (stableProgress < 1) return 'Mantén quieto…';
+  return 'Listo — escaneando…';
 }
 
 export function phaseStrokeColor(phase: DocumentDetectionPhase): string {
