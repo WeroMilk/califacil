@@ -1323,11 +1323,7 @@ export default function CalificarPage() {
         }
         let snapUrl: string | null = null;
         const previewCanvas = opts?.displaySource ?? examCanvas;
-        const snapSource = opts?.displaySource
-          ? previewCanvas
-          : (prepareMobileScannedDocumentCanvas(previewCanvas) ??
-            prepareAnswerSheetDisplayCanvas(previewCanvas) ??
-            previewCanvas);
+        const snapSource = previewCanvas;
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
             snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
@@ -1726,9 +1722,7 @@ export default function CalificarPage() {
         const snapSource =
           meta.reviewSourceCanvas ??
           (activeScanSource instanceof HTMLCanvasElement
-            ? (prepareMobileScannedDocumentCanvas(activeScanSource) ??
-              prepareAnswerSheetDisplayCanvas(activeScanSource) ??
-              activeScanSource)
+            ? (prepareMobileScannedDocumentCanvas(activeScanSource) ?? activeScanSource)
             : activeScanSource);
         let snapUrl: string | null = null;
         if (snapSource instanceof HTMLCanvasElement) {
@@ -3360,8 +3354,9 @@ export default function CalificarPage() {
       }
 
       const mapped = mapRawToDraft([...meta.picks], chunk);
-      const displayCanvas = reviewAssets?.displayCanvas ?? prepareMobileScannedDocumentCanvas(warped) ?? warped;
-      const result = await finalizeCapturedSheet(warped, undefined, {
+      const scanCanvas =
+        reviewAssets?.displayCanvas ?? prepareMobileScannedDocumentCanvas(warped) ?? warped;
+      const result = await finalizeCapturedSheet(scanCanvas, undefined, {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
@@ -3370,7 +3365,7 @@ export default function CalificarPage() {
         precomputedPicks: meta.picks,
         precomputedGeometry: meta.geometry,
         precomputedControlNumber: controlRead.controlNumber,
-        displaySource: displayCanvas,
+        displaySource: scanCanvas,
       });
       if (result.success) {
         playScanCompleteChime();
@@ -4448,7 +4443,6 @@ export default function CalificarPage() {
             open={zipGradeModalOpen && !zipGradeReviewOpen}
             examTitle={exam.title}
             previewUrl={currentZipGradeSheet?.previewUrl}
-            previewGeometry={currentZipGradeSheet?.geometry ?? null}
             score={
               autoGradeStats ?? {
                 correct: currentZipGradeSheet?.correct ?? 0,

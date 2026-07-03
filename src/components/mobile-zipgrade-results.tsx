@@ -1,13 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Menu, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import {
-  califacilFiducialCornerGuidesForObjectContainImage,
-  type CalifacilOmrScanGeometry,
-} from '@/lib/omrScan';
+import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
 import { CalifacilZipGradeReviewOverlay } from '@/components/califacil-zipgrade-review-overlay';
 import type { Student } from '@/types';
 
@@ -29,7 +26,6 @@ type ScanCompleteModalProps = {
   open: boolean;
   examTitle?: string;
   previewUrl?: string | null;
-  previewGeometry?: CalifacilOmrScanGeometry | null;
   score: { correct: number; total: number; pct: number };
   nameCropUrl?: string | null;
   studentName?: string;
@@ -39,56 +35,10 @@ type ScanCompleteModalProps = {
   onReview: () => void;
 };
 
-function ZipGradeResultCornerGuides({
-  imageW,
-  imageH,
-}: {
-  imageW: number;
-  imageH: number;
-}) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-
-  useEffect(() => {
-    const node = hostRef.current;
-    if (!node) return;
-    const update = () => {
-      const rect = node.getBoundingClientRect();
-      setSize({ w: rect.width, h: rect.height });
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, []);
-
-  const guides = useMemo(
-    () =>
-      size.w > 0 && size.h > 0
-        ? califacilFiducialCornerGuidesForObjectContainImage(imageW, imageH, size.w, size.h)
-        : [],
-    [imageH, imageW, size.h, size.w]
-  );
-
-  return (
-    <div ref={hostRef} className="pointer-events-none absolute inset-0">
-      {guides.map((g, i) => (
-        <div
-          key={i}
-          className="absolute rounded-lg border-[2.5px] border-black/85 bg-white/25"
-          style={{ left: g.left, top: g.top, width: g.size, height: g.size }}
-          aria-hidden
-        />
-      ))}
-    </div>
-  );
-}
-
 export function MobileZipGradeScanCompleteModal({
   open,
   examTitle,
   previewUrl,
-  previewGeometry,
   score,
   nameCropUrl,
   studentName,
@@ -108,19 +58,13 @@ export function MobileZipGradeScanCompleteModal({
       }}
     >
       {previewUrl ? (
-        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden bg-white">
+        <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden bg-[#f4f4f5]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={previewUrl}
             alt=""
-            className="h-full w-full object-contain"
+            className="max-h-full max-w-full object-contain shadow-sm"
           />
-          {previewGeometry ? (
-            <ZipGradeResultCornerGuides
-              imageW={previewGeometry.imageWidth}
-              imageH={previewGeometry.imageHeight}
-            />
-          ) : null}
         </div>
       ) : null}
 

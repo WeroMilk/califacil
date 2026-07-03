@@ -2808,70 +2808,59 @@ export function prepareAnswerSheetDisplayCanvas(
   return out;
 }
 
-function percentileGrayFromHist(hist: Uint32Array, total: number, p: number): number {
-  const target = Math.max(0, Math.min(total - 1, Math.floor(total * p)));
-  let cum = 0;
-  for (let i = 0; i < 256; i++) {
-    cum += hist[i]!;
-    if (cum > target) return i;
-  }
-  return 255;
-}
-
-/** Contraste + nitidez suave para vista previa móvil estilo escáner de documentos. */
-function enhanceCanvasScannerLook(canvas: HTMLCanvasElement): HTMLCanvasElement {
+/**
+ * Recorta márgenes blancos exteriores (artefactos de homografía), sin alterar el contenido.
+ */
+function trimCanvasContentBorders(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
   const w = canvas.width;
   const h = canvas.height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return canvas;
+  if (w < 40 || h < 40) return null;
   const id = ctx.getImageData(0, 0, w, h);
   const d = id.data;
-  const hist = new Uint32Array(256);
-  const gray = new Uint8Array(w * h);
-  for (let i = 0, g = 0; i < d.length; i += 4, g++) {
-    const lum = Math.round(d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114);
-    gray[g] = lum;
-    hist[lum]++;
-  }
-  const lo = percentileGrayFromHist(hist, gray.length, 0.03);
-  const hi = percentileGrayFromHist(hist, gray.length, 0.97);
-  const range = Math.max(18, hi - lo);
-  for (let i = 0, g = 0; i < d.length; i += 4, g++) {
-    const lum = gray[g]!;
-    const stretched = Math.min(255, Math.max(0, ((lum - lo) / range) * 255));
-    const mix = lum > 8 ? stretched / lum : 1.08;
-    d[i] = Math.min(255, d[i]! * mix);
-    d[i + 1] = Math.min(255, d[i + 1]! * mix);
-    d[i + 2] = Math.min(255, d[i + 2]! * mix);
-  }
-  const copy = new Uint8ClampedArray(d);
-  const amount = 0.18;
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      for (let c = 0; c < 3; c++) {
-        const center = (y * w + x) * 4 + c;
-        const blurred =
-          (copy[center - w * 4 - 4]! +
-            copy[center - w * 4]! +
-            copy[center - w * 4 + 4]! +
-            copy[center - 4]! +
-            copy[center]! +
-            copy[center + 4]! +
-            copy[center + w * 4 - 4]! +
-            copy[center + w * 4]! +
-            copy[center + w * 4 + 4]!) /
-          9;
-        d[center] = Math.min(255, Math.max(0, copy[center]! + (copy[center]! - blurred) * amount));
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 320));
+  const inkThreshold = 246;
+  let minX = w;
+  let minY = h;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+      if (lum < inkThreshold) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
       }
     }
   }
-  ctx.putImageData(id, 0, 0);
-  return canvas;
+  if (maxX <= minX || maxY <= minY) return canvas;
+  const pad = Math.max(2, Math.round(Math.min(w, h) * 0.006));
+  const x0 = Math.max(0, minX - pad);
+  const y0 = Math.max(0, minY - pad);
+  const x1 = Math.min(w, maxX + pad + 1);
+  const y1 = Math.min(h, maxY + pad + 1);
+  const cw = x1 - x0;
+  const ch = y1 - y0;
+  if (cw < w * 0.5 || ch < h * 0.5) return canvas;
+  if (cw >= w - 2 && ch >= h - 2) return canvas;
+  const out = document.createElement('canvas');
+  out.width = cw;
+  out.height = ch;
+  const octx = out.getContext('2d', { willReadFrequently: true });
+  if (!octx) return canvas;
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch);
+  return out;
 }
 
 /**
- * Hoja enderezada con aspecto de escáner: deskew, papel blanco y nitidez.
- * Solo para vista previa del usuario; el canvas original se usa para OMR.
+ * Documento enderezado listo para mostrar y calificar: alineación + recorte, sin filtros.
+ * El preprocesado OMR (CLAHE) se aplica solo internamente al leer casillas.
  */
 export function prepareMobileScannedDocumentCanvas(
   canvas: HTMLCanvasElement
@@ -2882,15 +2871,7 @@ export function prepareMobileScannedDocumentCanvas(
     const refined = refineWarpedCalifacilSheet(canvas, { fast: false });
     src = deskewWarpedCalifacilSheet(refined.canvas);
   }
-  const out = document.createElement('canvas');
-  out.width = src.width;
-  out.height = src.height;
-  const ctx = out.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(src, 0, 0, out.width, out.height);
-  return enhanceCanvasScannerLook(out);
+  return trimCanvasContentBorders(src) ?? src;
 }
 
 function buildAnswerSheetCaptureVariants(
@@ -7029,20 +7010,18 @@ export function buildMobileAnswerSheetReviewFromWarp(
   rowCount?: number
 ): MobileAnswerSheetReviewAssets | null {
   if (!isMobileWarpedAnswerSheetReady(warped)) return null;
-  const meta = scanWarpedMobileAnswerSheetFast(warped, columns, rowCount);
+  const scanCanvas = prepareMobileScannedDocumentCanvas(warped);
+  if (!scanCanvas) return null;
+  const meta = scanWarpedMobileAnswerSheetFast(scanCanvas, columns, rowCount);
   if (!meta.geometry) return null;
-  const displayCanvas = prepareMobileScannedDocumentCanvas(warped);
-  if (!displayCanvas) return null;
-  const readCanvas = prepareAnswerSheetCaptureCanvas(warped) ?? warped;
-  const control = readAnswerSheetControlNumberFromCanvas(readCanvas, clampCalifacilOmrRowCount(rowCount));
-  const geometry: CalifacilOmrScanGeometry = {
-    ...meta.geometry,
-    imageWidth: displayCanvas.width,
-    imageHeight: displayCanvas.height,
-  };
+  const readCanvas = prepareAnswerSheetCaptureCanvas(scanCanvas) ?? scanCanvas;
+  const control = readAnswerSheetControlNumberFromCanvas(
+    readCanvas,
+    clampCalifacilOmrRowCount(rowCount)
+  );
   return {
-    displayCanvas,
-    geometry,
+    displayCanvas: scanCanvas,
+    geometry: meta.geometry,
     picks: meta.picks,
     rows: meta.rows,
     controlNumber: control.controlNumber,
@@ -7415,12 +7394,10 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
 
-  /** La vista previa usa documento enderezado con aspecto de escáner. */
+  /** La vista previa móvil es el documento escaneado sin filtros. */
   const reviewCanvas =
     templateGridOnly || opts?.preserveInputCanvas
-      ? (prepareMobileScannedDocumentCanvas(canvas) ??
-        prepareAnswerSheetDisplayCanvas(canvas) ??
-        canvas)
+      ? (prepareMobileScannedDocumentCanvas(canvas) ?? canvas)
       : (bestReviewCanvas ?? canvas);
 
   if (templateGridOnly) {
