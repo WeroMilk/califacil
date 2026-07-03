@@ -565,12 +565,15 @@ export function hasCalifacilAlignStrips(canvas: HTMLCanvasElement): boolean {
   let found = 0;
   for (const strip of CALIFACIL_ALIGN_STRIPS_NORM) {
     const x0 = strip.left * W;
-    const y0 = strip.top * H;
     const sw = Math.max(3, strip.width * W);
     const sh = Math.max(12, strip.height * H);
-    if (meanPatchDarkFraction(ctx, x0, y0, sw, sh) >= 0.18) found++;
+    const yStarts = [strip.top * H, strip.top * H + sh * 0.35, strip.top * H + sh * 0.7];
+    const dark =
+      yStarts.some((y0) => meanPatchDarkFraction(ctx, x0, y0, sw, sh * 0.45) >= 0.12) ||
+      meanPatchDarkFraction(ctx, x0, strip.top * H, sw, sh) >= 0.1;
+    if (dark) found++;
   }
-  return found >= 2;
+  return found >= 1;
 }
 
 function viewfinderGuideCornerPatches(
@@ -5782,8 +5785,9 @@ export function diagnoseCalifacilAnswerSheetReadiness(
   if (!probe.hasRowLines) issues.push('faltan líneas de filas');
   if (!probe.hasColumnEdges) issues.push('faltan columnas A–D');
 
-  const structureOk = grid && probe.hasRowLines && probe.hasColumnEdges;
-  const finalOk = structureOk && corners >= 3 && (strips || corners >= 4);
+  const structureOk = grid && (probe.hasRowLines || probe.hasColumnEdges);
+  const fiducialsOk = corners >= 2 || strips;
+  const finalOk = structureOk && fiducialsOk;
 
   return { ok: finalOk, issues };
 }

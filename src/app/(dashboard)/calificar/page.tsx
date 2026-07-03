@@ -219,7 +219,7 @@ const MOBILE_SCAN_MAX_WIDTH = 1080;
 /** Resolución máxima al capturar foto final en móvil. */
 const MOBILE_CAPTURE_MAX_SIDE = 2400;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
-const MOBILE_MIN_WARPED_SHARPNESS = 9;
+const MOBILE_MIN_WARPED_SHARPNESS = 7;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 3;
 /** Asimetría de luminancia izq/der que sugiere sombra fuerte en la hoja. */
@@ -2567,9 +2567,7 @@ export default function CalificarPage() {
             return;
           }
 
-          const strictOk = isMobile
-            ? isCalifacilExamSheetStrict(oriented, omrCols)
-            : isCalifacilExamSheetLikely(oriented, omrCols);
+          const strictOk = isCalifacilExamSheetLikely(oriented, omrCols);
           if (strictOk) {
             strictValidationTicksRef.current += 1;
           } else {
@@ -3296,19 +3294,6 @@ export default function CalificarPage() {
         return;
       }
 
-      const readiness = diagnoseCalifacilAnswerSheetReadiness(
-        warped,
-        omrCols,
-        omrRowCount,
-        alignment
-      );
-      if (!readiness.ok) {
-        const detail = readiness.issues.slice(0, 2).join('; ');
-        toast.error(`No es una hoja CaliFacil válida. ${detail}`);
-        setLiveStatus('Encuadra la hoja completa con las franjas negras a los lados.');
-        return;
-      }
-
       const sharpness = estimateCanvasSharpness(warped);
       if (sharpness < MOBILE_MIN_WARPED_SHARPNESS) {
         toast.error('Foto borrosa o movida. Mantén el teléfono quieto y vuelve a capturar.');
@@ -3345,7 +3330,7 @@ export default function CalificarPage() {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
-        skipSheetValidation: false,
+        skipSheetValidation: true,
         precomputedDraft: mapped.draft,
         precomputedPicks: meta.picks,
         precomputedGeometry: meta.geometry,
