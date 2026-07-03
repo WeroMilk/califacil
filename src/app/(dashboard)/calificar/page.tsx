@@ -3558,12 +3558,27 @@ export default function CalificarPage() {
     });
   }, []);
 
-  const captureMobilePhotoManually = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) {
+  const captureMobilePhotoManually = useCallback(async () => {
+    let video = videoRef.current;
+    if (!video || !streamRef.current) {
       toast.error('Cámara no disponible.');
       return;
     }
+
+    if (video.videoWidth < 40 || video.readyState < 2) {
+      await attachStreamToVideo();
+      for (let attempt = 0; attempt < 10; attempt++) {
+        video = videoRef.current;
+        if (video && video.videoWidth >= 40 && video.readyState >= 2) break;
+        await sleep(100);
+      }
+    }
+
+    if (!video || video.videoWidth < 40) {
+      toast.error('La cámara aún está iniciando. Espera un segundo y vuelve a pulsar Capturar.');
+      return;
+    }
+
     autoCaptureTriggeredRef.current = false;
     mobileCaptureBusyRef.current = false;
     setShutterFlash(true);
@@ -3578,7 +3593,17 @@ export default function CalificarPage() {
       roiCapture: lastRoiCaptureMetaRef.current,
       force: true,
     });
-  }, [triggerMobileSheetCapture]);
+  }, [attachStreamToVideo, triggerMobileSheetCapture]);
+
+  const handleScannerClose = useCallback(() => {
+    stopLiveCamera();
+    setPhase('elegir');
+  }, [stopLiveCamera]);
+
+  const handleScannerChangeExam = useCallback(() => {
+    stopLiveCamera();
+    setPhase('elegir');
+  }, [stopLiveCamera]);
 
   useEffect(() => {
     if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
@@ -3661,6 +3686,20 @@ export default function CalificarPage() {
     zipGradeReviewOpen,
     zipGradeModalOpen,
   ]);
+
+  const scannerPortalOpen =
+    useLiveCameraUi &&
+    phase === 'capturar' &&
+    mobileCaptureReview === null &&
+    Boolean(exam) &&
+    cameraPortalReady;
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('calificar-scanner-open', scannerPortalOpen);
+    return () => {
+      document.documentElement.classList.remove('calificar-scanner-open');
+    };
+  }, [scannerPortalOpen]);
 
   if (!user) return null;
 
@@ -4088,11 +4127,7 @@ export default function CalificarPage() {
       </Card>
       </div>
 
-      {useLiveCameraUi &&
-        phase === 'capturar' &&
-        !mobileCaptureReview &&
-        exam &&
-        cameraPortalReady &&
+      {scannerPortalOpen &&
         typeof document !== 'undefined' &&
         createPortal(
           <>
@@ -4110,7 +4145,7 @@ export default function CalificarPage() {
               cameraOpen={cameraOpen}
               scanBusy={scanBusy}
               shutterFlash={shutterFlash}
-              examTitle={exam.title}
+              examTitle={exam!.title}
               documentPolygon={mobileDocumentPolygon}
               guideRect={staticScannerGuideRect}
               aligned={cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS}
@@ -4124,16 +4159,10 @@ export default function CalificarPage() {
               flashMode={flashMode}
               flashOn={flashOn}
               flashSupported={flashSupported}
-              onClose={() => {
-                stopLiveCamera();
-                setPhase('elegir');
-              }}
-              onChangeExam={() => {
-                stopLiveCamera();
-                setPhase('elegir');
-              }}
+              onClose={handleScannerClose}
+              onChangeExam={handleScannerChangeExam}
               onFlash={() => void cycleFlashMode()}
-              onCapture={captureMobilePhotoManually}
+              onCapture={() => void captureMobilePhotoManually()}
               captureReady={
                 cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
               }

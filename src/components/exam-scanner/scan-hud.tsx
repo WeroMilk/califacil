@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useRef, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { Camera, FileStack, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -11,64 +11,46 @@ type Props = {
   flashOn: boolean;
   flashSupported: boolean;
   captureReady: boolean;
+  disabled?: boolean;
   onChangeExam: () => void;
   onFlash: () => void;
   onCapture: () => void;
 };
 
-function useInstantTap(action: () => void) {
-  const actionRef = useRef(action);
-  const lastFireRef = useRef(0);
-  actionRef.current = action;
-
-  return useCallback(() => {
-    const now = Date.now();
-    if (now - lastFireRef.current < 320) return;
-    lastFireRef.current = now;
-    actionRef.current();
-  }, []);
-}
-
 function HudButton({
   label,
-  onClick,
+  onPress,
   active,
   highlight,
+  disabled,
   children,
   large,
 }: {
   label: string;
-  onClick: () => void;
+  onPress: () => void;
   active?: boolean;
   highlight?: boolean;
+  disabled?: boolean;
   children: ReactNode;
   large?: boolean;
 }) {
-  const fire = useInstantTap(onClick);
-
   return (
     <button
       type="button"
+      disabled={disabled}
       className={cn(
-        'exam-scanner-hud-btn relative z-[1] flex flex-col items-center justify-center gap-0.5 rounded-xl px-3 py-2 text-[9px] font-medium text-white/90 transition-all duration-200 active:scale-95 sm:gap-1 sm:rounded-2xl sm:px-4 sm:py-2.5 sm:text-[10px]',
-        large && 'min-h-[52px] min-w-[72px] px-4 py-3',
+        'exam-scanner-hud-btn flex min-h-[48px] min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-xl px-3 py-2.5 text-[10px] font-semibold text-white/95 transition-transform duration-150 active:scale-95 disabled:opacity-45',
+        large && 'min-h-[56px] min-w-[76px] px-4',
         highlight
-          ? 'bg-emerald-500/85 text-white shadow-lg shadow-emerald-900/30'
+          ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/40'
           : active
-            ? 'bg-white/20'
-            : 'bg-white/10 hover:bg-white/14'
+            ? 'bg-white/22'
+            : 'bg-white/12'
       )}
-      style={{
-        touchAction: 'manipulation',
-        WebkitTapHighlightColor: 'transparent',
-        WebkitTouchCallout: 'none',
-      }}
       aria-label={label}
-      onClick={() => fire()}
-      onTouchEnd={(event) => {
-        event.preventDefault();
+      onClick={(event) => {
         event.stopPropagation();
-        fire();
+        if (!disabled) onPress();
       }}
     >
       {children}
@@ -77,42 +59,41 @@ function HudButton({
   );
 }
 
-function ScanHudInner({
+export function ScanHud({
   flashMode,
   flashOn,
   flashSupported,
   captureReady,
+  disabled = false,
   onChangeExam,
   onFlash,
   onCapture,
 }: Props) {
   return (
-    <div
-      className="exam-scanner-hud pointer-events-auto absolute inset-x-0 z-[200] flex justify-center"
+    <footer
+      className="exam-scanner-hud pointer-events-none fixed inset-x-0 bottom-0 z-[10006] flex justify-center"
       style={{
-        bottom: 'max(1rem, calc(env(safe-area-inset-bottom, 0px) + 0.35rem))',
-        transform: 'translateZ(0)',
+        paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
       }}
     >
-      <div
-        className="pointer-events-auto flex items-center gap-1.5 rounded-[1.35rem] border border-white/12 bg-black/50 px-1.5 py-1.5 shadow-2xl backdrop-blur-2xl sm:gap-2 sm:px-2 sm:py-2"
-        style={{ transform: 'translateZ(0)' }}
-      >
-        <HudButton label="Cambiar examen" onClick={onChangeExam}>
+      <div className="pointer-events-auto flex items-center gap-2 rounded-[1.4rem] border border-white/15 bg-black/62 px-2 py-2 shadow-2xl">
+        <HudButton label="Cambiar examen" onPress={onChangeExam} disabled={disabled}>
           <FileStack className="h-5 w-5" strokeWidth={2} />
         </HudButton>
         <HudButton
           label="Capturar"
-          onClick={onCapture}
+          onPress={onCapture}
           highlight={captureReady}
+          disabled={disabled}
           large
         >
-          <Camera className="h-5 w-5" strokeWidth={2.25} />
+          <Camera className="h-6 w-6" strokeWidth={2.25} />
         </HudButton>
         <HudButton
           label="Flash"
-          onClick={onFlash}
+          onPress={onFlash}
           active={flashOn || flashMode === 'on'}
+          disabled={disabled}
         >
           <span className="relative">
             <Zap
@@ -130,8 +111,6 @@ function ScanHudInner({
       {!flashSupported ? (
         <span className="sr-only">Flash no disponible en este dispositivo</span>
       ) : null}
-    </div>
+    </footer>
   );
 }
-
-export const ScanHud = memo(ScanHudInner);

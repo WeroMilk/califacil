@@ -1,6 +1,5 @@
 'use client';
 
-import { memo } from 'react';
 import { cn } from '@/lib/utils';
 import type { DocumentDetectionPhase } from '@/components/exam-scanner/types';
 
@@ -13,7 +12,7 @@ type Props = {
   onTapCapture?: () => void;
 };
 
-function StatusCardInner({
+export function StatusCard({
   examTitle,
   statusLabel,
   stableProgress,
@@ -25,38 +24,22 @@ function StatusCardInner({
   const showBar = phase === 'searching' || phase === 'stable';
 
   return (
-    <div
+    <button
+      type="button"
       className={cn(
-        'exam-scanner-status min-w-0 flex-1 transition-all duration-200',
-        onTapCapture && 'cursor-pointer active:scale-[0.99]',
+        'exam-scanner-status w-full min-w-0 text-left transition-transform duration-150 active:scale-[0.99] disabled:opacity-100',
+        onTapCapture ? 'cursor-pointer' : 'cursor-default',
         className
       )}
-      role={onTapCapture ? 'button' : undefined}
-      tabIndex={onTapCapture ? 0 : undefined}
-      onClick={onTapCapture}
-      onTouchEnd={
-        onTapCapture
-          ? (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onTapCapture();
-            }
-          : undefined
-      }
-      onKeyDown={
-        onTapCapture
-          ? (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onTapCapture();
-              }
-            }
-          : undefined
-      }
+      disabled={!onTapCapture}
+      onClick={(event) => {
+        event.stopPropagation();
+        onTapCapture?.();
+      }}
     >
       <div
         className={cn(
-          'rounded-2xl border px-3.5 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] backdrop-blur-2xl sm:px-4 sm:py-3',
+          'rounded-2xl border px-3.5 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] backdrop-blur-md sm:px-4 sm:py-3',
           phase === 'stable' || phase === 'capturing'
             ? 'border-emerald-400/40 bg-white/92'
             : phase === 'searching'
@@ -91,9 +74,10 @@ function StatusCardInner({
             />
           </div>
         ) : null}
+        {onTapCapture ? (
+          <p className="mt-1.5 text-[11px] font-medium text-emerald-600/90">Toca aquí para capturar</p>
+        ) : null}
       </div>
-    </div>
+    </button>
   );
 }
-
-export const StatusCard = memo(StatusCardInner);

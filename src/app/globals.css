@@ -276,6 +276,13 @@ html.calificar-immersive body {
   touch-action: manipulation !important;
 }
 
+html.calificar-scanner-open,
+html.calificar-scanner-open body {
+  touch-action: manipulation !important;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
 @keyframes calificar-mobile-enter {
   from {
     opacity: 0;
@@ -314,17 +321,18 @@ html.calificar-immersive body {
   -webkit-user-select: none;
   user-select: none;
   touch-action: manipulation !important;
-  pointer-events: auto;
+  pointer-events: auto !important;
   width: 100%;
   height: 100%;
   height: 100dvh;
   min-height: -webkit-fill-available;
+  isolation: isolate;
 }
 
 .exam-scanner-root.exam-pseudo-fullscreen {
   background: #000 !important;
   padding: 0 !important;
-  z-index: 9999 !important;
+  z-index: 10000 !important;
   touch-action: manipulation !important;
 }
 
@@ -338,14 +346,22 @@ html.calificar-immersive body {
   transform: translateZ(0);
 }
 
-.exam-scanner-controls {
-  isolation: isolate;
-  transform: translateZ(0);
+.exam-scanner-topbar,
+.exam-scanner-hud,
+.exam-scanner-hud-btn,
+.exam-scanner-status {
+  touch-action: manipulation !important;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .exam-scanner-hud,
-.exam-scanner-hud-btn {
-  transform: translateZ(0);
+.exam-scanner-topbar {
+  pointer-events: none;
+}
+
+.exam-scanner-hud > *,
+.exam-scanner-topbar > * {
+  pointer-events: auto;
 }
 
 .exam-scanner-topbar {
