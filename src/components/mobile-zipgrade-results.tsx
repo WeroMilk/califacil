@@ -273,22 +273,27 @@ export function MobileZipGradeReviewScreen({
       <div className="min-h-0 flex-1 overflow-y-auto bg-[#e8e8ed]">
         {tab === 'imagen' ? (
           <div className="flex justify-center p-3">
-            <div
-              className="relative w-full max-w-lg overflow-hidden rounded-sm bg-white shadow-md"
-              style={{ aspectRatio: `${W} / ${H}` }}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={sheet.previewUrl}
-                alt="Hoja escaneada"
-                className="absolute inset-0 h-full w-full object-contain"
-              />
-              <CalifacilZipGradeReviewOverlay
-                geometry={sheet.geometry}
-                picks={sheet.picks}
-                expectedPicks={sheet.expectedPicks}
-                rowCount={sheet.rowCount}
-              />
+            <div className="flex w-full max-w-lg justify-center overflow-hidden rounded-sm bg-[#e8e8ed] p-1 shadow-md">
+              <div
+                className="relative w-full overflow-hidden bg-white"
+                style={{
+                  aspectRatio: `${W} / ${H}`,
+                  maxHeight: 'min(70vh, 28rem)',
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={sheet.previewUrl}
+                  alt="Hoja escaneada"
+                  className="absolute inset-0 z-0 h-full w-full object-contain object-center"
+                />
+                <CalifacilZipGradeReviewOverlay
+                  geometry={sheet.geometry}
+                  picks={sheet.picks}
+                  expectedPicks={sheet.expectedPicks}
+                  rowCount={sheet.rowCount}
+                />
+              </div>
             </div>
           </div>
         ) : (

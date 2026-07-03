@@ -72,6 +72,7 @@ import {
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
   buildMobileAnswerSheetReviewFromWarp,
+  buildMobileZipGradePreviewPack,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
   downscaleCanvasForOmrScan,
@@ -1350,30 +1351,29 @@ export default function CalificarPage() {
           }
         }
         let snapUrl: string | null = null;
+        let nameCropUrl: string | null = null;
+        let geom: CalifacilOmrScanGeometry | null = opts.precomputedGeometry ?? null;
         const previewCanvas = opts?.displaySource ?? examCanvas;
-        const snapSource = previewCanvas;
-        if (snapSource instanceof HTMLCanvasElement) {
-          const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
-          });
-          if (blob) snapUrl = URL.createObjectURL(blob);
-          if (!snapUrl) {
-            snapUrl = canvasPreviewDataUrl(snapSource, 2200, 0.94);
+        if (previewCanvas instanceof HTMLCanvasElement) {
+          const pack = buildMobileZipGradePreviewPack(previewCanvas, omrCols, omrRowCount);
+          if (pack) {
+            snapUrl = pack.previewDataUrl;
+            nameCropUrl = pack.nameCropUrl;
+            geom = pack.geometry;
+          } else {
+            snapUrl = canvasPreviewDataUrl(previewCanvas, 1400, 0.92);
+            nameCropUrl = cropAnswerSheetNameSnippetDataUrl(previewCanvas);
           }
         }
-        const nameCropUrl =
-          snapSource instanceof HTMLCanvasElement
-            ? cropAnswerSheetNameSnippetDataUrl(snapSource)
-            : null;
-        if (opts.precomputedGeometry) {
-          if (!snapUrl && snapSource instanceof HTMLCanvasElement) {
-            snapUrl = canvasPreviewDataUrl(snapSource, 800);
+        if (geom) {
+          if (!snapUrl && previewCanvas instanceof HTMLCanvasElement) {
+            snapUrl = canvasPreviewDataUrl(previewCanvas, 800);
           }
-          let geom: CalifacilOmrScanGeometry;
+          let geomClone: CalifacilOmrScanGeometry;
           try {
-            geom = structuredClone(opts.precomputedGeometry);
+            geomClone = structuredClone(geom);
           } catch {
-            geom = JSON.parse(JSON.stringify(opts.precomputedGeometry)) as CalifacilOmrScanGeometry;
+            geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
           setMobileSheetSnapshots((prev) => {
             const next = [
@@ -1381,7 +1381,7 @@ export default function CalificarPage() {
               {
                 sheetIndex: sheetIndexRef.current,
                 previewUrl: snapUrl ?? '',
-                geometry: geom,
+                geometry: geomClone,
                 questionIds: chunk.map((q) => q.id),
                 selectionsByQuestionId: { ...fullChunkDraft },
                 columnPicks: picksInChunk,
@@ -1748,30 +1748,31 @@ export default function CalificarPage() {
       if (isMobileCamera) {
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
         const snapSource =
+          opts?.displaySource ??
           meta.reviewSourceCanvas ??
           (activeScanSource instanceof HTMLCanvasElement
             ? (prepareMobileScannedDocumentCanvas(activeScanSource) ?? activeScanSource)
             : activeScanSource);
         let snapUrl: string | null = null;
+        let nameCropUrl: string | null = null;
+        let geom: CalifacilOmrScanGeometry | null = meta.geometry;
         if (snapSource instanceof HTMLCanvasElement) {
-          const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.96);
-          });
-          if (blob) snapUrl = URL.createObjectURL(blob);
-          if (!snapUrl) {
+          const pack = buildMobileZipGradePreviewPack(snapSource, omrCols, omrRowCount);
+          if (pack) {
+            snapUrl = pack.previewDataUrl;
+            nameCropUrl = pack.nameCropUrl;
+            geom = pack.geometry;
+          } else {
             snapUrl = canvasPreviewDataUrl(snapSource, 1100);
+            nameCropUrl = cropAnswerSheetNameSnippetDataUrl(snapSource);
           }
         }
-        const nameCropUrl =
-          snapSource instanceof HTMLCanvasElement
-            ? cropAnswerSheetNameSnippetDataUrl(snapSource)
-            : null;
-        if (meta.geometry) {
-          let geom: CalifacilOmrScanGeometry;
+        if (geom) {
+          let geomClone: CalifacilOmrScanGeometry;
           try {
-            geom = structuredClone(meta.geometry);
+            geomClone = structuredClone(geom);
           } catch {
-            geom = JSON.parse(JSON.stringify(meta.geometry)) as CalifacilOmrScanGeometry;
+            geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
           setMobileSheetSnapshots((prev) => {
             const next = [
@@ -1779,7 +1780,7 @@ export default function CalificarPage() {
               {
                 sheetIndex: sheetIndexRef.current,
                 previewUrl: snapUrl ?? '',
-                geometry: geom,
+                geometry: geomClone,
                 questionIds: chunk.map((q) => q.id),
                 selectionsByQuestionId: { ...fullChunkDraft },
                 columnPicks: picksInChunk,
