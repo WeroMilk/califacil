@@ -38,6 +38,7 @@ import {
   detectLargestQuadInRoiCanvas,
   detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
+  estimateCanvasSharpness,
   fileToImage,
   buildContainVideoLetterbox,
   isCalifacilExamSheetLikely,
@@ -62,6 +63,7 @@ import {
   refineWarpedCalifacilSheet,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileCaptureSheet,
+  scanWarpedMobileCaptureSheetFast,
   scanWarpedMobileAnswerSheetFast,
   scanWarpedWithBestTableFrame,
   scanWarpedWithNormTableFrame,
@@ -215,7 +217,9 @@ const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1080;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 1800;
+const MOBILE_CAPTURE_MAX_SIDE = 2400;
+/** Nitidez mínima del fotograma enderezado (Laplaciano). */
+const MOBILE_MIN_WARPED_SHARPNESS = 9;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 3;
 /** Asimetría de luminancia izq/der que sugiere sombra fuerte en la hoja. */
@@ -430,7 +434,30 @@ function draftSelectionsToColumnPicks(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/** Espera al siguiente fotograma estable de la cámara (autofocus / sin motion blur). */
+async function waitForStableVideoFrame(video: HTMLVideoElement): Promise<void> {
+  const rvfc = (
+    video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number, meta: unknown) => void) => number;
+    }
+  ).requestVideoFrameCallback;
+  if (typeof rvfc === 'function') {
+    await new Promise<void>((resolve) => {
+      rvfc.call(video, () => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      rvfc.call(video, () => resolve());
+    });
+    return;
+  }
+  await sleep(80);
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function califacilReviewOrangeFrameRect(
@@ -1293,11 +1320,11 @@ export default function CalificarPage() {
         const snapSource = prepareAnswerSheetDisplayCanvas(examCanvas) ?? examCanvas;
         if (snapSource instanceof HTMLCanvasElement) {
           const blob = await new Promise<Blob | null>((resolve) => {
-            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.88);
+            snapSource.toBlob((b) => resolve(b), 'image/jpeg', 0.94);
           });
           if (blob) snapUrl = URL.createObjectURL(blob);
           if (!snapUrl) {
-            snapUrl = canvasPreviewDataUrl(snapSource, 1100);
+            snapUrl = canvasPreviewDataUrl(snapSource, 1400, 0.92);
           }
         }
         const nameCropUrl =
@@ -3203,13 +3230,19 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      void setTorchEnabled(false);
-      setFlashOn(false);
+      setLiveStatus('Capturando foto…');
+      await waitForStableVideoFrame(video);
 
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         toast.error('No se pudo capturar el fotograma. Intenta de nuevo.');
         setLiveStatus('Error de cámara. Pulsa Capturar de nuevo.');
+        return;
+      }
+
+      if (estimateCanvasMeanLuminance(fullCanvas) < MIN_FRAME_LUMINANCE) {
+        toast.error('Muy oscuro. Activa el flash o mejora la luz.');
+        setLiveStatus('Mejora la iluminación y vuelve a capturar.');
         return;
       }
 
@@ -3232,12 +3265,8 @@ export default function CalificarPage() {
 
       let warped: HTMLCanvasElement | null = null;
       let alignment: WarpAlignmentReport | null = null;
-      if (roiCapture) {
-        ({ warped, alignment } = warpMobileCaptureWithFallback(
-          fullCanvas,
-          roiQuad,
-          roiCapture
-        ));
+      if (roiCapture && roiQuad) {
+        ({ warped, alignment } = warpMobileCaptureWithFallback(fullCanvas, roiQuad, roiCapture));
       }
       if (!warped) {
         const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
@@ -3261,16 +3290,38 @@ export default function CalificarPage() {
         alignment = refined.alignment;
       }
 
-      playAutoCaptureClickSound();
-
       const chunk = sheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0 || !warped) {
         toast.error('No hay preguntas para calificar en esta hoja.');
         return;
       }
 
+      const readiness = diagnoseCalifacilAnswerSheetReadiness(
+        warped,
+        omrCols,
+        omrRowCount,
+        alignment
+      );
+      if (!readiness.ok) {
+        const detail = readiness.issues.slice(0, 2).join('; ');
+        toast.error(`No es una hoja CaliFacil válida. ${detail}`);
+        setLiveStatus('Encuadra la hoja completa con las franjas negras a los lados.');
+        return;
+      }
+
+      const sharpness = estimateCanvasSharpness(warped);
+      if (sharpness < MOBILE_MIN_WARPED_SHARPNESS) {
+        toast.error('Foto borrosa o movida. Mantén el teléfono quieto y vuelve a capturar.');
+        setLiveStatus('Mantén quieto el teléfono al pulsar Capturar.');
+        return;
+      }
+
+      void setTorchEnabled(false);
+      setFlashOn(false);
+      playAutoCaptureClickSound();
+
       setLiveStatus('Calificando…');
-      const meta = scanWarpedMobileCaptureSheet(warped, omrCols, omrRowCount);
+      const meta = scanWarpedMobileCaptureSheetFast(warped, omrCols, omrRowCount);
       const controlRead = {
         controlNumber: meta.controlNumber,
         digits: meta.controlNumberDigits,
@@ -3279,79 +3330,28 @@ export default function CalificarPage() {
 
       const minResolved = mobileCaptureMinResolvedRows(omrRowCount);
       const resolvedCount = countResolvedOmrPicks(meta.picks);
-      if (meta.geometry && resolvedCount >= minResolved) {
-        const mapped = mapRawToDraft([...meta.picks], chunk);
-        const result = await finalizeCapturedSheet(warped, undefined, {
-          preWarped: true,
-          warpAlignment: alignment,
-          skipReviewUi: true,
-          skipSheetValidation: true,
-          precomputedDraft: mapped.draft,
-          precomputedPicks: meta.picks,
-          precomputedGeometry: meta.geometry,
-          precomputedControlNumber: controlRead.controlNumber,
-        });
-        if (result.success) {
-          playScanCompleteChime();
-          mobileReviewOpenRef.current = false;
-          setMobileCaptureReview(null);
-          setMobileReviewAlign(null);
-          stopLiveCamera();
-          return;
-        }
+      if (!meta.geometry || resolvedCount < minResolved) {
+        toast.error(
+          resolvedCount > 0
+            ? `Lectura insuficiente (${resolvedCount}/${omrRowCount}). Mejora la luz y el encuadre.`
+            : 'No se leyeron respuestas. Encuadra la tabla al pie de la hoja.'
+        );
+        setLiveStatus('Vuelve a capturar con la hoja bien iluminada y centrada.');
+        return;
       }
 
-      if (meta.geometry && resolvedCount >= 2) {
-        const mapped = mapRawToDraft([...meta.picks], chunk);
-        const result = await finalizeCapturedSheet(warped, undefined, {
-          preWarped: true,
-          warpAlignment: alignment,
-          skipReviewUi: true,
-          skipSheetValidation: true,
-          precomputedDraft: mapped.draft,
-          precomputedPicks: meta.picks,
-          precomputedGeometry: meta.geometry,
-          precomputedControlNumber: controlRead.controlNumber,
-        });
-        if (result.success) {
-          playScanCompleteChime();
-          mobileReviewOpenRef.current = false;
-          setMobileCaptureReview(null);
-          setMobileReviewAlign(null);
-          stopLiveCamera();
-          return;
-        }
-      }
-
-      if (meta.geometry && resolvedCount >= 1) {
-        const mapped = mapRawToDraft([...meta.picks], chunk);
-        const result = await finalizeCapturedSheet(warped, undefined, {
-          preWarped: true,
-          warpAlignment: alignment,
-          skipReviewUi: true,
-          skipSheetValidation: true,
-          precomputedDraft: mapped.draft,
-          precomputedPicks: meta.picks,
-          precomputedGeometry: meta.geometry,
-          precomputedControlNumber: controlRead.controlNumber,
-        });
-        if (result.success) {
-          playScanCompleteChime();
-          mobileReviewOpenRef.current = false;
-          setMobileCaptureReview(null);
-          setMobileReviewAlign(null);
-          stopLiveCamera();
-          return;
-        }
-      }
-
-      const fallbackResult = await finalizeCapturedSheet(warped, undefined, {
+      const mapped = mapRawToDraft([...meta.picks], chunk);
+      const result = await finalizeCapturedSheet(warped, undefined, {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
-        skipSheetValidation: true,
+        skipSheetValidation: false,
+        precomputedDraft: mapped.draft,
+        precomputedPicks: meta.picks,
+        precomputedGeometry: meta.geometry,
+        precomputedControlNumber: controlRead.controlNumber,
       });
-      if (fallbackResult.success) {
+      if (result.success) {
         playScanCompleteChime();
         mobileReviewOpenRef.current = false;
         setMobileCaptureReview(null);
@@ -3360,12 +3360,8 @@ export default function CalificarPage() {
         return;
       }
 
-      toast.error(
-        resolvedCount > 0
-          ? `Lectura insuficiente (${resolvedCount}/${omrRowCount}). Mejora la luz y vuelve a capturar.`
-          : 'No se pudo leer la hoja. Mejora la luz y encuadra las franjas negras.'
-      );
-      setLiveStatus('Intenta otra foto — franjas negras visibles a los lados.');
+      toast.error('No se pudo calificar esta captura. Intenta otra foto más nítida.');
+      setLiveStatus('Intenta otra foto — hoja completa y buena luz.');
     },
     [
       applyControlNumberFromRead,

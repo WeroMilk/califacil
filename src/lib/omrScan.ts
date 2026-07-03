@@ -1776,6 +1776,42 @@ export function estimateCanvasMeanLuminance(canvas: HTMLCanvasElement): number {
   return n > 0 ? sum / n : 0;
 }
 
+/** Nitidez aproximada (varianza del Laplaciano). Valores bajos ≈ foto movida/borrosa. */
+export function estimateCanvasSharpness(canvas: HTMLCanvasElement): number {
+  const small = downscaleCanvasForOmrScan(canvas, 360);
+  const ctx = small.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const w = small.width;
+  const h = small.height;
+  if (w < 4 || h < 4) return 0;
+  const id = ctx.getImageData(0, 0, w, h);
+  const data = id.data;
+  const gray = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      gray[y * w + x] = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+    }
+  }
+  let sum = 0;
+  let n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const c = gray[y * w + x]!;
+      const lap = Math.abs(
+        -4 * c +
+          gray[(y - 1) * w + x]! +
+          gray[(y + 1) * w + x]! +
+          gray[y * w + (x - 1)]! +
+          gray[y * w + (x + 1)]!
+      );
+      sum += lap;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
 function validateCornerMarkerQuad(
   quad: [Point, Point, Point, Point],
   width: number,
@@ -6929,6 +6965,39 @@ export function scanWarpedMobileCaptureSheet(
     ...bestMeta,
     controlNumberDigits: bestControl.digits,
     controlNumber: bestControl.controlNumber,
+  };
+}
+
+/** Lectura móvil rápida (una pasada) para captura instantánea en teléfono. */
+export function scanWarpedMobileCaptureSheetFast(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const emptyRows = (): OmrScanRowDetail[] =>
+    Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  const empty: OmrScanMetaResult = {
+    picks: Array(rows).fill(null),
+    rows: emptyRows(),
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: null,
+    reviewSourceCanvas: warped,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+  if (typeof document === 'undefined' || warped.width < 40 || warped.height < 40) {
+    return empty;
+  }
+  const hi = downscaleCanvasForOmrScan(warped, 1200);
+  const meta = scanWarpedMobileAnswerSheetFast(hi, columns, rows);
+  const control = readAnswerSheetControlNumberFromCanvas(warped, rows);
+  return {
+    ...meta,
+    controlNumberDigits: control.digits,
+    controlNumber: control.controlNumber,
+    reviewSourceCanvas: warped,
   };
 }
 

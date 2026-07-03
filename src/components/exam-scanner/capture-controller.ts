@@ -18,5 +18,5 @@ export function shouldTriggerAutoCapture({
 }
 
 export function mobileCaptureMinResolvedRows(omrRowCount: number): number {
-  return Math.max(2, Math.ceil(omrRowCount * 0.15));
+  return Math.max(6, Math.ceil(omrRowCount * 0.35));
 }
