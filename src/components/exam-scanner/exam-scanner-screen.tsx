@@ -43,6 +43,7 @@ export type ExamScannerScreenProps = {
   onFlash: () => void;
   onCapture: () => void;
   onRetryCamera: () => void;
+  onVideoMount?: (node: HTMLVideoElement | null) => void;
   captureReady?: boolean;
 };
 
@@ -68,6 +69,7 @@ export function ExamScannerScreen({
   onFlash,
   onCapture,
   onRetryCamera,
+  onVideoMount,
   captureReady = false,
 }: ExamScannerScreenProps) {
   const documentVisible = documentPolygon !== null && documentPolygon.length === 4;
@@ -112,6 +114,7 @@ export function ExamScannerScreen({
           <CameraView
             ref={viewportRef as RefObject<HTMLDivElement> | undefined}
             videoRef={videoRef}
+            onVideoMount={onVideoMount}
           />
           <OverlayRenderer
             phase={phase}
@@ -125,6 +128,7 @@ export function ExamScannerScreen({
           >
             <button
               type="button"
+              data-scanner-action="close"
               className="pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-md active:scale-95 disabled:opacity-40"
               aria-label="Cerrar escáner"
               disabled={scanBusy}

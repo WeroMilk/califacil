@@ -39,14 +39,14 @@ import {
   detectAnswerSheetQuadViaAlignStrips,
   estimateCanvasMeanLuminance,
   fileToImage,
-  getObjectCoverVideoLetterbox,
+  buildContainVideoLetterbox,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isCalifacilAnswerSheetReadyForGrading,
   diagnoseCalifacilAnswerSheetReadiness,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
-  mapRoiQuadPolygonToViewportPx,
+  mapRoiQuadPolygonToViewportPxContain,
   scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -895,9 +895,26 @@ export default function CalificarPage() {
     if (cw < 20 || ch < 20) return;
     lockStaticScannerGuide();
     setLiveVideoLayout(
-      getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
+      buildContainVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
     );
   }, [lockStaticScannerGuide]);
+
+  const bindVideoElement = useCallback(
+    (node: HTMLVideoElement | null) => {
+      const stream = streamRef.current;
+      if (!node || !stream) return;
+      if (node.srcObject !== stream) {
+        node.srcObject = stream;
+      }
+      node.muted = true;
+      node.playsInline = true;
+      node.setAttribute('playsinline', 'true');
+      node.setAttribute('webkit-playsinline', 'true');
+      void node.play().catch(() => {});
+      window.requestAnimationFrame(() => updateLiveVideoLayout());
+    },
+    [updateLiveVideoLayout]
+  );
 
   const setTorchEnabled = useCallback(
     async (enabled: boolean) => {
@@ -2046,19 +2063,25 @@ export default function CalificarPage() {
         startingCameraRef.current = false;
         return;
       }
-      const attempts: MediaStreamConstraints[] = [
-        {
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          audio: false,
-        },
-        { video: { facingMode: { ideal: 'environment' } }, audio: false },
-        { video: { facingMode: 'user' }, audio: false },
-        { video: true, audio: false },
-      ];
+      const attempts: MediaStreamConstraints[] = isMobile
+        ? [
+            { video: { facingMode: { ideal: 'environment' } }, audio: false },
+            { video: { facingMode: 'environment' }, audio: false },
+            { video: true, audio: false },
+          ]
+        : [
+            {
+              video: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            },
+            { video: { facingMode: { ideal: 'environment' } }, audio: false },
+            { video: { facingMode: 'user' }, audio: false },
+            { video: true, audio: false },
+          ];
       let stream: MediaStream | null = null;
       for (const constraints of attempts) {
         try {
@@ -2097,7 +2120,16 @@ export default function CalificarPage() {
       }
       streamRef.current = stream;
       resetLiveReadings();
-      setCameraOpen(true);
+      flushSync(() => {
+        setCameraOpen(true);
+      });
+      for (let attempt = 0; attempt < 24; attempt++) {
+        await attachStreamToVideo();
+        const video = videoRef.current;
+        if (video && video.videoWidth >= 40 && video.readyState >= 2) break;
+        await sleep(50);
+      }
+      updateLiveVideoLayout();
       const track = stream.getVideoTracks()[0];
       const supportsTorch =
         trackReportsTorchCapability(track) || (isMobile && Boolean(track));
@@ -2105,7 +2137,7 @@ export default function CalificarPage() {
       if (flashModeRef.current !== 'on') {
         setFlashOn(false);
       }
-      if (track && typeof track.applyConstraints === 'function') {
+      if (track && typeof track.applyConstraints === 'function' && !isMobile) {
         try {
           await track.applyConstraints({
             advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
@@ -2233,7 +2265,7 @@ export default function CalificarPage() {
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const now = performance.now();
             if ((stripAligned || quadValid) && roiCapture && layout && roiQuad) {
-              const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
+              const viewportPoly = mapRoiQuadPolygonToViewportPxContain(roiQuad, roiCapture, layout);
               documentPolygonHoldRef.current = {
                 polygon: viewportPoly,
                 until: now + DOCUMENT_POLYGON_HOLD_MS,
@@ -2759,6 +2791,9 @@ export default function CalificarPage() {
     examId,
     flashOn,
     flashSupported,
+    isMobile,
+    stopLiveCamera,
+    updateLiveVideoLayout,
     isMobile,
     mapRawToDraft,
     omrCols,
@@ -3503,13 +3538,17 @@ export default function CalificarPage() {
     ) => {
       if (mobileCaptureBusyRef.current && !opts?.force) return;
       mobileCaptureBusyRef.current = true;
-      setScanBusy(true);
+      flushSync(() => {
+        setScanBusy(true);
+        setLiveStatus('Capturando foto…');
+      });
       setLiveFilterMenuOpen(false);
       void (async () => {
         try {
           await processMobileSheetCapture(video, opts);
         } catch {
           toast.error('Error al capturar. Intenta de nuevo.');
+          setLiveStatus('Error al capturar. Pulsa Capturar de nuevo.');
         } finally {
           mobileCaptureBusyRef.current = false;
           autoCaptureTriggeredRef.current = false;
@@ -3700,6 +3739,45 @@ export default function CalificarPage() {
       document.documentElement.classList.remove('calificar-scanner-open');
     };
   }, [scannerPortalOpen]);
+
+  useEffect(() => {
+    if (!scannerPortalOpen) return;
+    const root = mobileCameraShellRef.current;
+    if (!root) return;
+
+    const handleScannerAction = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const actionEl = target.closest('[data-scanner-action]');
+      if (!actionEl || !root.contains(actionEl)) return;
+      const action = actionEl.getAttribute('data-scanner-action');
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === 'capture') {
+        void captureMobilePhotoManually();
+      } else if (action === 'flash') {
+        void cycleFlashMode();
+      } else if (action === 'change-exam') {
+        handleScannerChangeExam();
+      } else if (action === 'close') {
+        handleScannerClose();
+      }
+    };
+
+    root.addEventListener('click', handleScannerAction, true);
+    root.addEventListener('touchend', handleScannerAction, { capture: true, passive: false });
+    return () => {
+      root.removeEventListener('click', handleScannerAction, true);
+      root.removeEventListener('touchend', handleScannerAction, true);
+    };
+  }, [
+    scannerPortalOpen,
+    captureMobilePhotoManually,
+    cycleFlashMode,
+    handleScannerChangeExam,
+    handleScannerClose,
+  ]);
 
   if (!user) return null;
 
@@ -4163,6 +4241,7 @@ export default function CalificarPage() {
               onChangeExam={handleScannerChangeExam}
               onFlash={() => void cycleFlashMode()}
               onCapture={() => void captureMobilePhotoManually()}
+              onVideoMount={bindVideoElement}
               captureReady={
                 cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
               }

@@ -283,6 +283,10 @@ html.calificar-scanner-open body {
   overscroll-behavior: none !important;
 }
 
+html.calificar-scanner-open [data-sonner-toaster] {
+  z-index: 100500 !important;
+}
+
 @keyframes calificar-mobile-enter {
   from {
     opacity: 0;

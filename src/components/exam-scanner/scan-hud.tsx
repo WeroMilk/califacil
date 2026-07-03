@@ -20,6 +20,7 @@ type Props = {
 function HudButton({
   label,
   onPress,
+  action,
   active,
   highlight,
   disabled,
@@ -28,6 +29,7 @@ function HudButton({
 }: {
   label: string;
   onPress: () => void;
+  action: string;
   active?: boolean;
   highlight?: boolean;
   disabled?: boolean;
@@ -37,6 +39,7 @@ function HudButton({
   return (
     <button
       type="button"
+      data-scanner-action={action}
       disabled={disabled}
       className={cn(
         'exam-scanner-hud-btn flex min-h-[48px] min-w-[56px] flex-col items-center justify-center gap-0.5 rounded-xl px-3 py-2.5 text-[10px] font-semibold text-white/95 transition-transform duration-150 active:scale-95 disabled:opacity-45',
@@ -77,11 +80,12 @@ export function ScanHud({
       }}
     >
       <div className="pointer-events-auto flex items-center gap-2 rounded-[1.4rem] border border-white/15 bg-black/62 px-2 py-2 shadow-2xl">
-        <HudButton label="Cambiar examen" onPress={onChangeExam} disabled={disabled}>
+        <HudButton label="Cambiar examen" action="change-exam" onPress={onChangeExam} disabled={disabled}>
           <FileStack className="h-5 w-5" strokeWidth={2} />
         </HudButton>
         <HudButton
           label="Capturar"
+          action="capture"
           onPress={onCapture}
           highlight={captureReady}
           disabled={disabled}
@@ -91,6 +95,7 @@ export function ScanHud({
         </HudButton>
         <HudButton
           label="Flash"
+          action="flash"
           onPress={onFlash}
           active={flashOn || flashMode === 'on'}
           disabled={disabled}

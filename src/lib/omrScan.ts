@@ -606,6 +606,24 @@ export type ObjectContainVideoLayout = {
   scale: number;
 };
 
+/** Layout del video en pantalla con object-contain (sin recorte / zoom). */
+export function buildContainVideoLetterbox(
+  frameW: number,
+  frameH: number,
+  containerW: number,
+  containerH: number
+): CalifacilVideoLetterbox {
+  const layout = getObjectContainVideoLayout(frameW, frameH, containerW, containerH);
+  return {
+    offsetX: layout.offsetX,
+    offsetY: layout.offsetY,
+    displayW: layout.displayW,
+    displayH: layout.displayH,
+    frameW: Math.max(1, frameW),
+    frameH: Math.max(1, frameH),
+  };
+}
+
 /** Layout del video en pantalla con object-cover (cámara a pantalla completa). */
 export function getObjectCoverVideoLetterbox(
   frameW: number,
@@ -3362,6 +3380,24 @@ export function mapAnswerSheetBubblesToViewport(
     }
   }
   return bubbles.length > 0 ? bubbles : null;
+}
+
+/** Cuadrilátero detectado → polígono en píxeles de pantalla (object-contain, sin recorte). */
+export function mapRoiQuadPolygonToViewportPxContain(
+  quad: [Point, Point, Point, Point],
+  roiCapture: MobileGuideRoiCapture,
+  letterbox: CalifacilVideoLetterbox
+): Array<{ x: number; y: number }> {
+  const roiW = roiCapture.roiCanvas.width;
+  const roiH = roiCapture.roiCanvas.height;
+  const frameQuad = mapRoiQuadToFrame(quad, roiCapture.roiRect, roiW, roiH);
+  const scale = letterbox.displayW / Math.max(1, letterbox.frameW);
+  const toViewport = (p: Point) => ({
+    x: letterbox.offsetX + p.x * scale,
+    y: letterbox.offsetY + p.y * scale,
+  });
+  const [tl, tr, br, bl] = frameQuad;
+  return [toViewport(tl), toViewport(tr), toViewport(br), toViewport(bl)];
 }
 
 /** Cuadrilátero detectado → polígono en píxeles de pantalla (object-cover). */

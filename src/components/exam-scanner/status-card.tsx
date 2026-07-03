@@ -26,6 +26,7 @@ export function StatusCard({
   return (
     <button
       type="button"
+      data-scanner-action={onTapCapture ? 'capture' : undefined}
       className={cn(
         'exam-scanner-status w-full min-w-0 text-left transition-transform duration-150 active:scale-[0.99] disabled:opacity-100',
         onTapCapture ? 'cursor-pointer' : 'cursor-default',
