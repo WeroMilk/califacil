@@ -22,6 +22,7 @@ type Props = {
   phase: DocumentDetectionPhase;
   documentPolygon?: ViewportPoint[] | null;
   guideRect?: ViewfinderGuideRectPx | null;
+  stableProgress?: number;
 };
 
 function cornerPaths(poly: ViewportPoint[], len: number, stroke: string, sw: number) {
@@ -36,7 +37,7 @@ function cornerPaths(poly: ViewportPoint[], len: number, stroke: string, sw: num
   );
 }
 
-function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
+function OverlayRendererInner({ phase, documentPolygon, guideRect, stableProgress = 0 }: Props) {
   const maskId = useId();
   const poly =
     documentPolygon && documentPolygon.length === 4 ? documentPolygon : null;
@@ -50,7 +51,11 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
     return createStaticScannerGuide(w, h);
   }, [guideRect]);
 
-  const showDetectedMask = Boolean(smoothPoly) && (phase === 'stable' || phase === 'capturing');
+  const showDetectedMask =
+    Boolean(smoothPoly) &&
+    (phase === 'stable' ||
+      phase === 'capturing' ||
+      (phase === 'searching' && stableProgress > 0.08));
 
   const bracketLen = useMemo(() => {
     if (typeof window === 'undefined') return showDetectedMask ? 38 : 30;
@@ -90,7 +95,7 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect }: Props) {
             <rect
               width="100%"
               height="100%"
-              fill="rgba(0,0,0,0.52)"
+              fill="rgba(0,0,0,0.68)"
               mask={`url(#${maskId})`}
               className="exam-scanner-dim"
             />

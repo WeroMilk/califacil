@@ -13,6 +13,7 @@ import {
   deriveDetectionPhase,
   deriveStatusLabel,
 } from '@/components/exam-scanner/document-detector';
+import { documentCameraZoomStyle } from '@/components/exam-scanner/document-camera-zoom';
 import type { ViewfinderGuideRectPx, ViewportPoint } from '@/components/exam-scanner/types';
 import {
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -94,6 +95,11 @@ export function ExamScannerScreen({
 
   const progress = scanBusy ? 1 : stableProgress;
 
+  const cameraZoomStyle = useMemo(
+    () => documentCameraZoomStyle(documentPolygon, phase, progress),
+    [documentPolygon, phase, progress]
+  );
+
   return (
     <div
       ref={shellRef as RefObject<HTMLDivElement> | undefined}
@@ -112,17 +118,20 @@ export function ExamScannerScreen({
         </div>
       ) : (
         <>
-          <div className={cn('absolute inset-0', showingScan && 'invisible')}>
-            <CameraView
+          <div className={cn('absolute inset-0 overflow-hidden', showingScan && 'invisible')}>
+            <div
               ref={viewportRef as RefObject<HTMLDivElement> | undefined}
-              videoRef={videoRef}
-              onVideoMount={onVideoMount}
-            />
-            <OverlayRenderer
-              phase={phase}
-              documentPolygon={documentPolygon}
-              guideRect={guideRect}
-            />
+              className="absolute inset-0"
+              style={cameraZoomStyle}
+            >
+              <CameraView videoRef={videoRef} onVideoMount={onVideoMount} />
+              <OverlayRenderer
+                phase={phase}
+                documentPolygon={documentPolygon}
+                guideRect={guideRect}
+                stableProgress={progress}
+              />
+            </div>
           </div>
 
           {showingScan ? (

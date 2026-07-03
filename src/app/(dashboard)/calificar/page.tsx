@@ -40,14 +40,14 @@ import {
   estimateCanvasMeanLuminance,
   estimateCanvasSharpness,
   fileToImage,
-  buildContainVideoLetterbox,
+  getObjectCoverVideoLetterbox,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isCalifacilAnswerSheetReadyForGrading,
   diagnoseCalifacilAnswerSheetReadiness,
   isValidMobileRoiQuad,
   mapRoiQuadToFrame,
-  mapRoiQuadPolygonToViewportPxContain,
+  mapRoiQuadPolygonToViewportPx,
   scaleQuadToCanvas,
   measureRoiSheetFillRatio,
   measureWarpedFiducialAlignment,
@@ -961,7 +961,7 @@ export default function CalificarPage() {
     if (cw < 20 || ch < 20) return;
     lockStaticScannerGuide();
     setLiveVideoLayout(
-      buildContainVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
+      getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
     );
   }, [lockStaticScannerGuide]);
 
@@ -2338,7 +2338,7 @@ export default function CalificarPage() {
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const now = performance.now();
             if ((stripAligned || quadValid) && roiCapture && layout && roiQuad) {
-              const viewportPoly = mapRoiQuadPolygonToViewportPxContain(roiQuad, roiCapture, layout);
+              const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
               documentPolygonHoldRef.current = {
                 polygon: viewportPoly,
                 until: now + DOCUMENT_POLYGON_HOLD_MS,

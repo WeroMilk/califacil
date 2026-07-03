@@ -30,7 +30,7 @@ const CameraViewInner = forwardRef<HTMLDivElement, Props>(function CameraViewInn
         autoPlay
         playsInline
         muted
-        className="pointer-events-none absolute inset-0 h-full w-full object-contain object-center"
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
       />
     </div>
   );
