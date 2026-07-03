@@ -121,10 +121,13 @@ export function ExamScannerScreen({
             />
           </div>
 
-          <div className="exam-scanner-controls pointer-events-none absolute inset-0 z-[120]">
+          <div className="exam-scanner-controls pointer-events-auto absolute inset-0 z-[120]">
             <div
               className="exam-scanner-topbar pointer-events-auto absolute inset-x-0 flex items-start gap-2.5 px-3"
-              style={{ top: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+              style={{
+                top: 'max(0.5rem, env(safe-area-inset-top, 0px))',
+                transform: 'translateZ(0)',
+              }}
             >
               <button
                 type="button"
@@ -132,9 +135,9 @@ export function ExamScannerScreen({
                 style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
                 aria-label="Cerrar escáner"
                 disabled={scanBusy}
-                onClick={(event) => event.preventDefault()}
-                onPointerUp={(event) => {
-                  if (scanBusy || (event.pointerType === 'mouse' && event.button !== 0)) return;
+                onClick={onClose}
+                onTouchEnd={(event) => {
+                  if (scanBusy) return;
                   event.preventDefault();
                   event.stopPropagation();
                   onClose();
@@ -147,6 +150,7 @@ export function ExamScannerScreen({
                 statusLabel={statusLabel}
                 stableProgress={progress}
                 phase={phase}
+                onTapCapture={captureReady && !scanBusy ? onCapture : undefined}
               />
             </div>
 

@@ -10,6 +10,7 @@ type Props = {
   stableProgress: number;
   phase: DocumentDetectionPhase;
   className?: string;
+  onTapCapture?: () => void;
 };
 
 function StatusCardInner({
@@ -18,6 +19,7 @@ function StatusCardInner({
   stableProgress,
   phase,
   className,
+  onTapCapture,
 }: Props) {
   const pct = Math.round(Math.min(1, Math.max(0, stableProgress)) * 100);
   const showBar = phase === 'searching' || phase === 'stable';
@@ -26,8 +28,31 @@ function StatusCardInner({
     <div
       className={cn(
         'exam-scanner-status min-w-0 flex-1 transition-all duration-200',
+        onTapCapture && 'cursor-pointer active:scale-[0.99]',
         className
       )}
+      role={onTapCapture ? 'button' : undefined}
+      tabIndex={onTapCapture ? 0 : undefined}
+      onClick={onTapCapture}
+      onTouchEnd={
+        onTapCapture
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onTapCapture();
+            }
+          : undefined
+      }
+      onKeyDown={
+        onTapCapture
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onTapCapture();
+              }
+            }
+          : undefined
+      }
     >
       <div
         className={cn(

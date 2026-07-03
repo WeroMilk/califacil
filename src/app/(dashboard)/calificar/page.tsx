@@ -3559,21 +3559,26 @@ export default function CalificarPage() {
   }, []);
 
   const captureMobilePhotoManually = useCallback(() => {
-    if (!isMobile || phaseRef.current !== 'capturar') return;
     const video = videoRef.current;
     if (!video) {
       toast.error('Cámara no disponible.');
       return;
     }
+    autoCaptureTriggeredRef.current = false;
+    mobileCaptureBusyRef.current = false;
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 220);
-    playAutoCaptureClickSound();
-    triggerMobileSheetCaptureRef.current(video, {
+    try {
+      playAutoCaptureClickSound();
+    } catch {
+      /* audio opcional */
+    }
+    triggerMobileSheetCapture(video, {
       roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
       roiCapture: lastRoiCaptureMetaRef.current,
       force: true,
     });
-  }, [isMobile]);
+  }, [triggerMobileSheetCapture]);
 
   useEffect(() => {
     if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;

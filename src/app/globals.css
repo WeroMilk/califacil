@@ -340,6 +340,12 @@ html.calificar-immersive body {
 
 .exam-scanner-controls {
   isolation: isolate;
+  transform: translateZ(0);
+}
+
+.exam-scanner-hud,
+.exam-scanner-hud-btn {
+  transform: translateZ(0);
 }
 
 .exam-scanner-topbar {
