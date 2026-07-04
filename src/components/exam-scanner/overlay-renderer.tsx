@@ -5,6 +5,7 @@ import {
   califacilFiducialCornerGuidesOnViewportQuad,
   califacilStaticFiducialCornerGuidesInViewportPx,
 } from '@/lib/omrScan';
+import { MobileAnswerSheetAlignGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
 import {
   createStaticScannerGuide,
   guideRectToViewportQuad,
@@ -23,6 +24,8 @@ type Props = {
   documentPolygon?: ViewportPoint[] | null;
   guideRect?: ViewfinderGuideRectPx | null;
   stableProgress?: number;
+  fiducialCorners?: [boolean, boolean, boolean, boolean];
+  stripAligned?: boolean;
 };
 
 function cornerPaths(poly: ViewportPoint[], len: number, stroke: string, sw: number) {
@@ -37,7 +40,14 @@ function cornerPaths(poly: ViewportPoint[], len: number, stroke: string, sw: num
   );
 }
 
-function OverlayRendererInner({ phase, documentPolygon, guideRect, stableProgress = 0 }: Props) {
+function OverlayRendererInner({
+  phase,
+  documentPolygon,
+  guideRect,
+  stableProgress = 0,
+  fiducialCorners = [false, false, false, false],
+  stripAligned = false,
+}: Props) {
   const maskId = useId();
   const poly =
     documentPolygon && documentPolygon.length === 4 ? documentPolygon : null;
@@ -80,6 +90,19 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect, stableProgres
     }
     return null;
   }, [showDetectedMask, smoothPoly, staticGuide]);
+
+  const fiducialCount = fiducialCorners.filter(Boolean).length;
+  const sheetAligned = fiducialCount >= 4;
+
+  const alignGuideRect = useMemo(() => {
+    if (!staticGuide || staticGuide.width <= 40) return null;
+    return {
+      left: staticGuide.left,
+      top: staticGuide.top,
+      width: staticGuide.width,
+      height: staticGuide.height,
+    };
+  }, [staticGuide]);
 
   return (
     <div className="exam-scanner-overlay pointer-events-none absolute inset-0 z-10">
@@ -144,16 +167,56 @@ function OverlayRendererInner({ phase, documentPolygon, guideRect, stableProgres
         )}
       </svg>
 
-      {cornerGuides && !showDetectedMask && phase === 'searching' && !guideQuad
+      {alignGuideRect ? (
+        <MobileAnswerSheetAlignGuideOverlay guideRect={alignGuideRect} aligned={sheetAligned} />
+      ) : null}
+
+      {cornerGuides
         ? cornerGuides.map((g, i) => (
             <div
               key={i}
-              className="exam-scanner-corner-fallback absolute rounded-lg border-[2.5px] border-white/50 bg-white/10"
-              style={{ left: g.left, top: g.top, width: g.size, height: g.size }}
+              className="absolute rounded-md border-[2.5px] transition-colors duration-200"
+              style={{
+                left: g.left,
+                top: g.top,
+                width: g.size,
+                height: g.size,
+                borderColor: fiducialCorners[i]
+                  ? 'rgba(251,146,60,0.98)'
+                  : 'rgba(255,255,255,0.45)',
+                backgroundColor: fiducialCorners[i]
+                  ? 'rgba(251,146,60,0.22)'
+                  : 'rgba(255,255,255,0.08)',
+              }}
               aria-hidden
             />
           ))
         : null}
+
+      {stripAligned && alignGuideRect ? (
+        <>
+          <div
+            className="pointer-events-none absolute z-[11] rounded-sm bg-black/55 ring-2 ring-orange-400/90"
+            style={{
+              left: alignGuideRect.left + alignGuideRect.width * 0.018,
+              top: alignGuideRect.top + alignGuideRect.height * 0.12,
+              width: Math.max(8, alignGuideRect.width * 0.028),
+              height: alignGuideRect.height * 0.76,
+            }}
+            aria-hidden
+          />
+          <div
+            className="pointer-events-none absolute z-[11] rounded-sm bg-black/55 ring-2 ring-orange-400/90"
+            style={{
+              left: alignGuideRect.left + alignGuideRect.width * 0.954,
+              top: alignGuideRect.top + alignGuideRect.height * 0.12,
+              width: Math.max(8, alignGuideRect.width * 0.028),
+              height: alignGuideRect.height * 0.76,
+            }}
+            aria-hidden
+          />
+        </>
+      ) : null}
     </div>
   );
 }

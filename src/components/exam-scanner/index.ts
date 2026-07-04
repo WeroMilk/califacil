@@ -1,5 +1,5 @@
 export { ExamScannerScreen } from '@/components/exam-scanner/exam-scanner-screen';
-export type { ExamScannerScreenProps } from '@/components/exam-scanner/exam-scanner-screen';
+export type { ExamScannerScreenProps, CameraPermissionPhase } from '@/components/exam-scanner/exam-scanner-screen';
 export type { DocumentDetectionPhase, ViewportPoint } from '@/components/exam-scanner/types';
 export {
   deriveDetectionPhase,

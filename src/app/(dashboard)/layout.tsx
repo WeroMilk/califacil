@@ -155,10 +155,7 @@ export default function DashboardLayout({
       <div className="flex h-full min-h-0 flex-col overflow-hidden lg:ml-64">
         {/* Móvil: cabecera compacta + cuenta */}
         <header
-          className={cn(
-            'z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden',
-            isCalificarRoute && 'hidden'
-          )}
+          className="z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden"
         >
           <div
             className="flex items-center justify-between gap-2 px-3 py-2"

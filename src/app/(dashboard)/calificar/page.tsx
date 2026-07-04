@@ -64,6 +64,7 @@ import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
   MOBILE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
+  isMobileSheetAlignedForCapture,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
@@ -103,7 +104,7 @@ import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
 } from '@/components/califacil-omr-debug-overlay';
-import { ExamScannerScreen } from '@/components/exam-scanner';
+import { ExamScannerScreen, type CameraPermissionPhase } from '@/components/exam-scanner';
 import {
   createStaticScannerGuide,
   readScannerViewportPx,
@@ -173,7 +174,6 @@ import {
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando' | 'ver_resultados';
 
 type FlashMode = 'auto' | 'on' | 'off';
-type LiveColorMode = 'color' | 'grayscale' | 'bw';
 
 type MobileCaptureReviewState = {
   sourceCanvas: HTMLCanvasElement;
@@ -626,10 +626,20 @@ export default function CalificarPage() {
   const [flashOn, setFlashOn] = useState(false);
   const [flashMode, setFlashMode] = useState<FlashMode>('auto');
   const [autoShutterEnabled, setAutoShutterEnabled] = useState(true);
-  const [liveColorMode, setLiveColorMode] = useState<LiveColorMode>('color');
   const [liveFilterMenuOpen, setLiveFilterMenuOpen] = useState(false);
   const [shutterFlash, setShutterFlash] = useState(false);
   const [mobileScanPreviewUrl, setMobileScanPreviewUrl] = useState<string | null>(null);
+  const [mobileScanPreviewGeometry, setMobileScanPreviewGeometry] =
+    useState<CalifacilOmrScanGeometry | null>(null);
+  const [mobileScanPreviewPicks, setMobileScanPreviewPicks] = useState<(number | null)[]>([]);
+  const [mobileScanPreviewOrangeFrame, setMobileScanPreviewOrangeFrame] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const [cameraPermissionPhase, setCameraPermissionPhase] =
+    useState<CameraPermissionPhase>('granted');
   const [mobileDocumentPolygon, setMobileDocumentPolygon] = useState<
     Array<{ x: number; y: number }> | null
   >(null);
@@ -651,10 +661,21 @@ export default function CalificarPage() {
   const [mobileFiducialCorners, setMobileFiducialCorners] = useState<
     [boolean, boolean, boolean, boolean]
   >([false, false, false, false]);
+  const [mobileStripAligned, setMobileStripAligned] = useState(false);
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
   const [mobileScannerLowLight, setMobileScannerLowLight] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
+
+  const mobileStripAlignedRef = useRef(false);
+  useEffect(() => {
+    mobileStripAlignedRef.current = mobileStripAligned;
+  }, [mobileStripAligned]);
+
+  const mobileAlignedForCapture = isMobileSheetAlignedForCapture({
+    fiducialCount: mobileFiducialCount,
+    stripAligned: mobileStripAligned,
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const liveVideoLayoutRef = useRef<LiveVideoLetterbox | null>(null);
@@ -708,7 +729,7 @@ export default function CalificarPage() {
   const startingCameraRef = useRef(false);
   /** Permite abrir la cámara en el mismo clic que pone `phase` en `capturar` (evita doble toque). */
   const startLiveCameraRef = useRef<
-    ((opts?: { skipPhaseGuard?: boolean }) => Promise<void>) | undefined
+    ((opts?: { skipPhaseGuard?: boolean }) => Promise<boolean>) | undefined
   >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
@@ -1178,6 +1199,7 @@ export default function CalificarPage() {
     setMobileSheetFillRatio(0);
     setMobileFiducialCount(0);
     setMobileFiducialCorners([false, false, false, false]);
+    setMobileStripAligned(false);
     setMobileShadowWarning(false);
     setMobileStableTicks(0);
     setMobileDocumentPolygon(null);
@@ -1228,6 +1250,10 @@ export default function CalificarPage() {
     setLiveFilterMenuOpen(false);
     setCameraOpen(false);
     setMobileScanPreviewUrl(null);
+    setMobileScanPreviewGeometry(null);
+    setMobileScanPreviewPicks([]);
+    setMobileScanPreviewOrangeFrame(null);
+    setCameraPermissionPhase('granted');
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
 
@@ -2179,14 +2205,14 @@ export default function CalificarPage() {
     }
   };
 
-  const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }) => {
+  const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido y entra a captura.');
-      return;
+      return false;
     }
     if (!opts?.skipPhaseGuard && phaseRef.current !== 'capturar') {
       toast.error('Selecciona primero un examen válido y entra a captura.');
-      return;
+      return false;
     }
     if (cameraOpen || startingCameraRef.current) {
       if (opts?.skipPhaseGuard) {
@@ -2195,7 +2221,7 @@ export default function CalificarPage() {
         mobileCaptureBusyRef.current = false;
         await sleep(80);
       } else {
-        return;
+        return true;
       }
     }
     startingCameraRef.current = true;
@@ -2204,7 +2230,7 @@ export default function CalificarPage() {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
         toast.error('Tu navegador no permite cámara en vivo en esta pantalla.');
         startingCameraRef.current = false;
-        return;
+        return false;
       }
       const attempts: MediaStreamConstraints[] = isMobile
         ? [
@@ -2392,13 +2418,18 @@ export default function CalificarPage() {
             }
 
             const stripAligned = stripQuad !== null;
+            setMobileStripAligned(stripAligned);
+            const alignedForCapture = isMobileSheetAlignedForCapture({
+              fiducialCount,
+              stripAligned,
+            });
             const quadValid =
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
                 ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.38)
                 : null;
-            const fiducialsLocked = fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
+            const fiducialsLocked = alignedForCapture;
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
@@ -2500,7 +2531,9 @@ export default function CalificarPage() {
                 void setTorchEnabled(true);
                 setLiveStatus('Activé el flash. Centra la hoja con las franjas negras visibles.');
               } else {
-                setLiveStatus('Encuadra la hoja: deben verse las franjas negras laterales.');
+                setLiveStatus(
+                  `Esquinas: ${fiducialCount}/4. Encuadra la hoja con las 4 esquinas negras visibles.`
+                );
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2556,7 +2589,14 @@ export default function CalificarPage() {
             cornerStableTicksRef.current += 1;
             lowVisibilityTicksRef.current = 0;
             setMobileStableTicks(cornerStableTicksRef.current);
-            setCornersAlignedView(true);
+            setCornersAlignedView(alignedForCapture);
+            if (!alignedForCapture) {
+              setLiveStatus(
+                `Esquinas detectadas: ${fiducialCount}/4. Encuadra las 4 esquinas negras del examen.`
+              );
+              nextDelay = MOBILE_CORNER_LOOP_MS;
+              return;
+            }
             if (cornerStableTicksRef.current < CAPTURE_STABLE_TICKS_REQUIRED) {
               const secsLeft = Math.max(
                 1,
@@ -2915,6 +2955,7 @@ export default function CalificarPage() {
       };
 
       scheduleLiveScan(100);
+      return true;
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".';
@@ -2922,6 +2963,7 @@ export default function CalificarPage() {
         description: toSpanishAuthMessage(message),
       });
       setCameraOpen(false);
+      return false;
     } finally {
       startingCameraRef.current = false;
     }
@@ -3005,22 +3047,25 @@ export default function CalificarPage() {
     setResultsSheetIdx(0);
     flushSync(() => {
       setPhase('capturar');
+      setCameraPermissionPhase('pending');
+      setCameraOpen(false);
     });
     phaseRef.current = 'capturar';
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        void startLiveCamera({ skipPhaseGuard: true });
-      });
-    });
   }, [
     clearMobileSnapshots,
     exam,
     examId,
     examLoading,
-    startLiveCamera,
     stopLiveCamera,
     supportsCalifacil,
   ]);
+
+  const requestCameraFromGate = useCallback(() => {
+    setCameraPermissionPhase('requesting');
+    void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
+      setCameraPermissionPhase(ok ? 'granted' : 'denied');
+    });
+  }, [startLiveCamera]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -3401,6 +3446,35 @@ export default function CalificarPage() {
         return;
       }
 
+      let alignmentCheckCanvas = fullCanvas;
+      let alignmentCheckQuad: RoiQuad | null = opts?.roiQuad ?? null;
+      if (opts?.roiCapture?.roiCanvas) {
+        alignmentCheckCanvas = opts.roiCapture.roiCanvas;
+      }
+      if (!alignmentCheckQuad) {
+        alignmentCheckQuad =
+          detectMobileLiveSheetQuad(alignmentCheckCanvas) ??
+          detectLargestQuadInRoiCanvas(alignmentCheckCanvas);
+      }
+      const alignmentFiducials = detectAnswerSheetFiducialsInRoi(
+        alignmentCheckCanvas,
+        alignmentCheckQuad
+      );
+      const alignmentFiducialCount = alignmentFiducials.filter(Boolean).length;
+      const alignmentStripAligned =
+        detectAnswerSheetQuadViaAlignStrips(alignmentCheckCanvas) !== null;
+      if (
+        !isMobileSheetAlignedForCapture({
+          fiducialCount: alignmentFiducialCount,
+          stripAligned: alignmentStripAligned,
+        })
+      ) {
+        clearPreview();
+        toast.error('No se detectaron las 4 esquinas negras. Encuadra el examen completo.');
+        setLiveStatus('Encuadra las 4 esquinas negras antes de capturar.');
+        return;
+      }
+
       let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
       let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
 
@@ -3498,7 +3572,8 @@ export default function CalificarPage() {
           ? warped
           : (prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: alignmentPrecise }) ??
             warped);
-      const scanPreview = canvasPreviewDataUrl(scanCanvas, 1800, 0.92);
+      const displayCanvas = prepareAnswerSheetDisplayCanvas(scanCanvas) ?? scanCanvas;
+      const scanPreview = canvasPreviewDataUrl(displayCanvas, 1800, 0.92);
       if (scanPreview) {
         flushSync(() => setMobileScanPreviewUrl(scanPreview));
         if (video) pauseLiveVideoForScan(video);
@@ -3579,6 +3654,15 @@ export default function CalificarPage() {
         }
       }
 
+      if (meta.geometry) {
+        setMobileScanPreviewGeometry(meta.geometry);
+        setMobileScanPreviewPicks([...meta.picks]);
+        setMobileScanPreviewOrangeFrame(
+          califacilOmrOrangeFrameRect(meta.geometry, chunkRows) ?? null
+        );
+      }
+      displaySource = displayCanvas;
+
       const controlRead = {
         controlNumber: meta.controlNumber,
         digits: meta.controlNumberDigits,
@@ -3628,6 +3712,9 @@ export default function CalificarPage() {
       });
       if (result.success) {
         setMobileScanPreviewUrl(null);
+        setMobileScanPreviewGeometry(null);
+        setMobileScanPreviewPicks([]);
+        setMobileScanPreviewOrangeFrame(null);
         playScanCompleteChime();
         return;
       }
@@ -3897,6 +3984,14 @@ export default function CalificarPage() {
       toast.error('Cámara no disponible.');
       return;
     }
+    if (
+      !isMobileSheetAlignedForCapture({
+        fiducialCount: mobileFiducialCount,
+        stripAligned: mobileStripAlignedRef.current,
+      })
+    ) {
+      return;
+    }
     if (video.readyState < 2 || video.videoWidth < 40) {
       toast.error('La cámara está iniciando. Espera un segundo.');
       return;
@@ -3909,11 +4004,20 @@ export default function CalificarPage() {
     triggerMobileSheetCaptureRef.current(video, {
       roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
       roiCapture: lastRoiCaptureMetaRef.current,
-      force: true,
     });
-  }, []);
+  }, [mobileFiducialCount]);
 
   const captureMobilePhotoManually = useCallback(async () => {
+    if (
+      !isMobileSheetAlignedForCapture({
+        fiducialCount: mobileFiducialCount,
+        stripAligned: mobileStripAlignedRef.current,
+      })
+    ) {
+      toast.error('Encuadra las 4 esquinas negras del examen antes de capturar.');
+      return;
+    }
+
     let video = videoRef.current;
     if (!video || !streamRef.current) {
       toast.error('Cámara no disponible.');
@@ -3946,12 +4050,12 @@ export default function CalificarPage() {
     triggerMobileSheetCapture(video, {
       roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
       roiCapture: lastRoiCaptureMetaRef.current,
-      force: true,
     });
-  }, [attachStreamToVideo, triggerMobileSheetCapture]);
+  }, [attachStreamToVideo, mobileFiducialCount, triggerMobileSheetCapture]);
 
   const handleScannerClose = useCallback(() => {
     stopLiveCamera();
+    setCameraPermissionPhase('granted');
     setPhase('elegir');
   }, [stopLiveCamera]);
 
@@ -3976,9 +4080,8 @@ export default function CalificarPage() {
 
   useEffect(() => {
     if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
-    const alignedEnough =
-      cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
-    if (!alignedEnough || mobileStableTicks < CAPTURE_STABLE_TICKS_REQUIRED) return;
+    if (!mobileAlignedForCapture) return;
+    if (mobileStableTicks < CAPTURE_STABLE_TICKS_REQUIRED) return;
     if (!autoShutterEnabledRef.current) return;
     if (autoCaptureTriggeredRef.current || mobileCaptureBusyRef.current) return;
     requestMobileAutoCapture();
@@ -3987,8 +4090,7 @@ export default function CalificarPage() {
     phase,
     isMobile,
     scanBusy,
-    cornersAlignedView,
-    mobileFiducialCount,
+    mobileAlignedForCapture,
     mobileStableTicks,
     requestMobileAutoCapture,
   ]);
@@ -4121,7 +4223,7 @@ export default function CalificarPage() {
       className={cn(
         'mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8',
         isMobile && 'max-w-none gap-0 pb-0 lg:gap-3 lg:pb-8',
-        isMobile && phase === 'elegir' && 'bg-[#f2f2f7] lg:bg-transparent'
+        isMobile && phase === 'elegir' && 'lg:bg-transparent'
       )}
     >
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
@@ -4570,6 +4672,8 @@ export default function CalificarPage() {
               videoRef={videoRef}
               actionsRef={scannerActionsRef}
               cameraOpen={cameraOpen}
+              cameraPermissionPhase={cameraPermissionPhase}
+              onRequestCamera={requestCameraFromGate}
               scanBusy={scanBusy}
               shutterFlash={shutterFlash}
               examTitle={
@@ -4579,9 +4683,9 @@ export default function CalificarPage() {
               }
               documentPolygon={mobileDocumentPolygon}
               guideRect={staticScannerGuideRect}
-              aligned={cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS}
+              aligned={mobileAlignedForCapture && cornersAlignedView}
               stableProgress={
-                cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
+                mobileAlignedForCapture
                   ? Math.min(1, mobileStableTicks / CAPTURE_STABLE_TICKS_REQUIRED)
                   : 0
               }
@@ -4591,14 +4695,31 @@ export default function CalificarPage() {
               flashOn={flashOn}
               flashSupported={flashSupported}
               onVideoMount={bindVideoElement}
-              captureReady={
-                cornersAlignedView || mobileFiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
-              }
+              captureReady={mobileAlignedForCapture}
+              fiducialCount={mobileFiducialCount}
+              fiducialCorners={mobileFiducialCorners}
+              stripAligned={mobileStripAligned}
               scanPreviewUrl={mobileScanPreviewUrl}
+              scanPreviewOrangeFrame={mobileScanPreviewOrangeFrame}
+              scanPreviewOverlay={
+                mobileScanPreviewGeometry ? (
+                  <CalifacilOmrReviewOverlay
+                    geometry={mobileScanPreviewGeometry}
+                    picks={mobileScanPreviewPicks}
+                    expectedPicks={expectedChunkPicks}
+                    rowCount={currentChunk.length}
+                  />
+                ) : null
+              }
               scanStatusLabel={
                 mobileScanPreviewUrl ? 'Leyendo respuestas…' : 'Escaneando documento…'
               }
-              onRetryCamera={() => void startLiveCamera({ skipPhaseGuard: true })}
+              onRetryCamera={() => {
+                setCameraPermissionPhase('requesting');
+                void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
+                  setCameraPermissionPhase(ok ? 'granted' : 'denied');
+                });
+              }}
             />
           </>,
           document.body
@@ -4844,17 +4965,21 @@ export default function CalificarPage() {
             nameCropUrl={currentZipGradeSheet?.nameCropUrl}
             studentName={selectedStudentName}
             controlNumber={detectedControlNumber}
-            onDelete={() => {
+            onRetake={() => {
               setZipGradeModalOpen(false);
               retakeMobileSheetPhoto(
                 mobileSheetSnapshots[resultsSheetIdx]?.sheetIndex ?? sheetIndex
               );
             }}
-            onStudent={() => setZipGradeStudentPickerOpen(true)}
             onReview={() => {
               setZipGradeModalOpen(false);
               setZipGradeReviewOpen(true);
             }}
+            onAnotherStudent={() => {
+              setZipGradeModalOpen(false);
+              switchToAnotherStudentScan();
+            }}
+            onBackToCalificar={exitMobileResultsView}
           />
           <MobileZipGradeReviewScreen
             open={zipGradeReviewOpen}
@@ -4866,7 +4991,7 @@ export default function CalificarPage() {
             sheetCount={zipGradeSheets.length}
             onBack={() => {
               setZipGradeReviewOpen(false);
-              exitMobileResultsView();
+              setZipGradeModalOpen(true);
             }}
             onPrevSheet={() => setResultsSheetIdx((i) => Math.max(0, i - 1))}
             onNextSheet={() =>

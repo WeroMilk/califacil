@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type MutableRefObject, type RefObject } from 'react';
+import { useMemo, type MutableRefObject, type ReactNode, type RefObject } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -9,6 +9,7 @@ import { OverlayRenderer } from '@/components/exam-scanner/overlay-renderer';
 import { StatusCard } from '@/components/exam-scanner/status-card';
 import { ScanHud } from '@/components/exam-scanner/scan-hud';
 import { CaptureFlash } from '@/components/exam-scanner/capture-flash';
+import { CameraPermissionGate } from '@/components/exam-scanner/camera-permission-gate';
 import {
   deriveDetectionPhase,
   deriveStatusLabel,
@@ -23,12 +24,16 @@ import { runScannerAction, type ScannerActions } from '@/components/exam-scanner
 
 type FlashMode = 'auto' | 'on' | 'off';
 
+export type CameraPermissionPhase = 'pending' | 'requesting' | 'denied' | 'granted';
+
 export type ExamScannerScreenProps = {
   shellRef?: RefObject<HTMLDivElement | null>;
   viewportRef?: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   actionsRef: MutableRefObject<ScannerActions>;
   cameraOpen: boolean;
+  cameraPermissionPhase?: CameraPermissionPhase;
+  onRequestCamera?: () => void;
   scanBusy: boolean;
   shutterFlash: boolean;
   examTitle: string;
@@ -44,8 +49,12 @@ export type ExamScannerScreenProps = {
   onRetryCamera: () => void;
   onVideoMount?: (node: HTMLVideoElement | null) => void;
   captureReady?: boolean;
-  /** Documento ya escaneado (reemplaza la cámara mientras se lee OMR). */
+  fiducialCount?: number;
+  fiducialCorners?: [boolean, boolean, boolean, boolean];
+  stripAligned?: boolean;
   scanPreviewUrl?: string | null;
+  scanPreviewOverlay?: ReactNode;
+  scanPreviewOrangeFrame?: { x: number; y: number; w: number; h: number } | null;
   scanStatusLabel?: string;
 };
 
@@ -55,6 +64,8 @@ export function ExamScannerScreen({
   videoRef,
   actionsRef,
   cameraOpen,
+  cameraPermissionPhase = 'granted',
+  onRequestCamera,
   scanBusy,
   shutterFlash,
   examTitle,
@@ -70,11 +81,17 @@ export function ExamScannerScreen({
   onRetryCamera,
   onVideoMount,
   captureReady = false,
+  fiducialCount = 0,
+  fiducialCorners = [false, false, false, false],
+  stripAligned = false,
   scanPreviewUrl = null,
+  scanPreviewOverlay = null,
+  scanPreviewOrangeFrame = null,
   scanStatusLabel = 'Leyendo respuestas…',
 }: ExamScannerScreenProps) {
   const documentVisible = documentPolygon !== null && documentPolygon.length === 4;
   const showingScan = Boolean(scanPreviewUrl);
+  const showPermissionGate = !cameraOpen && cameraPermissionPhase !== 'granted';
 
   const phase = useMemo(
     () =>
@@ -100,6 +117,26 @@ export function ExamScannerScreen({
     [documentPolygon, phase, progress]
   );
 
+  if (showPermissionGate) {
+    return (
+      <div
+        ref={shellRef as RefObject<HTMLDivElement> | undefined}
+        className={cn(
+          'exam-scanner-root fixed inset-0 z-[100000] overflow-hidden',
+          cameraFullscreenMode === 'pseudo' && EXAM_PSEUDO_FULLSCREEN_CLASS
+        )}
+      >
+        <CameraPermissionGate
+          examTitle={examTitle}
+          denied={cameraPermissionPhase === 'denied'}
+          requesting={cameraPermissionPhase === 'requesting'}
+          onRequest={() => onRequestCamera?.()}
+          onClose={() => runScannerAction(actionsRef.current, 'close')}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={shellRef as RefObject<HTMLDivElement> | undefined}
@@ -110,7 +147,7 @@ export function ExamScannerScreen({
     >
       {!cameraOpen ? (
         <div className="flex h-[100dvh] w-full flex-col items-center justify-center gap-4 p-6">
-          <Loader2 className="h-8 w-8 animate-spin text-white/80" />
+          <Loader2 className="h-8 w-8 animate-spin text-orange-400" />
           <p className="text-sm text-white/75">Abriendo cámara…</p>
           <Button type="button" variant="secondary" className="w-full max-w-xs" onClick={onRetryCamera}>
             Reintentar cámara
@@ -130,22 +167,41 @@ export function ExamScannerScreen({
                 documentPolygon={documentPolygon}
                 guideRect={guideRect}
                 stableProgress={progress}
+                fiducialCorners={fiducialCorners}
+                stripAligned={stripAligned}
               />
             </div>
           </div>
 
           {showingScan ? (
-            <div className="absolute inset-0 z-[100004] flex flex-col bg-[#f2f2f7]">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={scanPreviewUrl!}
-                alt=""
-                className="min-h-0 flex-1 object-contain"
-              />
-              <div className="shrink-0 border-t border-black/10 bg-white/95 px-4 py-3 backdrop-blur-md">
+            <div className="absolute inset-0 z-[100004] flex flex-col bg-orange-50/95">
+              <div className="relative min-h-0 flex-1">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={scanPreviewUrl!}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-contain"
+                />
+                {scanPreviewOrangeFrame ? (
+                  <div
+                    className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
+                    style={{
+                      left: `${scanPreviewOrangeFrame.x * 100}%`,
+                      top: `${scanPreviewOrangeFrame.y * 100}%`,
+                      width: `${scanPreviewOrangeFrame.w * 100}%`,
+                      height: `${scanPreviewOrangeFrame.h * 100}%`,
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
+                {scanPreviewOverlay ? (
+                  <div className="pointer-events-none absolute inset-0 z-[2]">{scanPreviewOverlay}</div>
+                ) : null}
+              </div>
+              <div className="shrink-0 border-t border-orange-100 bg-white/95 px-4 py-3 backdrop-blur-md">
                 <div className="flex items-center justify-center gap-2.5">
                   <Loader2
-                    className="h-5 w-5 animate-spin text-emerald-600 motion-reduce:animate-none"
+                    className="h-5 w-5 animate-spin text-orange-600 motion-reduce:animate-none"
                     aria-hidden
                   />
                   <p className="text-sm font-medium text-gray-800">{scanStatusLabel}</p>
@@ -183,8 +239,13 @@ export function ExamScannerScreen({
                   statusLabel={statusLabel}
                   stableProgress={progress}
                   phase={phase}
+                  fiducialCount={fiducialCount}
+                  stripAligned={stripAligned}
+                  captureReady={captureReady}
                   onTapCapture={
-                    !scanBusy ? () => runScannerAction(actionsRef.current, 'capture') : undefined
+                    captureReady && !scanBusy
+                      ? () => runScannerAction(actionsRef.current, 'capture')
+                      : undefined
                   }
                 />
               </div>
@@ -218,7 +279,7 @@ export function ExamScannerScreen({
             >
               <div className="rounded-2xl bg-black/60 px-5 py-4 text-center shadow-xl backdrop-blur-sm">
                 <Loader2
-                  className="mx-auto h-9 w-9 animate-spin text-white motion-reduce:animate-none [animation-duration:650ms]"
+                  className="mx-auto h-9 w-9 animate-spin text-orange-300 motion-reduce:animate-none [animation-duration:650ms]"
                   aria-hidden
                 />
                 <p className="mt-2 text-sm font-medium text-white/90">Escaneando documento…</p>

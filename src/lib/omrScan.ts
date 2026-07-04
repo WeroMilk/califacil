@@ -2662,7 +2662,23 @@ export function detectLargestQuadInRoiCanvas(
 /** Mínimo de área de hoja dentro del ROI (0–1) para permitir captura automática. */
 export const MOBILE_MIN_ROI_FILL_RATIO = 0.15;
 /** Mínimo de esquinas negras fiduciales visibles (de 4) para considerar hoja alineada en vivo. */
-export const MOBILE_MIN_FIDUCIAL_CORNERS = 3;
+export const MOBILE_MIN_FIDUCIAL_CORNERS = 4;
+
+/** Indica si la hoja cumple el mínimo para captura (4 esquinas negras detectadas). */
+export function isMobileSheetAlignedForCapture(opts: {
+  fiducialCount: number;
+  stripAligned?: boolean;
+}): boolean {
+  return opts.fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
+}
+
+/** Alineación ideal: 4 esquinas + franjas negras laterales visibles. */
+export function isMobileSheetIdealAlignment(opts: {
+  fiducialCount: number;
+  stripAligned: boolean;
+}): boolean {
+  return opts.fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS && opts.stripAligned;
+}
 
 export function measureRoiSheetFillRatio(
   quad: [Point, Point, Point, Point],

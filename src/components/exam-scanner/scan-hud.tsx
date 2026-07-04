@@ -53,7 +53,7 @@ function HudButton({
         'exam-scanner-hud-btn flex min-h-[52px] min-w-[60px] flex-col items-center justify-center gap-1 rounded-xl px-3 py-2.5 text-[10px] font-semibold text-white',
         large && 'min-h-[58px] min-w-[80px] px-4',
         highlight
-          ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-950/40'
+          ? 'bg-orange-500 text-white shadow-lg shadow-orange-950/40'
           : active
             ? 'bg-white/25'
             : 'bg-white/15',
@@ -115,7 +115,7 @@ export function ScanHud({
           action="capture"
           actionsRef={actionsRef}
           highlight={captureReady}
-          disabled={disabled}
+          disabled={disabled || !captureReady}
           large
         >
           <Camera className="h-6 w-6" strokeWidth={2.25} />

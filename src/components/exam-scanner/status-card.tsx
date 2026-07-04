@@ -10,6 +10,9 @@ type Props = {
   phase: DocumentDetectionPhase;
   className?: string;
   onTapCapture?: () => void;
+  fiducialCount?: number;
+  stripAligned?: boolean;
+  captureReady?: boolean;
 };
 
 export function StatusCard({
@@ -19,6 +22,9 @@ export function StatusCard({
   phase,
   className,
   onTapCapture,
+  fiducialCount = 0,
+  stripAligned = false,
+  captureReady = false,
 }: Props) {
   const pct = Math.round(Math.min(1, Math.max(0, stableProgress)) * 100);
   const showBar = phase === 'searching' || phase === 'stable';
@@ -32,6 +38,9 @@ export function StatusCard({
           pct={pct}
           showBar={showBar}
           phase={phase}
+          fiducialCount={fiducialCount}
+          stripAligned={stripAligned}
+          captureReady={captureReady}
         />
       </div>
     );
@@ -43,14 +52,18 @@ export function StatusCard({
       data-scanner-action="capture"
       className={cn(
         'exam-scanner-status w-full min-w-0 text-left active:scale-[0.99]',
+        !captureReady && 'opacity-90',
         className
       )}
+      disabled={!captureReady}
       onClick={(event) => {
+        if (!captureReady) return;
         event.preventDefault();
         event.stopPropagation();
         onTapCapture();
       }}
       onTouchEnd={(event) => {
+        if (!captureReady) return;
         event.preventDefault();
         event.stopPropagation();
         onTapCapture();
@@ -63,6 +76,9 @@ export function StatusCard({
         showBar={showBar}
         phase={phase}
         showCaptureHint
+        fiducialCount={fiducialCount}
+        stripAligned={stripAligned}
+        captureReady={captureReady}
       />
     </button>
   );
@@ -75,6 +91,9 @@ function StatusCardBody({
   showBar,
   phase,
   showCaptureHint,
+  fiducialCount = 0,
+  stripAligned = false,
+  captureReady = false,
 }: {
   examTitle: string;
   statusLabel: string;
@@ -82,13 +101,16 @@ function StatusCardBody({
   showBar: boolean;
   phase: DocumentDetectionPhase;
   showCaptureHint?: boolean;
+  fiducialCount?: number;
+  stripAligned?: boolean;
+  captureReady?: boolean;
 }) {
   return (
     <div
       className={cn(
         'rounded-2xl border px-3.5 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] backdrop-blur-md sm:px-4 sm:py-3',
         phase === 'stable' || phase === 'capturing'
-          ? 'border-emerald-400/40 bg-white/92'
+          ? 'border-orange-400/40 bg-white/92'
           : phase === 'searching'
             ? 'border-amber-300/35 bg-black/55'
             : 'border-red-400/35 bg-black/55'
@@ -110,19 +132,35 @@ function StatusCardBody({
       >
         {statusLabel}
       </p>
+      <p
+        className={cn(
+          'mt-1 text-[11px] font-medium tabular-nums',
+          phase === 'stable' || phase === 'capturing' ? 'text-gray-500' : 'text-white/75'
+        )}
+      >
+        Esquinas: {fiducialCount}/4
+        {stripAligned ? ' · Franjas laterales detectadas' : ''}
+      </p>
       {showBar ? (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/15">
           <div
             className={cn(
               'h-full rounded-full transition-[width] duration-200 ease-out',
-              phase === 'stable' ? 'bg-emerald-500' : 'bg-amber-400'
+              phase === 'stable' ? 'bg-orange-500' : 'bg-amber-400'
             )}
             style={{ width: `${pct}%` }}
           />
         </div>
       ) : null}
       {showCaptureHint ? (
-        <p className="mt-1.5 text-[11px] font-semibold text-emerald-500">Toca para capturar</p>
+        <p
+          className={cn(
+            'mt-1.5 text-[11px] font-semibold',
+            captureReady ? 'text-orange-600' : 'text-gray-400'
+          )}
+        >
+          {captureReady ? 'Toca para capturar' : 'Alinea las 4 esquinas negras'}
+        </p>
       ) : null}
     </div>
   );
