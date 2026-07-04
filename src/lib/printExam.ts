@@ -1643,102 +1643,111 @@ ${pagesHtml}
 }
 
 /**
- * Abre ventana de impresión con examen en formato carta (US Letter).
+ * Abre una pestaña en blanco en el mismo clic del usuario (antes de awaits).
+ * Úsala cuando el HTML del examen se obtiene de forma asíncrona.
  */
-function printHtmlDocument(html: string): boolean {
+export function openPrintPreviewWindow(): Window | null {
+  if (typeof window === 'undefined') return null;
+  const win = window.open('', '_blank');
+  if (!win) return null;
+  win.document.open();
+  win.document.write(
+    '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Preparando…</title></head>' +
+      '<body style="font-family:system-ui,sans-serif;padding:2rem;color:#444">Preparando examen para imprimir…</body></html>'
+  );
+  win.document.close();
+  return win;
+}
+
+function runPrintDialog(win: Window, onDone: () => void): void {
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    onDone();
+  };
+
+  const triggerPrint = () => {
+    try {
+      win.document.title = '\u00A0';
+      win.focus();
+      win.print();
+    } catch {
+      finish();
+      return;
+    }
+    win.addEventListener('afterprint', finish, { once: true });
+    window.setTimeout(finish, 120_000);
+  };
+
+  const schedulePrint = () => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.setTimeout(triggerPrint, 450);
+      });
+    });
+  };
+
+  if (win.document.readyState === 'complete') {
+    schedulePrint();
+  } else {
+    win.addEventListener('load', schedulePrint, { once: true });
+    window.setTimeout(schedulePrint, 2500);
+  }
+}
+
+/**
+ * Abre el diálogo de impresión con examen en formato carta (US Letter).
+ * Usa iframe oculto (mismo gesto del usuario) o una ventana ya abierta.
+ */
+function printHtmlDocument(html: string, targetWindow?: Window | null): boolean {
   if (typeof document === 'undefined') return false;
 
-  const printFromWindow = (win: Window, onDone: () => void): void => {
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      onDone();
-    };
-
-    const triggerPrint = () => {
-      try {
-        win.document.title = '\u00A0';
-        win.focus();
-        win.print();
-      } catch {
-        finish();
-        return;
-      }
-      win.addEventListener('afterprint', finish, { once: true });
-      // Safari / móvil a veces no dispara afterprint.
-      window.setTimeout(finish, 120_000);
-    };
-
-    const schedulePrint = () => {
-      // Esperar layout de todas las páginas (preguntas + hoja de respuestas) antes de imprimir.
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          window.setTimeout(triggerPrint, 180);
-        });
-      });
-    };
-
-    if (win.document.readyState === 'complete') {
-      schedulePrint();
-    } else {
-      win.addEventListener('load', schedulePrint, { once: true });
-    }
-  };
-
-  const tryIframe = (): boolean => {
+  if (targetWindow && !targetWindow.closed) {
     try {
-      const iframe = document.createElement('iframe');
-      iframe.setAttribute('aria-hidden', 'true');
-      iframe.style.cssText =
-        'position:fixed;left:-10000px;top:0;width:8.5in;height:24in;border:0;opacity:0;pointer-events:none;overflow:visible;';
-      document.body.appendChild(iframe);
-      const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-      const win = iframe.contentWindow;
-      if (!doc || !win) {
-        iframe.remove();
-        return false;
-      }
-      doc.open();
-      doc.write(html);
-      doc.close();
-      const cleanup = () => {
-        iframe.remove();
-      };
-      printFromWindow(win, cleanup);
+      targetWindow.document.open();
+      targetWindow.document.write(html);
+      targetWindow.document.close();
+      runPrintDialog(targetWindow, () => {
+        try {
+          if (!targetWindow.closed) targetWindow.close();
+        } catch {
+          /* ignore */
+        }
+      });
       return true;
     } catch {
+      /* fallback iframe */
+    }
+  }
+
+  try {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText =
+      'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;overflow:hidden;';
+    document.body.appendChild(iframe);
+    const win = iframe.contentWindow;
+    const doc = iframe.contentDocument ?? win?.document;
+    if (!win || !doc) {
+      iframe.remove();
       return false;
     }
-  };
-
-  let blobUrl: string | null = null;
-  try {
-    blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    doc.open();
+    doc.write(html);
+    doc.close();
+    runPrintDialog(win, () => {
+      window.setTimeout(() => iframe.remove(), 1500);
+    });
+    return true;
   } catch {
-    return tryIframe();
+    return false;
   }
-
-  const win = window.open(blobUrl, '_blank');
-  if (!win) {
-    URL.revokeObjectURL(blobUrl);
-    return tryIframe();
-  }
-
-  printFromWindow(win, () => {
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-    try {
-      if (!win.closed) win.close();
-    } catch {
-      /* ignore */
-    }
-  });
-  return true;
 }
 
 export function printExamDocument(
   exam: ExamWithQuestions,
-  options?: { includeAnswerKey?: boolean }
+  options?: { includeAnswerKey?: boolean; targetWindow?: Window | null }
 ): boolean {
   if (typeof window === 'undefined') return false;
   const includeAnswerKey = options?.includeAnswerKey === true;
@@ -1749,5 +1758,5 @@ export function printExamDocument(
   if (!html.includes('print-page')) {
     return false;
   }
-  return printHtmlDocument(html);
+  return printHtmlDocument(html, options?.targetWindow ?? null);
 }

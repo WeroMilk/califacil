@@ -8,7 +8,7 @@ import { useExams } from '@/hooks/useExams';
 import { buildExamFolderPath, useExamFolders } from '@/hooks/useExamFolders';
 import { supabase } from '@/lib/supabase';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
-import { printExamDocument } from '@/lib/printExam';
+import { printExamDocument, openPrintPreviewWindow } from '@/lib/printExam';
 import { downloadExamWord } from '@/lib/wordExam';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -552,23 +552,35 @@ function ExamCard({
     }
   };
 
-  const handlePrint = async () => {
-    setMenuBusy(true);
-    try {
-      const full = await fetchExamWithQuestions(exam.id);
-      if (!full) {
-        toast.error('No se pudo cargar el examen');
-        return;
-      }
-      if (full.questions.length === 0) {
-        toast.error('Agrega al menos una pregunta para imprimir');
-        return;
-      }
-      const ok = printExamDocument(full);
-      if (!ok) toast.error('Permite ventanas emergentes para imprimir');
-    } finally {
-      setMenuBusy(false);
+  const handlePrint = () => {
+    const printWin = openPrintPreviewWindow();
+    if (!printWin) {
+      toast.error('Permite ventanas emergentes para imprimir');
+      return;
     }
+    setMenuBusy(true);
+    void (async () => {
+      try {
+        const full = await fetchExamWithQuestions(exam.id);
+        if (!full) {
+          toast.error('No se pudo cargar el examen');
+          printWin.close();
+          return;
+        }
+        if (full.questions.length === 0) {
+          toast.error('Agrega al menos una pregunta para imprimir');
+          printWin.close();
+          return;
+        }
+        const ok = printExamDocument(full, { targetWindow: printWin });
+        if (!ok) {
+          toast.error('No se pudo abrir la vista de impresión');
+          printWin.close();
+        }
+      } finally {
+        setMenuBusy(false);
+      }
+    })();
   };
 
   const handleDuplicate = async () => {
@@ -633,7 +645,7 @@ function ExamCard({
                 <Download className="mr-2 h-4 w-4" />
                 Descargar
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void handlePrint()}>
+              <DropdownMenuItem onClick={handlePrint}>
                 <Printer className="mr-2 h-4 w-4" />
                 Imprimir
               </DropdownMenuItem>
