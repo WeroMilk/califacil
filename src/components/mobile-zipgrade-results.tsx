@@ -416,6 +416,8 @@ type StudentPickerProps = {
   selectedId: string;
   onSelect: (id: string) => void;
   onClose: () => void;
+  autoOptionId?: string;
+  autoOptionLabel?: string;
 };
 
 export function MobileZipGradeStudentPicker({
@@ -424,6 +426,8 @@ export function MobileZipGradeStudentPicker({
   selectedId,
   onSelect,
   onClose,
+  autoOptionId,
+  autoOptionLabel,
 }: StudentPickerProps) {
   if (!open || typeof document === 'undefined') return null;
 
@@ -432,9 +436,26 @@ export function MobileZipGradeStudentPicker({
       <button type="button" className="flex-1" aria-label="Cerrar" onClick={onClose} />
       <div className="max-h-[70vh] overflow-hidden rounded-t-2xl bg-white shadow-2xl">
         <div className="border-b border-gray-100 bg-orange-50/60 px-4 py-3">
-          <p className="text-center text-[15px] font-semibold text-gray-900">Elegir alumno</p>
+          <p className="text-center text-[15px] font-semibold text-gray-900">Alumno</p>
         </div>
         <ul className="max-h-[55vh] overflow-y-auto">
+          {autoOptionId !== undefined && autoOptionLabel !== undefined ? (
+            <li>
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full items-center justify-between border-b border-gray-50 px-4 py-3.5 text-left text-[17px] active:bg-gray-50',
+                  selectedId === autoOptionId && 'bg-orange-50 font-semibold text-orange-900'
+                )}
+                onClick={() => {
+                  onSelect(autoOptionId);
+                  onClose();
+                }}
+              >
+                <span>{autoOptionLabel}</span>
+              </button>
+            </li>
+          ) : null}
           {students.map((s) => (
             <li key={s.id}>
               <button

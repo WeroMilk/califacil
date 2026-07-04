@@ -96,6 +96,12 @@ import {
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
+import {
+  CALIFICAR_AUTO_STUDENT_ID,
+  isCalificarAutoStudentMode,
+  normalizeCalificarStudentSelection,
+  resolveCalificarStudentId,
+} from '@/lib/calificarStudentMode';
 import { warpCalifacilMobileCapture, warpCalifacilMobileCaptureFast } from '@/lib/omr/pipeline';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -603,7 +609,7 @@ export default function CalificarPage() {
   const [examId, setExamId] = useState<string>('');
   const { exam, loading: examLoading } = useExam(examId || undefined);
 
-  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState(CALIFICAR_AUTO_STUDENT_ID);
   const [detectedControlNumber, setDetectedControlNumber] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [allowedGroupIds, setAllowedGroupIds] = useState<string[]>([]);
@@ -922,10 +928,7 @@ export default function CalificarPage() {
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     [students]
   );
-  const autoIdentifyByControl = useMemo(
-    () => sortedStudents.some((s) => (s.control_number ?? '').replace(/\D/g, '').length > 0),
-    [sortedStudents]
-  );
+  const studentAutoDetect = isCalificarAutoStudentMode(selectedStudentId);
 
   const applyControlNumberFromRead = useCallback(
     (
@@ -976,8 +979,9 @@ export default function CalificarPage() {
     sheetIndexRef.current = sheetIndex;
   }, [sheetIndex]);
 
-  const selectedStudentName =
-    sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
+  const selectedStudentName = studentAutoDetect
+    ? ''
+    : (sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '');
 
   const zipGradeSheets = useMemo((): ZipGradeSheetData[] => {
     return mobileSheetSnapshots.map((snap) => {
@@ -1411,7 +1415,7 @@ export default function CalificarPage() {
           opts.precomputedPicks ??
           draftSelectionsToColumnPicks(chunk, mergedDraft).slice(0, chunk.length);
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
-        let gradeStudentId = selectedStudentId;
+        let gradeStudentId = resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents) ?? '';
         if (opts.precomputedControlNumber !== undefined) {
           if (opts.precomputedControlNumber) {
             setDetectedControlNumber(opts.precomputedControlNumber);
@@ -1814,7 +1818,7 @@ export default function CalificarPage() {
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
 
-      let gradeStudentId = selectedStudentId;
+      let gradeStudentId = resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents) ?? '';
       if (meta.controlNumber) {
         setDetectedControlNumber(meta.controlNumber);
         const matched = findStudentByControlNumber(sortedStudents, meta.controlNumber);
@@ -2102,7 +2106,7 @@ export default function CalificarPage() {
     setLiveResolvedCount(0);
     setLiveStatus(
       isMobile
-        ? 'Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.'
+        ? 'Elige el examen y pulsa «Calificar»; detectamos al alumno en la hoja.'
         : 'Sube una imagen escaneada para leer respuestas.'
     );
     setPreviewUrl((u) => {
@@ -2111,7 +2115,8 @@ export default function CalificarPage() {
     });
     setReviewOmrGeometry(null);
     setReviewOmrPicks([]);
-    setSelectedStudentId('');
+    setSelectedStudentId(CALIFICAR_AUTO_STUDENT_ID);
+    setDetectedControlNumber(null);
   }, [stopLiveCamera, isMobile, clearMobileSnapshots]);
 
   const handleStudentChange = (studentId: string) => {
@@ -2119,8 +2124,10 @@ export default function CalificarPage() {
       toast.error('No se puede calificar: este examen no tiene clave automática válida en todos sus reactivos.');
       return;
     }
-    setSelectedStudentId(studentId);
-    if (!studentId) {
+    const mode = normalizeCalificarStudentSelection(studentId);
+    setSelectedStudentId(mode);
+    if (isCalificarAutoStudentMode(mode)) {
+      setDetectedControlNumber(null);
       if (isMobile) {
         clearMobileSnapshots();
         setMobileResultsDraft({});
@@ -2136,7 +2143,7 @@ export default function CalificarPage() {
       supportsCalifacil &&
       questions.length > 0 &&
       virtualKey.issues.length === 0 &&
-      sortedStudents.some((s) => s.id === studentId);
+      sortedStudents.some((s) => s.id === mode);
     if (!canSessionStart) return;
     resumeScanAudioContext();
     stopLiveCamera();
@@ -2148,7 +2155,7 @@ export default function CalificarPage() {
       setDraftSelections({});
       setLiveDraftSelections({});
       setLiveResolvedCount(0);
-      setLiveStatus('Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.');
+      setLiveStatus('Alumno fijado manualmente. Pulsa «Calificar» para escanear.');
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
         return null;
@@ -2425,12 +2432,16 @@ export default function CalificarPage() {
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
 
-            let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
+            const fiducialQuad = roiQuadRaw ?? stripQuad;
+            let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, fiducialQuad);
             let fiducialCount = fiducialCorners.filter(Boolean).length;
 
             if (!roiQuadRaw && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
               roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
-              fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, roiQuadRaw);
+              fiducialCorners = detectAnswerSheetFiducialsInRoi(
+                roiCanvas,
+                roiQuadRaw ?? stripQuad
+              );
               fiducialCount = fiducialCorners.filter(Boolean).length;
             }
 
@@ -3156,7 +3167,7 @@ export default function CalificarPage() {
     merged: Record<string, string>,
     studentIdOverride?: string
   ) => {
-    const studentId = studentIdOverride ?? selectedStudentId;
+    const studentId = resolveCalificarStudentId(selectedStudentId, studentIdOverride, sortedStudents);
     if (!studentId || !exam || !examId) {
       throw new Error('missing_context');
     }
@@ -3214,14 +3225,8 @@ export default function CalificarPage() {
       setAutoGradeStats(stats);
       setMobileResultsDraft({ ...fullDraft });
 
-      const studentId =
-        studentIdOverride && sortedStudents.some((s) => s.id === studentIdOverride)
-          ? studentIdOverride
-          : selectedStudentId;
-      const canPersist =
-        Boolean(studentId) &&
-        sortedStudents.some((s) => s.id === studentId) &&
-        canGradeStudents;
+      const studentId = resolveCalificarStudentId(selectedStudentId, studentIdOverride, sortedStudents);
+      const canPersist = Boolean(studentId) && canGradeStudents;
 
       if (isMobile) {
         stopLiveCamera();
@@ -3246,7 +3251,7 @@ export default function CalificarPage() {
       if (canPersist) {
         void (async () => {
           try {
-            await persistStudentAnswers(fullDraft, studentId);
+            await persistStudentAnswers(fullDraft, studentId ?? undefined);
             setAutoGradePersisted(true);
             if (!isMobile) {
               toast.success('Calificación guardada.');
@@ -3264,7 +3269,7 @@ export default function CalificarPage() {
         toast.message(
           studentId
             ? 'Resultado calculado.'
-            : 'Resultado calculado. Marca el número de control o elige al alumno para guardar.'
+            : 'Resultado calculado. Elige al alumno manualmente si no se identificó en la hoja.'
         );
       }
 
@@ -3342,8 +3347,8 @@ export default function CalificarPage() {
       }
     }
 
-    if (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId)) {
-      toast.error('Alumno no válido. Vuelve a seleccionar en la primera pantalla.');
+    if (!resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents)) {
+      toast.error('Identifica al alumno en la hoja o elígelo manualmente antes de guardar.');
       return;
     }
     if (!canGradeStudents) {
@@ -3403,8 +3408,8 @@ export default function CalificarPage() {
         return;
       }
     }
-    if (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId)) {
-      toast.error('Alumno no válido.');
+    if (!resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents)) {
+      toast.error('Identifica al alumno en la hoja o elígelo manualmente antes de guardar.');
       return;
     }
     if (!canGradeStudents) {
@@ -4083,7 +4088,8 @@ export default function CalificarPage() {
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
     setReviewQualityHint(null);
-    setSelectedStudentId('');
+    setSelectedStudentId(CALIFICAR_AUTO_STUDENT_ID);
+    setDetectedControlNumber(null);
     setPhase('elegir');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
@@ -4104,10 +4110,10 @@ export default function CalificarPage() {
     });
     setLiveStatus(
       isMobile
-        ? 'Elige examen y alumno; luego pulsa «Tomar foto» para cada hoja.'
+        ? 'Elige el examen y pulsa «Calificar»; detectamos al alumno en la hoja.'
         : 'Sube una imagen escaneada para leer respuestas.'
     );
-    toast.message('Elige otro alumno para escanear su examen.');
+    toast.message('Listo para calificar otro alumno.');
   }, [isMobile, stopLiveCamera, clearMobileSnapshots]);
 
   const exportCurrentZipGradeCsv = useCallback(() => {
@@ -4312,7 +4318,8 @@ export default function CalificarPage() {
                   type="button"
                   className="w-full bg-orange-600 hover:bg-orange-700"
                   onClick={() => {
-                    setSelectedStudentId('');
+                    setSelectedStudentId(CALIFICAR_AUTO_STUDENT_ID);
+                    setDetectedControlNumber(null);
                     setAutoGradeDialogOpen(false);
                   }}
                 >
@@ -4354,7 +4361,7 @@ export default function CalificarPage() {
           selectedStudentId={selectedStudentId}
           selectedStudentName={selectedStudentName}
           detectedControlNumber={detectedControlNumber}
-          autoIdentifyByControl={autoIdentifyByControl}
+          studentAutoDetect={studentAutoDetect}
           canGradeStudents={canGradeStudents}
           supportsCalifacil={supportsCalifacil}
           virtualKeyReady={virtualKeyReadyCount}
@@ -4574,11 +4581,9 @@ export default function CalificarPage() {
                   disabled={
                     phase === 'guardando' || (isMobile && phase === 'ver_resultados') || !canGradeStudents
                   }
-                  placeholder={
-                    autoIdentifyByControl
-                      ? 'Opcional si marcas el número de control'
-                      : 'Busca y elige al alumno'
-                  }
+                  autoOptionValue={CALIFICAR_AUTO_STUDENT_ID}
+                  autoOptionLabel="Automático (detectar en la hoja)"
+                  placeholder="Automático (detectar en la hoja)"
                   searchPlaceholder="Escribe para buscar…"
                   emptyText="Ningún alumno coincide."
                   noStudentsText={
@@ -4595,23 +4600,23 @@ export default function CalificarPage() {
                 ) : null}
                 <p className="text-xs text-gray-500">
                   {canGradeStudents
-                    ? autoIdentifyByControl
-                      ? 'Marca el número de control en la hoja de respuestas y CaliFacil identificará al alumno al escanear. También puedes elegirlo aquí.'
-                      : 'La comparación se hace automáticamente contra la tabla clave generada por el sistema.'
+                    ? studentAutoDetect
+                      ? 'Por defecto CaliFacil identifica al alumno al escanear la hoja personalizada. También puedes elegirlo manualmente.'
+                      : 'Alumno fijado manualmente antes de calificar.'
                     : 'Bloqueado: el examen necesita respuestas correctas válidas para generar la clave automática.'}
                 </p>
               </div>
 
-              {isMobile && canGradeStudents && (selectedStudentId || autoIdentifyByControl) && phase === 'elegir' && (
+              {isMobile && canGradeStudents && examId && phase === 'elegir' && (
                 <div className="space-y-2 rounded-lg border border-orange-200 bg-orange-50/90 p-3">
                   <p className="text-sm font-medium text-orange-950">
                     Listo para hoja {sheetIndex + 1} de {totalSheets}
                   </p>
                   <p className="text-xs text-orange-900/90">
-                    {autoIdentifyByControl ? (
+                    {studentAutoDetect ? (
                       <>
-                        Marca el <strong>número de control</strong> en la hoja. Pulsa <strong>Tomar foto</strong>
-                        y encuadra la hoja — se captura y califica sola al detectar las franjas negras.
+                        Pulsa <strong>Tomar foto</strong>, encuadra la hoja personalizada del alumno.
+                        CaliFacil detecta quién es y califica al instante.
                       </>
                     ) : (
                       <>
@@ -5031,7 +5036,9 @@ export default function CalificarPage() {
             open={zipGradeStudentPickerOpen}
             students={sortedStudents}
             selectedId={selectedStudentId}
-            onSelect={(id) => setSelectedStudentId(id)}
+            autoOptionId={CALIFICAR_AUTO_STUDENT_ID}
+            autoOptionLabel="Automático (detectar en la hoja)"
+            onSelect={handleStudentChange}
             onClose={() => setZipGradeStudentPickerOpen(false)}
           />
         </>

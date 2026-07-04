@@ -7,6 +7,7 @@ import type { Exam, Student } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { MobileZipGradeStudentPicker } from '@/components/mobile-zipgrade-results';
+import { CALIFICAR_AUTO_STUDENT_ID } from '@/lib/calificarStudentMode';
 
 type Props = {
   exams: Exam[];
@@ -18,7 +19,7 @@ type Props = {
   selectedStudentId: string;
   selectedStudentName: string;
   detectedControlNumber: string | null;
-  autoIdentifyByControl: boolean;
+  studentAutoDetect: boolean;
   canGradeStudents: boolean;
   supportsCalifacil: boolean;
   virtualKeyReady: number;
@@ -80,7 +81,7 @@ export function CalificarMobileHome({
   selectedStudentId,
   selectedStudentName,
   detectedControlNumber,
-  autoIdentifyByControl,
+  studentAutoDetect,
   canGradeStudents,
   supportsCalifacil,
   virtualKeyReady,
@@ -107,16 +108,15 @@ export function CalificarMobileHome({
       return `${selectedStudentName} · ${detectedControlNumber}`;
     }
     if (selectedStudentName) return selectedStudentName;
-    if (autoIdentifyByControl) return 'Auto (n.º de control)';
+    if (studentAutoDetect) return 'Automático';
     return 'Elegir alumno';
-  }, [autoIdentifyByControl, detectedControlNumber, selectedStudentName]);
+  }, [detectedControlNumber, selectedStudentName, studentAutoDetect]);
 
   const readyToScan =
     Boolean(examId) &&
     supportsCalifacil &&
     canGradeStudents &&
-    !examLoading &&
-    (Boolean(selectedStudentId) || autoIdentifyByControl);
+    !examLoading;
 
   return (
     <div className="calificar-mobile-enter flex min-h-full flex-col lg:hidden">
@@ -131,7 +131,7 @@ export function CalificarMobileHome({
         <Card className="shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Configuración</CardTitle>
-            <CardDescription>Elige el examen y el alumno antes de calificar.</CardDescription>
+            <CardDescription>Solo elige el examen; el alumno se detecta al escanear la hoja.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             <ConfigRow
@@ -151,9 +151,9 @@ export function CalificarMobileHome({
               label="Alumno"
               value={studentLabel}
               hint={
-                autoIdentifyByControl
-                  ? 'Opcional si la hoja tiene número de control marcado'
-                  : 'Requerido antes de calificar'
+                studentAutoDetect
+                  ? 'Se identifica al escanear la hoja personalizada'
+                  : 'Alumno fijado manualmente'
               }
               onPress={() => canGradeStudents && setStudentPickerOpen(true)}
               disabled={!canGradeStudents || !examId}
@@ -278,6 +278,8 @@ export function CalificarMobileHome({
         open={studentPickerOpen}
         students={students}
         selectedId={selectedStudentId}
+        autoOptionId={CALIFICAR_AUTO_STUDENT_ID}
+        autoOptionLabel="Automático (detectar en la hoja)"
         onSelect={onSelectStudent}
         onClose={() => setStudentPickerOpen(false)}
       />

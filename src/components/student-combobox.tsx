@@ -25,6 +25,8 @@ export type StudentComboboxProps = {
   searchPlaceholder?: string;
   emptyText?: string;
   noStudentsText?: string;
+  autoOptionLabel?: string;
+  autoOptionValue?: string;
 };
 
 export function StudentCombobox({
@@ -37,9 +39,13 @@ export function StudentCombobox({
   searchPlaceholder = 'Escribe para buscar…',
   emptyText = 'Ningún alumno coincide con la búsqueda.',
   noStudentsText = 'No hay alumnos registrados en el grupo de este examen. El maestro debe darlos de alta en Grupos.',
+  autoOptionLabel,
+  autoOptionValue,
 }: StudentComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const selected = students.find((s) => s.id === value);
+  const autoSelected =
+    autoOptionValue !== undefined && autoOptionLabel !== undefined && value === autoOptionValue;
 
   const filter = React.useCallback(
     (itemValue: string, search: string) => {
@@ -75,8 +81,8 @@ export function StudentCombobox({
           disabled={disabled}
           className="h-11 w-full justify-between px-3 font-normal"
         >
-          <span className={cn('truncate text-left', !selected && 'text-muted-foreground')}>
-            {selected ? selected.name : placeholder}
+          <span className={cn('truncate text-left', !selected && !autoSelected && 'text-muted-foreground')}>
+            {autoSelected ? autoOptionLabel : selected ? selected.name : placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -102,6 +108,23 @@ export function StudentCombobox({
           <CommandList className="max-h-[min(50vh,15rem)] overflow-y-auto overscroll-contain px-2 py-2">
             <CommandEmpty className="py-8 text-muted-foreground">{emptyText}</CommandEmpty>
             <CommandGroup className="p-0 [&_[cmdk-item]]:my-0.5 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:py-2.5">
+              {autoOptionValue !== undefined && autoOptionLabel !== undefined ? (
+                <CommandItem
+                  value={autoOptionValue}
+                  onSelect={() => {
+                    onValueChange(autoOptionValue);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      'mr-2 h-4 w-4',
+                      value === autoOptionValue ? 'opacity-100' : 'opacity-0'
+                    )}
+                  />
+                  {autoOptionLabel}
+                </CommandItem>
+              ) : null}
               {students.map((s) => (
                 <CommandItem
                   key={s.id}

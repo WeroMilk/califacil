@@ -2835,12 +2835,16 @@ function isPrintedCornerFiducialPatch(
   const innerMean = innerLumSum / innerCount;
   const outerMean = outerLumSum / outerCount;
 
-  if (innerDarkFrac < 0.68) return false;
-  if (innerMean > 62) return false;
-  if (outerMean - innerMean < 38) return false;
-  if (outerMean < 42 && innerMean < 38) return false;
+  if (innerDarkFrac < 0.65) return false;
+  if (innerMean > 65) return false;
 
-  return true;
+  const contrast = outerMean - innerMean;
+  if (contrast >= 28) return true;
+  // Junto a franjas negras laterales el anillo exterior también es oscuro.
+  if (innerDarkFrac >= 0.72 && innerMean <= 58) return true;
+  if (innerDarkFrac >= 0.8 && innerMean <= 48) return true;
+
+  return false;
 }
 
 /** Estado por esquina [TL, TR, BL, BR] de fiduciales negros en parches de esquina. */
@@ -2863,6 +2867,13 @@ function detectFiducialsAtCornerPatches(
   return detected;
 }
 
+function mergeFiducialCornerStates(
+  a: [boolean, boolean, boolean, boolean],
+  b: [boolean, boolean, boolean, boolean]
+): [boolean, boolean, boolean, boolean] {
+  return [a[0] || b[0], a[1] || b[1], a[2] || b[2], a[3] || b[3]];
+}
+
 /** Fiduciales en las esquinas del cuadrilátero de hoja detectado (no del ROI completo). */
 export function detectAnswerSheetFiducialsAtQuad(
   canvas: HTMLCanvasElement,
@@ -2872,20 +2883,31 @@ export function detectAnswerSheetFiducialsAtQuad(
   if (!ctx) return [false, false, false, false];
   const W = canvas.width;
   const H = canvas.height;
-  const [tl, tr, br, bl] = quad;
-  const cx = (tl.x + tr.x + br.x + bl.x) * 0.25;
-  const cy = (tl.y + tr.y + br.y + bl.y) * 0.25;
-  const inset = (c: Point): Point => ({
-    x: c.x + (cx - c.x) * 0.12,
-    y: c.y + (cy - c.y) * 0.12,
+  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.068));
+  const cornerIds: Array<'tl' | 'tr' | 'bl' | 'br'> = ['tl', 'tr', 'bl', 'br'];
+  const centers = cornerIds.map((id) => {
+    const norm = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
+    return bilinearPointInViewportQuad(quad, norm.x, norm.y);
   });
-  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.07));
-  return detectFiducialsAtCornerPatches(
-    ctx,
-    [inset(tl), inset(tr), inset(bl), inset(br)],
-    patch,
-    patch
-  );
+  const detected = detectFiducialsAtCornerPatches(ctx, centers, patch, patch);
+
+  const [tl, tr, br, bl] = quad;
+  const vertices: [Point, Point, Point, Point] = [tl, tr, bl, br];
+  const id = ctx.getImageData(0, 0, W, H);
+  const region = Math.max(14, Math.round(patch * 1.55));
+  for (let i = 0; i < 4; i++) {
+    if (detected[i]) continue;
+    const v = vertices[i]!;
+    const rx = i === 0 || i === 2 ? v.x : v.x - region;
+    const ry = i === 0 || i === 1 ? v.y : v.y - region;
+    const found = findCornerMarkerPoint(id.data, W, H, rx, ry, region, region);
+    if (!found) continue;
+    const px = Math.max(0, Math.min(W - patch, Math.round(found.x - patch / 2)));
+    const py = Math.max(0, Math.min(H - patch, Math.round(found.y - patch / 2)));
+    const patchId = ctx.getImageData(px, py, patch, patch);
+    detected[i] = isPrintedCornerFiducialPatch(patchId, patch, patch);
+  }
+  return detected;
 }
 
 /** Estado por esquina [TL, TR, BL, BR] de fiduciales negros visibles en el ROI. */
@@ -2893,9 +2915,19 @@ export function detectAnswerSheetFiducialsInRoi(
   canvas: HTMLCanvasElement,
   sheetQuad: [Point, Point, Point, Point] | null = null
 ): [boolean, boolean, boolean, boolean] {
+  let merged: [boolean, boolean, boolean, boolean] = [false, false, false, false];
   if (sheetQuad) {
-    return detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad);
+    merged = detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad);
   }
+  const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
+  if (stripQuad) {
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectAnswerSheetFiducialsAtQuad(canvas, stripQuad)
+    );
+  }
+  if (merged.some(Boolean)) return merged;
+
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [false, false, false, false];
   const W = canvas.width;
