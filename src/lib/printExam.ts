@@ -143,6 +143,33 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Normaliza opciones desde jsonb/array/string para impresión y OMR. */
+export function normalizeQuestionOptions(options: Question['options'] | unknown): string[] {
+  if (!options) return [];
+  if (Array.isArray(options)) {
+    return options.map((o) => String(o).trim()).filter(Boolean);
+  }
+  if (typeof options === 'string') {
+    try {
+      const parsed = JSON.parse(options) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((o) => String(o).trim()).filter(Boolean);
+      }
+    } catch {
+      /* texto plano */
+    }
+    const trimmed = options.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  return [];
+}
+
+/** Pregunta calificable con burbujas OMR (opción múltiple con ≥2 opciones). */
+export function isGradableMultipleChoiceQuestion(q: Question): boolean {
+  if (q.type === 'open_answer') return false;
+  return normalizeQuestionOptions(q.options).length >= 2;
+}
+
 function questionBlock(
   q: Question,
   index: number,
@@ -152,8 +179,9 @@ function questionBlock(
   const text = escapeHtml(q.text);
   let body = '';
 
-  if (q.type === 'multiple_choice' && q.options?.length) {
-    const inlineOptions = q.options
+  if (isGradableMultipleChoiceQuestion(q)) {
+    const options = normalizeQuestionOptions(q.options);
+    const inlineOptions = options
       .map((opt, i) => {
         const letter = String.fromCharCode(65 + i);
         const isCorrect = includeAnswerKey && opt === q.correct_answer;
@@ -185,22 +213,20 @@ export function chunkQuestions<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-/** Examen apto para impresión con banda CaliFacil (OMR) y para la página Calificar. */
+/** Examen apto para impresión con hoja CaliFacil (OMR) y para la página Calificar. */
 export function examSupportsCalifacilOmr(questions: Question[]): boolean {
   if (!questions.length) return false;
-  return questions.every(
-    (q) =>
-      q.type === 'multiple_choice' &&
-      (q.options?.length ?? 0) >= 2 &&
-      (q.options?.length ?? 0) <= 5
-  );
+  return questions.some(isGradableMultipleChoiceQuestion);
 }
 
 export function califacilOmrColumnCount(questions: Question[]): number {
-  if (!examSupportsCalifacilOmr(questions)) return 0;
+  const mc = questions.filter(isGradableMultipleChoiceQuestion);
+  if (!mc.length) return 0;
   return Math.min(
     5,
-    Math.max(...questions.map((q) => q.options?.length ?? 0))
+    Math.max(
+      ...mc.map((q) => Math.min(5, normalizeQuestionOptions(q.options).length))
+    )
   );
 }
 
@@ -257,13 +283,13 @@ function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string
   for (let i = 0; i < rowCount; i++) {
     const q = questions[i];
     const qNum = i + 1;
-    if (!q || q.type !== 'multiple_choice') {
+    if (!q || !isGradableMultipleChoiceQuestion(q)) {
       rows.push(
-        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">—</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
+        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">${qNum}</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
       );
       continue;
     }
-    const nOpts = Math.min(omrCols, q.options?.length ?? omrCols);
+    const nOpts = Math.min(omrCols, normalizeQuestionOptions(q.options).length);
     const cells: string[] = [];
     for (let c = 0; c < omrCols; c++) {
       const letter = String.fromCharCode(65 + c);
@@ -307,13 +333,13 @@ function califacilOmrTableHtml(
   for (let i = 0; i < rowCount; i++) {
     const q = questions[i];
     const qNum = i + 1;
-    if (!q || q.type !== 'multiple_choice') {
+    if (!q || !isGradableMultipleChoiceQuestion(q)) {
       rows.push(
-        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">—</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
+        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">${qNum}</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
       );
       continue;
     }
-    const nOpts = Math.min(omrCols, q.options?.length ?? omrCols);
+    const nOpts = Math.min(omrCols, normalizeQuestionOptions(q.options).length);
     const cells: string[] = [];
     for (let c = 0; c < omrCols; c++) {
       const letter = String.fromCharCode(65 + c);
@@ -1637,10 +1663,19 @@ function printHtmlDocument(html: string): boolean {
       window.setTimeout(finish, 120_000);
     };
 
+    const schedulePrint = () => {
+      // Esperar layout de todas las páginas (preguntas + hoja de respuestas) antes de imprimir.
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.setTimeout(triggerPrint, 180);
+        });
+      });
+    };
+
     if (win.document.readyState === 'complete') {
-      window.setTimeout(triggerPrint, 50);
+      schedulePrint();
     } else {
-      win.addEventListener('load', () => window.setTimeout(triggerPrint, 50), { once: true });
+      win.addEventListener('load', schedulePrint, { once: true });
     }
   };
 
@@ -1649,7 +1684,7 @@ function printHtmlDocument(html: string): boolean {
       const iframe = document.createElement('iframe');
       iframe.setAttribute('aria-hidden', 'true');
       iframe.style.cssText =
-        'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;';
+        'position:fixed;left:-10000px;top:0;width:8.5in;height:24in;border:0;opacity:0;pointer-events:none;overflow:visible;';
       document.body.appendChild(iframe);
       const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
       const win = iframe.contentWindow;
