@@ -7,6 +7,7 @@ import {
   buildCalifacilAnswerSheetOmrTemplate,
   buildMarkerAnchoredAnswerSheetTemplate,
   CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT,
+  CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER,
   CALIFACIL_FIDUCIAL_CENTERS_NORM,
   CALIFACIL_VIEWFINDER_GUIDE,
   CALIFACIL_WARP_PAGE_FRAME_NORM,
@@ -5522,6 +5523,9 @@ export function readAnswerSheetControlNumberFromCanvas(
   rowCount = CALIFACIL_OMR_DEFAULT_ROWS,
   thresholds: ScanThresholds = CONTROL_NUMBER_SCAN_THRESHOLDS
 ): { digits: (number | null)[]; controlNumber: string | null } {
+  if (!CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER) {
+    return { digits: [], controlNumber: null };
+  }
   if (canvas.width < 40 || canvas.height < 40) {
     return { digits: [], controlNumber: null };
   }

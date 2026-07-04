@@ -6,6 +6,9 @@ export const CALIFACIL_PRINT_MAX_QUESTIONS = 30;
 /** Dígitos del número de control OMR en la hoja de respuestas (0–9 por columna). */
 export const CALIFACIL_CONTROL_NUMBER_DIGIT_COUNT = 8;
 
+/** Si la hoja impresa incluye la cuadrícula OMR de número de control (deshabilitada: solo tabla 1–N). */
+export const CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER = false;
+
 /**
  * Relación ancho:alto del recuadro CaliFacil impreso (borde exterior del aside: título + tabla).
  * Calíbralo con captura real: debe coincidir con la caja `.califacil-omr` (--califacil-footer-band 76mm + padding).
@@ -1218,7 +1221,9 @@ function answerSheetFillRowHeightPt(rowCount: number): number {
   const sheetInnerPt = CALIFACIL_ANSWER_SHEET_PAGE.innerHeightPt - 17;
   const bodyInsetPt = 2 * (ANSWER_SHEET_LAYOUT.cornerSizePt + ANSWER_SHEET_LAYOUT.cornerGapPt);
   const chromePt = answerSheetChromeAboveControlPt();
-  const controlBlockPt = answerSheetControlBlockTotalPt(denseOmr);
+  const controlBlockPt = CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER
+    ? answerSheetControlBlockTotalPt(denseOmr)
+    : 0;
   const omrAsidePadPt = 1.5 + 2;
   const omrTitleBlockPt = 6.2 * 1.12 + 2;
   const omrTableBorderPt = 2;
@@ -1293,7 +1298,9 @@ function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetO
   const bodyInsetPt = cornerSizePt + cornerGapPt;
   const sideMarginPt = bodyInsetPt + alignStripWidthPt + cornerGapPt;
   const chromePt = answerSheetChromeAboveControlPt();
-  const controlTotalPt = answerSheetControlBlockTotalPt(denseOmr);
+  const controlTotalPt = CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER
+    ? answerSheetControlBlockTotalPt(denseOmr)
+    : 0;
   const omrHeightPt = answerSheetCalifacilOmrOuterHeightPt(rowCount);
 
   const tableTopPt = bodyInsetPt + chromePt + controlTotalPt + ANSWER_SHEET_TABLE_TOP_NUDGE_PT;
@@ -1593,7 +1600,7 @@ ${answerSheetAlignMarkersHtml()}
         </div>
       </header>
 ${omrSheetMetaRowHtml()}
-${answerSheetControlNumberHtml()}
+${CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER ? answerSheetControlNumberHtml() : ''}
 ${omrHtml}
     </div>
   </section>`;
