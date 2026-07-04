@@ -45,6 +45,94 @@ function withShuffledMcOptions(questions: Record<string, unknown>[]): Record<str
   return questions.map((q) => shuffleMultipleChoiceOptions(q));
 }
 
+function readQuestionOptions(q: Record<string, unknown>): string[] {
+  const opts = q.options;
+  if (!Array.isArray(opts)) return [];
+  return opts.map((o) => String(o).trim()).filter(Boolean);
+}
+
+/** Convierte una pregunta a opción múltiple válida (4 opciones + respuesta correcta). */
+function coerceToMultipleChoice(q: Record<string, unknown>, index: number): Record<string, unknown> {
+  const text = String(q.text ?? '').trim();
+  const existing = readQuestionOptions(q);
+  let correct = String(q.correct_answer ?? '').trim();
+
+  if (existing.length >= 2) {
+    if (!correct || !existing.includes(correct)) {
+      correct = existing[0]!;
+    }
+    const options = [...existing];
+    while (options.length < 4) {
+      options.push(`Alternativa ${String.fromCharCode(65 + options.length)} (reactivo ${index + 1})`);
+    }
+    return {
+      ...q,
+      text,
+      type: 'multiple_choice',
+      options: options.slice(0, 4),
+      correct_answer: correct,
+    };
+  }
+
+  if (!correct) correct = `Respuesta correcta (reactivo ${index + 1})`;
+  return {
+    ...q,
+    text,
+    type: 'multiple_choice',
+    options: [
+      correct,
+      `Alternativa B (reactivo ${index + 1})`,
+      `Alternativa C (reactivo ${index + 1})`,
+      'Ninguna de las anteriores',
+    ],
+    correct_answer: correct,
+  };
+}
+
+/** Fuerza tipos permitidos según la selección del maestro (sin preguntas abiertas no pedidas). */
+function enforceGeneratedQuestionTypes(
+  questions: Record<string, unknown>[],
+  includeMultipleChoice: boolean,
+  includeOpenAnswer: boolean
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const raw of questions) {
+    if (!raw || !String(raw.text ?? '').trim()) continue;
+
+    if (includeMultipleChoice && !includeOpenAnswer) {
+      out.push(coerceToMultipleChoice(raw, out.length));
+      continue;
+    }
+
+    if (!includeMultipleChoice && includeOpenAnswer) {
+      out.push({
+        ...raw,
+        type: 'open_answer',
+        options: undefined,
+      });
+      continue;
+    }
+
+    const type = raw.type === 'open_answer' ? 'open_answer' : 'multiple_choice';
+    if (type === 'open_answer' && includeOpenAnswer) {
+      out.push({ ...raw, type: 'open_answer' });
+    } else if (includeMultipleChoice) {
+      out.push(coerceToMultipleChoice(raw, out.length));
+    }
+  }
+  return out;
+}
+
+function resolveQuestionTypeFlags(body: {
+  includeMultipleChoice?: unknown;
+  includeOpenAnswer?: unknown;
+}): { includeMultipleChoice: boolean; includeOpenAnswer: boolean } {
+  return {
+    includeMultipleChoice: body.includeMultipleChoice !== false,
+    includeOpenAnswer: body.includeOpenAnswer === true,
+  };
+}
+
 function clampQuestionCount(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return 1;
@@ -103,17 +191,36 @@ function buildGenerationPrompt(params: {
           .join('\n')}\n`
       : '';
 
+  const onlyMultipleChoice =
+    questionTypes.length === 1 && questionTypes[0] === 'multiple_choice';
+  const onlyOpenAnswer = questionTypes.length === 1 && questionTypes[0] === 'open_answer';
+
+  const typeInstructions = onlyMultipleChoice
+    ? `- type: SIEMPRE "multiple_choice" (prohibido open_answer)
+- options: array con exactamente 4 opciones de respuesta
+- correct_answer: texto exacto de la opción correcta (debe coincidir con una opción)`
+    : onlyOpenAnswer
+      ? `- type: SIEMPRE "open_answer" (prohibido multiple_choice)
+- correct_answer: respuesta esperada corta (opcional)`
+      : `- type: Tipo de pregunta (${questionTypes.join(' o ')})
+- Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta
+- Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)`;
+
+  const typeConstraint = onlyMultipleChoice
+    ? '\nOBLIGATORIO: Genera ÚNICAMENTE preguntas de opción múltiple. No incluyas preguntas abiertas.\n'
+    : onlyOpenAnswer
+      ? '\nOBLIGATORIO: Genera ÚNICAMENTE preguntas de respuesta abierta. No incluyas opción múltiple.\n'
+      : '';
+
   return `Genera ${count} preguntas de examen sobre los siguientes temas: ${topics}
 
 ${difficultyInstructions(difficulty)}
 
 ${rangeLabel}
-${avoidRepeatBlock}
+${avoidRepeatBlock}${typeConstraint}
 Para cada pregunta, incluye:
 - text: El texto de la pregunta (sin numeración tipo "1." o "Pregunta 1")
-- type: Tipo de pregunta (${questionTypes.join(' o ')})
-- Si es multiple_choice: incluye un array "options" con 4 opciones de respuesta y "correct_answer" con el texto exacto de la opción correcta
-- Si es open_answer: incluye "correct_answer" con una respuesta esperada corta (opcional)
+${typeInstructions}
 - illustration: Una breve descripción de una ilustración (opcional)
 
 IMPORTANTE: Cada pregunta debe ser única y cubrir un aspecto distinto. No repitas enunciados.
@@ -143,15 +250,20 @@ async function generateOpenAIQuestionsBatch(
     questionTypes: string[];
     difficulty: string;
     existingTexts?: string[];
+    mcOnly?: boolean;
   }
 ): Promise<Record<string, unknown>[]> {
+  const systemContent =
+    params.mcOnly === true
+      ? 'Eres un asistente experto en crear reactivos de examen escolares en español. Genera el número exacto de preguntas pedido. Todas deben ser de opción múltiple (4 opciones). Responde únicamente con JSON válido.'
+      : 'Eres un asistente experto en crear reactivos de examen escolares en español. Genera el número exacto de preguntas pedido. Responde únicamente con JSON válido.';
+
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content:
-          'Eres un asistente experto en crear reactivos de examen escolares en español. Genera el número exacto de preguntas pedido. Responde únicamente con JSON válido.',
+        content: systemContent,
       },
       {
         role: 'user',
@@ -172,7 +284,8 @@ async function generateAllOpenAIQuestions(
   topics: string,
   totalCount: number,
   questionTypes: string[],
-  difficulty: string
+  difficulty: string,
+  mcOnly: boolean
 ): Promise<Record<string, unknown>[]> {
   const collected: Record<string, unknown>[] = [];
   const batchTotal = Math.ceil(totalCount / OPENAI_BATCH_SIZE);
@@ -195,6 +308,7 @@ async function generateAllOpenAIQuestions(
         questionTypes,
         difficulty,
         existingTexts,
+        mcOnly,
       });
       collected.push(...batch);
     } catch (batchError) {
@@ -213,7 +327,11 @@ function mergeToTargetCount(
   includeOpenAnswer: boolean,
   difficulty: string
 ): { text: string }[] {
-  let merged = dedupeExamQuestions(primary);
+  let merged = enforceGeneratedQuestionTypes(
+    dedupeExamQuestions(primary) as Record<string, unknown>[],
+    includeMultipleChoice,
+    includeOpenAnswer
+  ) as { text: string }[];
   if (merged.length >= targetCount) return merged.slice(0, targetCount);
 
   const seen = new Set(merged.map((q) => normalizeQuestionText(q.text)));
@@ -329,10 +447,15 @@ export async function POST(request: NextRequest) {
     const {
       topics,
       count: countRaw,
-      includeMultipleChoice,
-      includeOpenAnswer,
+      includeMultipleChoice: includeMultipleChoiceRaw,
+      includeOpenAnswer: includeOpenAnswerRaw,
       difficulty: difficultyRaw,
     } = await request.json();
+
+    const { includeMultipleChoice, includeOpenAnswer } = resolveQuestionTypeFlags({
+      includeMultipleChoice: includeMultipleChoiceRaw,
+      includeOpenAnswer: includeOpenAnswerRaw,
+    });
 
     const difficulty = DIFFICULTY_LEVELS.includes(difficultyRaw)
       ? difficultyRaw
@@ -397,14 +520,21 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+      const mcOnly = includeMultipleChoice && !includeOpenAnswer;
       const rawQuestions = await generateAllOpenAIQuestions(
         openai,
         topicsTrimmed,
         questionCount,
         questionTypes,
-        difficulty
+        difficulty,
+        mcOnly
       );
-      const shuffled = withShuffledMcOptions(rawQuestions) as { text: string }[];
+      const normalized = enforceGeneratedQuestionTypes(
+        rawQuestions,
+        includeMultipleChoice,
+        includeOpenAnswer
+      );
+      const shuffled = withShuffledMcOptions(normalized) as { text: string }[];
       const questions = mergeToTargetCount(
         shuffled,
         topicsTrimmed,

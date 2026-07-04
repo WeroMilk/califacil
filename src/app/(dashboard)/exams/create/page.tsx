@@ -109,6 +109,10 @@ export default function CreateExamPage() {
       toast.error('Describe los temas para generar preguntas');
       return;
     }
+    if (!includeMultipleChoice) {
+      toast.error('Selecciona al menos opción múltiple para generar el examen');
+      return;
+    }
     if (generateLockRef.current) return;
     generateLockRef.current = true;
 
