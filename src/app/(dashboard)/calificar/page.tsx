@@ -63,12 +63,12 @@ import {
   measureWarpedFiducialAlignment,
   MAX_WARP_ALIGNMENT_ERROR_PX,
   MOBILE_MIN_FIDUCIAL_CORNERS,
+  MOBILE_LIVE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
   isMobileExamSheetReadyForCapture,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
-  prepareAnswerSheetDisplayCanvas,
   prepareMobileScannedDocumentCanvas,
   prepareMobileScannedDocumentCanvasFast,
   prepareCalifacilScanInput,
@@ -82,10 +82,8 @@ import {
   scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
-  buildMobileZipGradePreviewPack,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
-  syncCalifacilOmrGeometryImageSize,
   isAnswerSheetOmrMostlyBlank,
   downscaleCanvasForOmrScan,
   isMobileWarpedAnswerSheetReady,
@@ -1451,42 +1449,18 @@ export default function CalificarPage() {
 
       if (isMobileCamera) {
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
-        const snapSource =
-          opts?.displaySource ??
+        const reviewCanvas =
           meta.reviewSourceCanvas ??
-          (activeScanSource instanceof HTMLCanvasElement
-            ? (prepareMobileScannedDocumentCanvas(activeScanSource) ?? activeScanSource)
-            : activeScanSource);
+          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null);
         let snapUrl: string | null = null;
         let nameCropUrl: string | null = null;
-        let geom: CalifacilOmrScanGeometry | null = meta.geometry;
-        if (snapSource instanceof HTMLCanvasElement) {
-          const pack = buildMobileZipGradePreviewPack(snapSource, omrCols, omrRowCount, {
-            warpAlignment: warpAlignment,
-          });
-          if (pack) {
-            snapUrl = pack.previewDataUrl;
-            nameCropUrl = pack.nameCropUrl;
-            if (meta.geometry) {
-              geom = syncCalifacilOmrGeometryImageSize(
-                meta.geometry,
-                pack.geometry.imageWidth,
-                pack.geometry.imageHeight
-              );
-            } else {
-              geom = pack.geometry;
-            }
-          } else {
-            snapUrl = canvasPreviewDataUrl(snapSource, 1100);
-            nameCropUrl = cropAnswerSheetNameSnippetDataUrl(snapSource);
-            if (geom) {
-              geom = syncCalifacilOmrGeometryImageSize(
-                geom,
-                snapSource.width,
-                snapSource.height
-              );
-            }
-          }
+        const geom = meta.geometry;
+        if (reviewCanvas instanceof HTMLCanvasElement && geom) {
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
+          nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
+        } else if (reviewCanvas instanceof HTMLCanvasElement) {
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
+          nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         }
         if (geom) {
           let geomClone: CalifacilOmrScanGeometry;
@@ -2182,6 +2156,16 @@ export default function CalificarPage() {
                 setLiveStatus('Activé el flash. Centra la hoja con las franjas negras visibles.');
               } else if (!stripAligned && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
                 setLiveStatus('Alinea las franjas negras laterales del examen.');
+              } else if (
+                stripAligned &&
+                fiducialCount < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS &&
+                !fiducialCorners[0] &&
+                !fiducialCorners[1] &&
+                (fiducialCorners[2] || fiducialCorners[3])
+              ) {
+                setLiveStatus(
+                  'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
+                );
               } else {
                 setLiveStatus(
                   `Esquinas: ${fiducialCount}/4. Encuadra la hoja con las 4 esquinas negras visibles.`
@@ -2243,11 +2227,16 @@ export default function CalificarPage() {
             setMobileStableTicks(cornerStableTicksRef.current);
             setCornersAlignedView(examReadyForCapture);
             if (!examReadyForCapture) {
+              const minLiveCorners = stripAligned ? MOBILE_LIVE_MIN_FIDUCIAL_CORNERS : MOBILE_MIN_FIDUCIAL_CORNERS;
               setLiveStatus(
                 !stripAligned
                   ? 'Centra el examen — deben verse las franjas negras laterales.'
-                  : fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
-                    ? `Esquinas detectadas: ${fiducialCount}/4. Encuadra las 4 esquinas negras del examen.`
+                  : fiducialCount < minLiveCorners
+                    ? !fiducialCorners[0] &&
+                      !fiducialCorners[1] &&
+                      (fiducialCorners[2] || fiducialCorners[3])
+                      ? 'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
+                      : `Esquinas detectadas: ${fiducialCount}/4. Encuadra las esquinas negras del examen.`
                     : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
                       ? 'Acerca el teléfono hasta ver la hoja completa.'
                       : 'Ajusta la hoja — el interior debe verse blanco y nítido.'
@@ -3093,41 +3082,61 @@ export default function CalificarPage() {
         return;
       }
 
-      let alignmentCheckCanvas = fullCanvas;
-      let alignmentCheckQuad: RoiQuad | null = opts?.roiQuad ?? null;
-      if (opts?.roiCapture?.roiCanvas) {
-        alignmentCheckCanvas = opts.roiCapture.roiCanvas;
+      let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
+      let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
+
+      let validationCanvas = fullCanvas;
+      let validationQuad: RoiQuad | null = null;
+      if (roiQuad && roiCapture) {
+        const frameQuad = mapRoiQuadToFrame(
+          roiQuad,
+          roiCapture.roiRect,
+          roiCapture.roiCanvas.width,
+          roiCapture.roiCanvas.height
+        );
+        validationQuad = scaleQuadToCanvas(
+          frameQuad,
+          roiCapture.frameW,
+          roiCapture.frameH,
+          fullCanvas.width,
+          fullCanvas.height
+        );
+      } else if (roiCapture?.roiCanvas) {
+        validationCanvas = roiCapture.roiCanvas;
+        validationQuad =
+          roiQuad ??
+          detectMobileLiveSheetQuad(validationCanvas) ??
+          detectLargestQuadInRoiCanvas(validationCanvas);
+      } else {
+        validationQuad =
+          detectMobileLiveSheetQuad(fullCanvas) ?? detectLargestQuadInRoiCanvas(fullCanvas);
       }
-      if (!alignmentCheckQuad) {
-        alignmentCheckQuad =
-          detectMobileLiveSheetQuad(alignmentCheckCanvas) ??
-          detectLargestQuadInRoiCanvas(alignmentCheckCanvas);
-      }
-      const alignmentFiducials = detectAnswerSheetFiducialsInRoi(
-        alignmentCheckCanvas,
-        alignmentCheckQuad
+      const validationFiducials = detectAnswerSheetFiducialsInRoi(
+        validationCanvas,
+        validationQuad
       );
-      const alignmentFiducialCount = alignmentFiducials.filter(Boolean).length;
-      const alignmentStripAligned =
-        detectAnswerSheetQuadViaAlignStrips(alignmentCheckCanvas) !== null;
-      const alignmentFillRatio =
-        alignmentCheckQuad !== null
+      const validationFiducialCount = validationFiducials.filter(Boolean).length;
+      const validationStripAligned =
+        detectAnswerSheetQuadViaAlignStrips(validationCanvas) !== null ||
+        detectAnswerSheetQuadViaAlignStrips(fullCanvas) !== null;
+      const validationFillRatio =
+        validationQuad !== null
           ? measureRoiSheetFillRatio(
-              alignmentCheckQuad,
-              alignmentCheckCanvas.width,
-              alignmentCheckCanvas.height
+              validationQuad,
+              validationCanvas.width,
+              validationCanvas.height
             )
           : 0;
       if (
         !isMobileExamSheetReadyForCapture({
-          fiducialCount: alignmentFiducialCount,
-          fiducialCorners: alignmentFiducials,
-          stripAligned: alignmentStripAligned,
-          quad: alignmentCheckQuad,
-          roiW: alignmentCheckCanvas.width,
-          roiH: alignmentCheckCanvas.height,
-          fillRatio: alignmentFillRatio,
-          roiCanvas: alignmentCheckCanvas,
+          fiducialCount: validationFiducialCount,
+          fiducialCorners: validationFiducials,
+          stripAligned: validationStripAligned,
+          quad: validationQuad,
+          roiW: validationCanvas.width,
+          roiH: validationCanvas.height,
+          fillRatio: validationFillRatio,
+          roiCanvas: validationCanvas,
         })
       ) {
         clearPreview();
@@ -3135,9 +3144,6 @@ export default function CalificarPage() {
         setLiveStatus('Encuadra el examen completo antes de capturar.');
         return;
       }
-
-      let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
-      let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3156,6 +3162,8 @@ export default function CalificarPage() {
         alignment = fastWarp.alignment;
         if (!warped) {
           const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+            roiQuad,
+            roiCapture,
             maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
             fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
           });
@@ -3212,29 +3220,13 @@ export default function CalificarPage() {
             return;
           }
         }
-        if (sheetKind === 'califacil') {
-          const refinedSheet = refineWarpedCalifacilSheet(warped, {
-            maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-            fast: false,
-          });
-          warped = refinedSheet.canvas;
-          alignment = refinedSheet.alignment;
-        }
       }
-
-      const alignmentPrecise =
-        sheetKind === 'califacil' &&
-        Boolean(alignment?.ok) &&
-        Number.isFinite(alignment?.maxErrorPx) &&
-        (alignment?.maxErrorPx ?? 99) <= MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 2;
 
       const scanCanvas =
         sheetKind === 'zipgrade'
           ? warped
-          : (prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: alignmentPrecise }) ??
-            warped);
-      const displayCanvas = prepareAnswerSheetDisplayCanvas(scanCanvas) ?? scanCanvas;
-      const scanPreview = canvasPreviewDataUrl(displayCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
+          : (prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: true }) ?? warped);
+      const scanPreview = canvasPreviewDataUrl(scanCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
       if (scanPreview) {
         flushSync(() => setMobileScanPreviewUrl(scanPreview));
         if (video) pauseLiveVideoForScan(video);
@@ -3316,7 +3308,6 @@ export default function CalificarPage() {
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: sheetKind === 'zipgrade',
-        displaySource: displayCanvas,
         readingOverride,
       });
       if (result.success) {
@@ -3363,21 +3354,7 @@ export default function CalificarPage() {
       }
 
       let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
-      let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
-      if (!roiCapture) {
-        roiCapture = captureVideoFrameForDocumentDetect(video, {
-          maxSide: MOBILE_ROI_DETECT_MAX_SIDE,
-        });
-      }
-      if (!roiQuad && roiCapture) {
-        const detected = detectMobileLiveSheetQuad(roiCapture.roiCanvas);
-        if (
-          detected &&
-          isValidMobileRoiQuad(detected, roiCapture.roiCanvas.width, roiCapture.roiCanvas.height)
-        ) {
-          roiQuad = smoothMobileRoiQuad(null, detected, 0.5);
-        }
-      }
+      const roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
 
       await processMobileCapturedCanvas(fullCanvas, video, { ...opts, roiQuad, roiCapture });
     },
@@ -3510,12 +3487,34 @@ export default function CalificarPage() {
     setReviewScanning(true);
     setReviewStatus('Calificando…');
     try {
-      const result = await finalizeCapturedSheet(mobileReviewAlign.warped, undefined, {
+      const chunk = sheets[sheetIndexRef.current] ?? [];
+      if (chunk.length === 0) {
+        setReviewStatus('No hay preguntas en esta hoja.');
+        return;
+      }
+      const scanCanvas = downscaleCanvasForOmrScan(
+        mobileReviewAlign.warped,
+        MOBILE_OMR_SCAN_MAX_SIDE
+      );
+      const frameMeta = scanWarpedWithNormTableFrame(
+        scanCanvas,
+        omrCols,
+        omrRowCount,
+        mobileReviewAlign.orangeFrameNorm
+      );
+      const readingOverride = buildCalifacilOmrReadingOverride(
+        frameMeta,
+        chunk,
+        scanCanvas,
+        liveLockedAnswersRef.current,
+        mobileReviewAlign.alignment
+      );
+      const result = await finalizeCapturedSheet(scanCanvas, undefined, {
         preWarped: true,
         warpAlignment: mobileReviewAlign.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: mobileReviewAlign.warped,
+        readingOverride,
       });
       if (result.success) {
         playScanCompleteChime();
@@ -3530,7 +3529,7 @@ export default function CalificarPage() {
     } finally {
       setReviewScanning(false);
     }
-  }, [finalizeCapturedSheet, mobileReviewAlign]);
+  }, [finalizeCapturedSheet, mobileReviewAlign, omrCols, omrRowCount, sheets]);
 
   finalizeMobileReviewGradeRef.current = finalizeMobileReviewGrade;
 

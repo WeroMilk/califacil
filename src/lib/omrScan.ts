@@ -2798,7 +2798,8 @@ function isPrintedCornerFiducialPatch(
   imageData: ImageData,
   patchW: number,
   patchH: number,
-  nearStripEdge = false
+  nearStripEdge = false,
+  topCornerGlare = false
 ): boolean {
   const { data } = imageData;
   const w = patchW;
@@ -2844,16 +2845,17 @@ function isPrintedCornerFiducialPatch(
   const innerMean = innerLumSum / innerCount;
   const outerMean = outerLumSum / outerCount;
 
-  const minDarkFrac = nearStripEdge ? 0.58 : 0.65;
+  const minDarkFrac = topCornerGlare ? 0.52 : nearStripEdge ? 0.58 : 0.65;
   if (innerDarkFrac < minDarkFrac) return false;
-  if (innerMean > (nearStripEdge ? 68 : 65)) return false;
+  if (innerMean > (topCornerGlare ? 78 : nearStripEdge ? 68 : 65)) return false;
 
   const contrast = outerMean - innerMean;
-  if (contrast >= 28) return true;
+  if (contrast >= (topCornerGlare ? 18 : 28)) return true;
   // Junto a franjas negras laterales el anillo exterior también es oscuro.
   if (innerDarkFrac >= 0.72 && innerMean <= 58) return true;
   if (innerDarkFrac >= 0.8 && innerMean <= 48) return true;
   if (nearStripEdge && innerDarkFrac >= 0.68 && innerMean <= 62) return true;
+  if (topCornerGlare && innerDarkFrac >= 0.58 && innerMean <= 72) return true;
 
   return false;
 }
@@ -2893,12 +2895,20 @@ const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
   'tl' | 'tr' | 'bl' | 'br',
   Array<{ dx: number; dy: number }>
 > = {
-  tl: [{ dx: 0, dy: 0 }],
+  tl: [
+    { dx: 0, dy: 0 },
+    { dx: 0.008, dy: 0.012 },
+    { dx: -0.006, dy: 0.018 },
+    { dx: 0.012, dy: 0.006 },
+    { dx: -0.012, dy: 0.008 },
+  ],
   tr: [
     { dx: 0, dy: 0 },
     { dx: -0.012, dy: 0 },
     { dx: -0.018, dy: 0.004 },
     { dx: -0.024, dy: 0.008 },
+    { dx: -0.008, dy: 0.014 },
+    { dx: -0.016, dy: 0.012 },
   ],
   bl: [{ dx: 0, dy: 0 }],
   br: [
@@ -2925,14 +2935,15 @@ function patchHasDarkCornerAt(
   ctx: CanvasRenderingContext2D,
   center: Point,
   patch: number,
-  nearStripEdge: boolean
+  nearStripEdge: boolean,
+  topCornerGlare = false
 ): boolean {
   const W = ctx.canvas.width;
   const H = ctx.canvas.height;
   const px = Math.max(0, Math.min(W - patch, Math.round(center.x - patch / 2)));
   const py = Math.max(0, Math.min(H - patch, Math.round(center.y - patch / 2)));
   const id = ctx.getImageData(px, py, patch, patch);
-  return isPrintedCornerFiducialPatch(id, patch, patch, nearStripEdge);
+  return isPrintedCornerFiducialPatch(id, patch, patch, nearStripEdge, topCornerGlare);
 }
 
 /** Marca la esquina faltante cuando hay 3/4 + franjas y el vértice del stripQuad tiene parche oscuro. */
@@ -3015,8 +3026,12 @@ export function detectAnswerSheetFiducialsAtQuad(
   const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
 
   for (let i = 0; i < 4; i++) {
+    const isTopCorner = i === 0 || i === 1;
+    const cornerPatch = isTopCorner ? Math.max(patch, Math.round(patch * 1.28)) : patch;
     for (const center of centerGroups[i]!) {
-      if (patchHasDarkCornerAt(ctx, center, patch, nearStripFlags[i]!)) {
+      if (
+        patchHasDarkCornerAt(ctx, center, cornerPatch, nearStripFlags[i]!, isTopCorner)
+      ) {
         detected[i] = true;
         break;
       }
@@ -3039,7 +3054,13 @@ export function detectAnswerSheetFiducialsAtQuad(
     const px = Math.max(0, Math.min(W - patch, Math.round(found.x - patch / 2)));
     const py = Math.max(0, Math.min(H - patch, Math.round(found.y - patch / 2)));
     const patchId = ctx.getImageData(px, py, patch, patch);
-    detected[i] = isPrintedCornerFiducialPatch(patchId, patch, patch, nearStripFlags[i]!);
+    detected[i] = isPrintedCornerFiducialPatch(
+      patchId,
+      patch,
+      patch,
+      nearStripFlags[i]!,
+      i === 0 || i === 1
+    );
   }
   return detected;
 }
@@ -7964,8 +7985,9 @@ export function scanCalifacilOmrSheetWithMeta(
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
 
   /** La vista previa móvil es el documento escaneado sin filtros. */
-  const reviewCanvas =
-    templateGridOnly || opts?.preserveInputCanvas
+  const reviewCanvas = opts?.preserveInputCanvas
+    ? canvas
+    : templateGridOnly
       ? (prepareMobileScannedDocumentCanvas(canvas) ?? canvas)
       : (bestReviewCanvas ?? canvas);
 

@@ -140,6 +140,7 @@ function StatusCardBody({
       >
         Cuadros negros: {fiducialCount}/4
         {stripAligned ? ' · Franjas OK' : ''}
+        {captureReady && fiducialCount >= 3 ? ' · Listo' : ''}
       </p>
       {showBar && pct > 4 ? (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/15">

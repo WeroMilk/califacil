@@ -70,17 +70,6 @@ export function warpCalifacilMobileCaptureFast(
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
 
-  const preprocessed = preprocessForSheetDetection(fullCanvas);
-  for (const target of [preprocessed, fullCanvas].filter(Boolean) as HTMLCanvasElement[]) {
-    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
-    if (!stripQuad) continue;
-    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
-    const finalized = finalizeWarpCandidate(stripWarp.warped, stripWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
-      return { ...finalized, source: 'strips' };
-    }
-  }
-
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;
   if (roiQuad && roiCapture) {
@@ -98,6 +87,17 @@ export function warpCalifacilMobileCaptureFast(
     const finalized = finalizeWarpCandidate(roiWarp.warped, roiWarp.alignment, maxErrorPx, true);
     if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
       return { ...finalized, source: 'roi' };
+    }
+  }
+
+  const preprocessed = preprocessForSheetDetection(fullCanvas);
+  for (const target of [preprocessed, fullCanvas].filter(Boolean) as HTMLCanvasElement[]) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
+    if (!stripQuad) continue;
+    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
+    const finalized = finalizeWarpCandidate(stripWarp.warped, stripWarp.alignment, maxErrorPx, true);
+    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
+      return { ...finalized, source: 'strips' };
     }
   }
 
@@ -158,13 +158,6 @@ export function warpCalifacilMobileCapture(
     ? [preprocessed, fullCanvas]
     : [fullCanvas];
 
-  for (const target of detectTargets) {
-    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
-    if (!stripQuad) continue;
-    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
-    consider(stripWarp.warped, stripWarp.alignment, 'strips', maxErrorPx);
-  }
-
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;
   if (roiQuad && roiCapture) {
@@ -180,6 +173,13 @@ export function warpCalifacilMobileCapture(
     );
     const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
     consider(roiWarp.warped, roiWarp.alignment, 'roi', maxErrorPx);
+  }
+
+  for (const target of detectTargets) {
+    const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
+    if (!stripQuad) continue;
+    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
+    consider(stripWarp.warped, stripWarp.alignment, 'strips', maxErrorPx);
   }
 
   for (const target of detectTargets) {

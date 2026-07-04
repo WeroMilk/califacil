@@ -528,8 +528,16 @@ export function MobileSheetScanReview({
       : '';
 
   const orangeFrame = orangeFrameNorm;
-  const geoW = alignPreview ? Math.max(1, alignPreview.geometry.imageWidth) : 1;
-  const geoH = alignPreview ? Math.max(1, alignPreview.geometry.imageHeight) : 1;
+  const geoW = displayGeometry
+    ? Math.max(1, displayGeometry.imageWidth)
+    : alignPreview
+      ? Math.max(1, alignPreview.geometry.imageWidth)
+      : 1;
+  const geoH = displayGeometry
+    ? Math.max(1, displayGeometry.imageHeight)
+    : alignPreview
+      ? Math.max(1, alignPreview.geometry.imageHeight)
+      : 1;
   const overlayPicks = livePicks ?? alignPreview?.picks ?? [];
   const overlayScore = liveScore ?? alignPreview?.score;
 
