@@ -34,7 +34,7 @@ export function phaseStrokeColor(phase: DocumentDetectionPhase): string {
     case 'capturing':
       return 'rgb(52, 211, 153)';
     case 'searching':
-      return 'rgb(255, 214, 10)';
+      return 'rgb(249, 115, 22)';
     default:
       return 'rgb(255, 69, 58)';
   }

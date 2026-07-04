@@ -2133,7 +2133,7 @@ export function captureCalifacilGuideFrame(
 }
 
 /** Resolución máxima del lado largo al analizar el ROI en vivo (velocidad móvil). */
-export const MOBILE_ROI_DETECT_MAX_SIDE = 800;
+export const MOBILE_ROI_DETECT_MAX_SIDE = 1024;
 /** Resolución del fotograma completo para detección estilo Escáner de documentos (iOS). */
 export const MOBILE_FULL_FRAME_DETECT_MAX_SIDE = 720;
 
@@ -2656,8 +2656,10 @@ export function detectLargestQuadInRoiCanvas(
 
 /** Mínimo de área de hoja dentro del ROI (0–1) para permitir captura automática. */
 export const MOBILE_MIN_ROI_FILL_RATIO = 0.15;
-/** Mínimo de esquinas negras fiduciales visibles (de 4) para considerar hoja alineada en vivo. */
+/** Mínimo de esquinas negras fiduciales visibles (de 4) en canvas enderezado post-warp. */
 export const MOBILE_MIN_FIDUCIAL_CORNERS = 4;
+/** Mínimo en vivo con franjas laterales alineadas (la 4.ª puede inferirse del stripQuad). */
+export const MOBILE_LIVE_MIN_FIDUCIAL_CORNERS = 3;
 
 /** Indica si la hoja cumple el mínimo para captura (4 esquinas negras detectadas). */
 export function isMobileSheetAlignedForCapture(opts: {
@@ -2712,6 +2714,7 @@ export function measureRoiQuadInteriorMeanLuminance(
  */
 export function isMobileExamSheetReadyForCapture(opts: {
   fiducialCount: number;
+  fiducialCorners?: [boolean, boolean, boolean, boolean];
   stripAligned?: boolean;
   quad?: [Point, Point, Point, Point] | null;
   roiW?: number;
@@ -2719,7 +2722,12 @@ export function isMobileExamSheetReadyForCapture(opts: {
   fillRatio?: number;
   roiCanvas?: HTMLCanvasElement | null;
 }): boolean {
-  if (opts.fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) return false;
+  const corners = opts.fiducialCorners;
+  const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
+  const minCorners = opts.stripAligned
+    ? MOBILE_LIVE_MIN_FIDUCIAL_CORNERS
+    : MOBILE_MIN_FIDUCIAL_CORNERS;
+  if (count < minCorners) return false;
   if (!opts.stripAligned) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
@@ -2789,7 +2797,8 @@ export function estimateCanvasShadowAsymmetry(canvas: HTMLCanvasElement): number
 function isPrintedCornerFiducialPatch(
   imageData: ImageData,
   patchW: number,
-  patchH: number
+  patchH: number,
+  nearStripEdge = false
 ): boolean {
   const { data } = imageData;
   const w = patchW;
@@ -2835,14 +2844,16 @@ function isPrintedCornerFiducialPatch(
   const innerMean = innerLumSum / innerCount;
   const outerMean = outerLumSum / outerCount;
 
-  if (innerDarkFrac < 0.65) return false;
-  if (innerMean > 65) return false;
+  const minDarkFrac = nearStripEdge ? 0.58 : 0.65;
+  if (innerDarkFrac < minDarkFrac) return false;
+  if (innerMean > (nearStripEdge ? 68 : 65)) return false;
 
   const contrast = outerMean - innerMean;
   if (contrast >= 28) return true;
   // Junto a franjas negras laterales el anillo exterior también es oscuro.
   if (innerDarkFrac >= 0.72 && innerMean <= 58) return true;
   if (innerDarkFrac >= 0.8 && innerMean <= 48) return true;
+  if (nearStripEdge && innerDarkFrac >= 0.68 && innerMean <= 62) return true;
 
   return false;
 }
@@ -2852,7 +2863,8 @@ function detectFiducialsAtCornerPatches(
   ctx: CanvasRenderingContext2D,
   corners: { x: number; y: number }[],
   patchW: number,
-  patchH: number
+  patchH: number,
+  nearStripEdge?: boolean | boolean[]
 ): [boolean, boolean, boolean, boolean] {
   const W = ctx.canvas.width;
   const H = ctx.canvas.height;
@@ -2862,7 +2874,10 @@ function detectFiducialsAtCornerPatches(
     const px = Math.max(0, Math.min(W - patchW, Math.round(c.x - patchW / 2)));
     const py = Math.max(0, Math.min(H - patchH, Math.round(c.y - patchH / 2)));
     const id = ctx.getImageData(px, py, patchW, patchH);
-    detected[i] = isPrintedCornerFiducialPatch(id, patchW, patchH);
+    const nearStrip = Array.isArray(nearStripEdge)
+      ? nearStripEdge[i] ?? false
+      : nearStripEdge ?? false;
+    detected[i] = isPrintedCornerFiducialPatch(id, patchW, patchH, nearStrip);
   }
   return detected;
 }
@@ -2874,38 +2889,157 @@ function mergeFiducialCornerStates(
   return [a[0] || b[0], a[1] || b[1], a[2] || b[2], a[3] || b[3]];
 }
 
+const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
+  'tl' | 'tr' | 'bl' | 'br',
+  Array<{ dx: number; dy: number }>
+> = {
+  tl: [{ dx: 0, dy: 0 }],
+  tr: [
+    { dx: 0, dy: 0 },
+    { dx: -0.012, dy: 0 },
+    { dx: -0.018, dy: 0.004 },
+    { dx: -0.024, dy: 0.008 },
+  ],
+  bl: [{ dx: 0, dy: 0 }],
+  br: [
+    { dx: 0, dy: 0 },
+    { dx: -0.012, dy: 0 },
+    { dx: -0.018, dy: -0.004 },
+    { dx: -0.024, dy: -0.008 },
+  ],
+};
+
+function fiducialCentersAtQuadWithOffsets(
+  quad: [Point, Point, Point, Point]
+): Array<{ x: number; y: number }[]> {
+  const cornerIds: Array<'tl' | 'tr' | 'bl' | 'br'> = ['tl', 'tr', 'bl', 'br'];
+  return cornerIds.map((id) => {
+    const norm = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
+    return FIDUCIAL_NORM_PROBE_OFFSETS[id].map((off) =>
+      bilinearPointInViewportQuad(quad, norm.x + off.dx, norm.y + off.dy)
+    );
+  });
+}
+
+function patchHasDarkCornerAt(
+  ctx: CanvasRenderingContext2D,
+  center: Point,
+  patch: number,
+  nearStripEdge: boolean
+): boolean {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const px = Math.max(0, Math.min(W - patch, Math.round(center.x - patch / 2)));
+  const py = Math.max(0, Math.min(H - patch, Math.round(center.y - patch / 2)));
+  const id = ctx.getImageData(px, py, patch, patch);
+  return isPrintedCornerFiducialPatch(id, patch, patch, nearStripEdge);
+}
+
+/** Marca la esquina faltante cuando hay 3/4 + franjas y el vértice del stripQuad tiene parche oscuro. */
+function inferMissingFiducialFromStripQuad(
+  canvas: HTMLCanvasElement,
+  corners: [boolean, boolean, boolean, boolean],
+  stripQuad: [Point, Point, Point, Point]
+): [boolean, boolean, boolean, boolean] {
+  const count = corners.filter(Boolean).length;
+  if (count >= 4 || count < 3) return corners;
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return corners;
+
+  const result: [boolean, boolean, boolean, boolean] = [...corners];
+  const W = canvas.width;
+  const H = canvas.height;
+  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.068));
+  const [tl, tr, br, bl] = stripQuad;
+  const vertices: [Point, Point, Point, Point] = [tl, tr, bl, br];
+  const inset = patch * 0.38;
+
+  for (let i = 0; i < 4; i++) {
+    if (result[i]) continue;
+    const v = vertices[i]!;
+    const cx = i === 1 || i === 3 ? v.x - inset : v.x + inset * 0.15;
+    const cy = i === 0 || i === 1 ? v.y + inset * 0.15 : v.y - inset;
+    if (patchHasDarkCornerAt(ctx, { x: cx, y: cy }, patch, i === 1 || i === 3)) {
+      result[i] = true;
+    }
+  }
+
+  if (result.filter(Boolean).length >= 4) return result;
+
+  const missingIdx = result.findIndex((v) => !v);
+  if (missingIdx < 0 || result.filter(Boolean).length !== 3) return result;
+
+  const [tlP, trP, blP, brP] = vertices;
+  const inferred: Point | null =
+    missingIdx === 0
+      ? { x: trP.x + blP.x - brP.x, y: trP.y + blP.y - brP.y }
+      : missingIdx === 1
+        ? { x: tlP.x + brP.x - blP.x, y: tlP.y + brP.y - blP.y }
+        : missingIdx === 2
+          ? { x: tlP.x + brP.x - trP.x, y: tlP.y + brP.y - trP.y }
+          : { x: trP.x + blP.x - tlP.x, y: trP.y + blP.y - tlP.y };
+
+  if (
+    inferred &&
+    inferred.x >= 0 &&
+    inferred.y >= 0 &&
+    inferred.x < W &&
+    inferred.y < H &&
+    patchHasDarkCornerAt(ctx, inferred, patch, missingIdx === 1 || missingIdx === 3)
+  ) {
+    result[missingIdx] = true;
+  }
+
+  return result;
+}
+
 /** Fiduciales en las esquinas del cuadrilátero de hoja detectado (no del ROI completo). */
 export function detectAnswerSheetFiducialsAtQuad(
   canvas: HTMLCanvasElement,
-  quad: [Point, Point, Point, Point]
+  quad: [Point, Point, Point, Point],
+  stripAligned = false
 ): [boolean, boolean, boolean, boolean] {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [false, false, false, false];
   const W = canvas.width;
   const H = canvas.height;
   const patch = Math.max(8, Math.round(Math.min(W, H) * 0.068));
-  const cornerIds: Array<'tl' | 'tr' | 'bl' | 'br'> = ['tl', 'tr', 'bl', 'br'];
-  const centers = cornerIds.map((id) => {
-    const norm = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
-    return bilinearPointInViewportQuad(quad, norm.x, norm.y);
-  });
-  const detected = detectFiducialsAtCornerPatches(ctx, centers, patch, patch);
+  const centerGroups = fiducialCentersAtQuadWithOffsets(quad);
+  const nearStripFlags: [boolean, boolean, boolean, boolean] = [
+    false,
+    stripAligned,
+    false,
+    stripAligned,
+  ];
+  const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+
+  for (let i = 0; i < 4; i++) {
+    for (const center of centerGroups[i]!) {
+      if (patchHasDarkCornerAt(ctx, center, patch, nearStripFlags[i]!)) {
+        detected[i] = true;
+        break;
+      }
+    }
+  }
 
   const [tl, tr, br, bl] = quad;
   const vertices: [Point, Point, Point, Point] = [tl, tr, bl, br];
   const id = ctx.getImageData(0, 0, W, H);
-  const region = Math.max(14, Math.round(patch * 1.55));
+  const region = Math.max(14, Math.round(patch * (stripAligned ? 1.85 : 1.55)));
   for (let i = 0; i < 4; i++) {
     if (detected[i]) continue;
     const v = vertices[i]!;
-    const rx = i === 0 || i === 2 ? v.x : v.x - region;
+    const inward = stripAligned && (i === 1 || i === 3) ? region * 0.45 : 0;
+    const rx = i === 0 || i === 2 ? v.x : v.x - region - inward;
     const ry = i === 0 || i === 1 ? v.y : v.y - region;
-    const found = findCornerMarkerPoint(id.data, W, H, rx, ry, region, region);
+    const rw = i === 0 || i === 2 ? region : region + inward;
+    const found = findCornerMarkerPoint(id.data, W, H, rx, ry, rw, region);
     if (!found) continue;
     const px = Math.max(0, Math.min(W - patch, Math.round(found.x - patch / 2)));
     const py = Math.max(0, Math.min(H - patch, Math.round(found.y - patch / 2)));
     const patchId = ctx.getImageData(px, py, patch, patch);
-    detected[i] = isPrintedCornerFiducialPatch(patchId, patch, patch);
+    detected[i] = isPrintedCornerFiducialPatch(patchId, patch, patch, nearStripFlags[i]!);
   }
   return detected;
 }
@@ -2915,16 +3049,17 @@ export function detectAnswerSheetFiducialsInRoi(
   canvas: HTMLCanvasElement,
   sheetQuad: [Point, Point, Point, Point] | null = null
 ): [boolean, boolean, boolean, boolean] {
+  const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   let merged: [boolean, boolean, boolean, boolean] = [false, false, false, false];
   if (sheetQuad) {
-    merged = detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad);
+    merged = detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, stripQuad !== null);
   }
-  const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   if (stripQuad) {
     merged = mergeFiducialCornerStates(
       merged,
-      detectAnswerSheetFiducialsAtQuad(canvas, stripQuad)
+      detectAnswerSheetFiducialsAtQuad(canvas, stripQuad, true)
     );
+    merged = inferMissingFiducialFromStripQuad(canvas, merged, stripQuad);
   }
   if (merged.some(Boolean)) return merged;
 

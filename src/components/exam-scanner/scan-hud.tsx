@@ -131,7 +131,7 @@ export function ScanHud({
             <Zap
               className={cn(
                 'h-5 w-5',
-                (flashOn || flashMode === 'on') && 'fill-amber-300 text-amber-300'
+                (flashOn || flashMode === 'on') && 'fill-orange-300 text-orange-300'
               )}
             />
             {flashMode === 'auto' ? (

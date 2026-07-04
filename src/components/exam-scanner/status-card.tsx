@@ -112,7 +112,7 @@ function StatusCardBody({
         phase === 'stable' || phase === 'capturing'
           ? 'border-orange-400/40 bg-white/92'
           : phase === 'searching'
-            ? 'border-amber-300/35 bg-black/55'
+            ? 'border-orange-400/35 bg-black/55'
             : 'border-red-400/35 bg-black/55'
       )}
     >
@@ -146,7 +146,7 @@ function StatusCardBody({
           <div
             className={cn(
               'h-full rounded-full transition-[width] duration-200 ease-out',
-              phase === 'stable' ? 'bg-orange-500' : 'bg-amber-400'
+              phase === 'stable' ? 'bg-orange-500' : 'bg-orange-400'
             )}
             style={{ width: `${pct}%` }}
           />

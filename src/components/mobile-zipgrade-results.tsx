@@ -26,6 +26,7 @@ type ScanCompleteModalProps = {
   open: boolean;
   examTitle?: string;
   previewUrl?: string | null;
+  sheet?: ZipGradeSheetData | null;
   score: { correct: number; total: number; pct: number };
   nameCropUrl?: string | null;
   studentName?: string;
@@ -40,6 +41,7 @@ export function MobileZipGradeScanCompleteModal({
   open,
   examTitle,
   previewUrl,
+  sheet,
   score,
   nameCropUrl,
   studentName,
@@ -49,6 +51,15 @@ export function MobileZipGradeScanCompleteModal({
   onAnotherStudent,
   onBackToCalificar,
 }: ScanCompleteModalProps) {
+  const orangeFrameRect = useMemo(
+    () => (sheet ? califacilOmrOrangeFrameRect(sheet.geometry, sheet.rowCount) : null),
+    [sheet]
+  );
+  const showOverlayPreview = Boolean(sheet?.geometry && (sheet.previewUrl || previewUrl));
+  const previewSrc = sheet?.previewUrl || previewUrl;
+  const overlayW = sheet ? Math.max(1, sheet.geometry.imageWidth) : 1;
+  const overlayH = sheet ? Math.max(1, sheet.geometry.imageHeight) : 1;
+
   if (!open || typeof document === 'undefined') return null;
 
   return createPortal(
@@ -59,11 +70,11 @@ export function MobileZipGradeScanCompleteModal({
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
-      {previewUrl ? (
+      {previewSrc && !showOverlayPreview ? (
         <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden bg-orange-50/90">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={previewUrl}
+            src={previewSrc}
             alt=""
             className="max-h-full max-w-full object-contain shadow-sm"
           />
@@ -85,9 +96,9 @@ export function MobileZipGradeScanCompleteModal({
         <span className="w-16" aria-hidden />
       </header>
 
-      <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-5 py-6">
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-4">
         <div
-          className="w-full max-w-sm animate-fade-in rounded-xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
+          className="my-auto w-full max-w-sm animate-fade-in rounded-xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
           role="dialog"
           aria-labelledby="zipgrade-scan-title"
         >
@@ -120,6 +131,48 @@ export function MobileZipGradeScanCompleteModal({
               {controlNumber ?? '—'}
             </span>
           </p>
+
+          {showOverlayPreview && sheet ? (
+            <div className="mt-4 overflow-hidden rounded-lg border border-orange-100 bg-orange-50/40 p-1">
+              <div
+                className="relative mx-auto w-full overflow-hidden rounded-md bg-white"
+                style={{
+                  aspectRatio: `${overlayW} / ${overlayH}`,
+                  maxHeight: 'min(38vh, 14rem)',
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={previewSrc!}
+                  alt="Hoja escaneada con clave"
+                  className="absolute inset-0 z-0 h-full w-full object-contain object-center"
+                />
+                {orangeFrameRect ? (
+                  <div
+                    className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
+                    style={{
+                      left: `${orangeFrameRect.x * 100}%`,
+                      top: `${orangeFrameRect.y * 100}%`,
+                      width: `${orangeFrameRect.w * 100}%`,
+                      height: `${orangeFrameRect.h * 100}%`,
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
+                <CalifacilOmrReviewOverlay
+                  geometry={sheet.geometry}
+                  picks={sheet.picks}
+                  expectedPicks={sheet.expectedPicks}
+                  rowCount={sheet.rowCount}
+                />
+              </div>
+              <p className="mt-2 px-1 text-center text-[11px] leading-snug text-gray-600">
+                <span className="font-medium text-orange-600">Naranja</span> = clave ·{' '}
+                <span className="font-medium text-green-700">Verde</span> = acierto ·{' '}
+                <span className="font-medium text-red-600">Rojo</span> = error
+              </p>
+            </div>
+          ) : null}
 
           <div className="mt-5 space-y-2 border-t border-gray-100 pt-4">
             <Button

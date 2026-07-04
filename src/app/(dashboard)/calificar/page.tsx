@@ -86,6 +86,7 @@ import {
   buildMobileZipGradePreviewPack,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
+  syncCalifacilOmrGeometryImageSize,
   isAnswerSheetOmrMostlyBlank,
   downscaleCanvasForOmrScan,
   isMobileWarpedAnswerSheetReady,
@@ -643,6 +644,7 @@ export default function CalificarPage() {
   const mobileStripAlignedRef = useRef(false);
   const mobileCaptureGateRef = useRef<{
     fiducialCount: number;
+    fiducialCorners: [boolean, boolean, boolean, boolean];
     stripAligned: boolean;
     quad: RoiQuad | null;
     roiW: number;
@@ -651,6 +653,7 @@ export default function CalificarPage() {
     roiCanvas: HTMLCanvasElement | null;
   }>({
     fiducialCount: 0,
+    fiducialCorners: [false, false, false, false],
     stripAligned: false,
     quad: null,
     roiW: 0,
@@ -1395,10 +1398,25 @@ export default function CalificarPage() {
           if (pack) {
             snapUrl = pack.previewDataUrl;
             nameCropUrl = pack.nameCropUrl;
-            geom = pack.geometry;
+            if (opts.precomputedGeometry) {
+              geom = syncCalifacilOmrGeometryImageSize(
+                opts.precomputedGeometry,
+                pack.geometry.imageWidth,
+                pack.geometry.imageHeight
+              );
+            } else {
+              geom = pack.geometry;
+            }
           } else {
             snapUrl = canvasPreviewDataUrl(previewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
             nameCropUrl = cropAnswerSheetNameSnippetDataUrl(previewCanvas);
+            if (geom) {
+              geom = syncCalifacilOmrGeometryImageSize(
+                geom,
+                previewCanvas.width,
+                previewCanvas.height
+              );
+            }
           }
         }
         if (geom) {
@@ -1807,10 +1825,25 @@ export default function CalificarPage() {
           if (pack) {
             snapUrl = pack.previewDataUrl;
             nameCropUrl = pack.nameCropUrl;
-            geom = pack.geometry;
+            if (meta.geometry) {
+              geom = syncCalifacilOmrGeometryImageSize(
+                meta.geometry,
+                pack.geometry.imageWidth,
+                pack.geometry.imageHeight
+              );
+            } else {
+              geom = pack.geometry;
+            }
           } else {
             snapUrl = canvasPreviewDataUrl(snapSource, 1100);
             nameCropUrl = cropAnswerSheetNameSnippetDataUrl(snapSource);
+            if (geom) {
+              geom = syncCalifacilOmrGeometryImageSize(
+                geom,
+                snapSource.width,
+                snapSource.height
+              );
+            }
           }
         }
         if (geom) {
@@ -2419,6 +2452,7 @@ export default function CalificarPage() {
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const examReadyForCapture = isMobileExamSheetReadyForCapture({
               fiducialCount,
+              fiducialCorners,
               stripAligned,
               quad: roiQuad,
               roiW,
@@ -2428,6 +2462,7 @@ export default function CalificarPage() {
             });
             mobileCaptureGateRef.current = {
               fiducialCount,
+              fiducialCorners,
               stripAligned,
               quad: roiQuad,
               roiW,
@@ -3444,6 +3479,7 @@ export default function CalificarPage() {
       if (
         !isMobileExamSheetReadyForCapture({
           fiducialCount: alignmentFiducialCount,
+          fiducialCorners: alignmentFiducials,
           stripAligned: alignmentStripAligned,
           quad: alignmentCheckQuad,
           roiW: alignmentCheckCanvas.width,
@@ -3973,6 +4009,7 @@ export default function CalificarPage() {
     if (
       !isMobileExamSheetReadyForCapture({
         fiducialCount: gate.fiducialCount,
+        fiducialCorners: gate.fiducialCorners,
         stripAligned: gate.stripAligned,
         quad: gate.quad,
         roiW: gate.roiW,
@@ -3981,7 +4018,7 @@ export default function CalificarPage() {
         roiCanvas: gate.roiCanvas,
       })
     ) {
-      toast.error('Encuadra el examen completo (4 esquinas negras y franjas laterales) antes de capturar.');
+      toast.error('Encuadra el examen completo (franjas laterales y esquinas negras visibles) antes de capturar.');
       return;
     }
 
@@ -4905,6 +4942,7 @@ export default function CalificarPage() {
             open={zipGradeModalOpen && !zipGradeReviewOpen}
             examTitle={exam.title}
             previewUrl={currentZipGradeSheet?.previewUrl}
+            sheet={currentZipGradeSheet}
             score={
               autoGradeStats ?? {
                 correct: currentZipGradeSheet?.correct ?? 0,
