@@ -1258,6 +1258,15 @@ function drawSourceToCanvas(
   return canvas;
 }
 
+/** Imagen de galería/archivo → canvas escalado (mismo criterio que captura de video). */
+export function captureImageFullFrame(
+  source: HTMLImageElement | HTMLCanvasElement,
+  opts?: { maxSide?: number }
+): HTMLCanvasElement | null {
+  const maxSide = opts?.maxSide ?? 2400;
+  return drawSourceToCanvas(source, maxSide);
+}
+
 function rotateCanvas(canvas: HTMLCanvasElement, angleDeg: 0 | 90 | 180 | 270): HTMLCanvasElement {
   if (angleDeg === 0) return canvas;
   const out = document.createElement('canvas');
@@ -6196,7 +6205,7 @@ function pickAnswerSheetRowAbsolute(params: {
  * Lee marcas solo dentro de las celdas de la plantilla (mismo marco que el overlay naranja).
  * Evita falsos positivos en las franjas negras laterales o fuera de la tabla.
  */
-function readAnswerSheetPicksFromTemplateGeometry(
+export function readAnswerSheetPicksFromTemplateGeometry(
   canvas: HTMLCanvasElement,
   geometry: CalifacilOmrScanGeometry,
   thresholds: ScanThresholds,

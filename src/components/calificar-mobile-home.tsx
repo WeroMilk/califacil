@@ -29,6 +29,7 @@ type Props = {
   onSelectExam: (id: string) => void;
   onSelectStudent: (id: string) => void;
   onScan: () => void;
+  onImportPhoto?: () => void;
   onShowKeyTable?: () => void;
 };
 
@@ -99,6 +100,7 @@ export function CalificarMobileHome({
   onSelectExam,
   onSelectStudent,
   onScan,
+  onImportPhoto,
 }: Props) {
   const [examPickerOpen, setExamPickerOpen] = useState(false);
   const [studentPickerOpen, setStudentPickerOpen] = useState(false);
@@ -198,7 +200,7 @@ export function CalificarMobileHome({
       </div>
 
       <div
-        className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] z-20 px-4"
+        className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] z-20 space-y-2 px-4"
         style={{ pointerEvents: 'none' }}
       >
         <button
@@ -218,6 +220,16 @@ export function CalificarMobileHome({
           )}
           Escanear hoja
         </button>
+        {onImportPhoto ? (
+          <button
+            type="button"
+            disabled={!readyToScan || scanBusy}
+            onClick={onImportPhoto}
+            className="pointer-events-auto flex w-full items-center justify-center gap-2 rounded-xl border border-gray-300 bg-white py-3 text-[15px] font-medium text-gray-800 shadow-sm active:bg-gray-50 disabled:opacity-45"
+          >
+            Importar foto de galería
+          </button>
+        ) : null}
       </div>
 
       {examPickerOpen ? (

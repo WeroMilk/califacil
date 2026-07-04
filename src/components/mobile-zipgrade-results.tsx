@@ -181,6 +181,8 @@ type ReviewScreenProps = {
   onNextSheet: () => void;
   onRetake: () => void;
   onSave: () => void;
+  onExport?: () => void;
+  onPickStudent?: () => void;
   questionsContent?: ReactNode;
 };
 
@@ -199,14 +201,19 @@ export function MobileZipGradeReviewScreen({
   onNextSheet,
   onRetake,
   onSave,
+  onExport,
+  onPickStudent,
   questionsContent,
 }: ReviewScreenProps) {
   const [tab, setTab] = useState<ReviewTab>('imagen');
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const scoreLine = useMemo(() => {
     if (!sheet) return '';
     return `${sheet.correct} / ${sheet.total} = ${sheet.pct}%`;
   }, [sheet]);
+
+  const wrongCount = sheet ? Math.max(0, sheet.total - sheet.correct) : 0;
 
   if (!open || !sheet || typeof document === 'undefined') return null;
 
@@ -238,14 +245,59 @@ export function MobileZipGradeReviewScreen({
           type="button"
           className="flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/10"
           aria-label="Menú"
+          onClick={() => setMenuOpen((o) => !o)}
         >
           <Menu className="h-5 w-5" />
         </button>
       </header>
 
+      {menuOpen ? (
+        <div className="relative z-[291] shrink-0 border-b border-gray-200 bg-white px-3 py-2 shadow-sm">
+          <div className="flex flex-wrap gap-2">
+            {onPickStudent ? (
+              <button
+                type="button"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onPickStudent();
+                }}
+              >
+                Cambiar alumno
+              </button>
+            ) : null}
+            {onExport ? (
+              <button
+                type="button"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onExport();
+                }}
+              >
+                Exportar CSV
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="shrink-0 bg-white px-4 pb-3 pt-4 shadow-sm">
-        <p className="text-center text-[2.1rem] font-bold leading-none tracking-tight text-gray-950">
+        <p className="text-center text-[clamp(1.75rem,8vw,2.1rem)] font-bold leading-none tracking-tight text-gray-950">
           {scoreLine}
+        </p>
+        <p className="mt-2 text-center text-[13px] text-gray-600">
+          <span className="font-semibold text-emerald-700">{sheet.correct} aciertos</span>
+          {' · '}
+          <span className="font-semibold text-red-600">{wrongCount} errores</span>
+          {sheetCount > 1 ? (
+            <>
+              {' · '}
+              <span className="text-gray-500">
+                Hoja {sheetIndex + 1}/{sheetCount}
+              </span>
+            </>
+          ) : null}
         </p>
         <div className="mx-auto mt-3 flex max-w-md flex-col items-center gap-2">
           {sheet.nameCropUrl ? (

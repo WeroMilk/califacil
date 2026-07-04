@@ -3,6 +3,7 @@ export type ScannerActions = {
   capture: () => void;
   flash: () => void;
   changeExam: () => void;
+  gallery: () => void;
   close: () => void;
 };
 
