@@ -82,7 +82,6 @@ import {
   scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
-  buildMobileAnswerSheetReviewFromWarp,
   buildMobileZipGradePreviewPack,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
@@ -182,8 +181,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
-import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
+import {
+  CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO,
+  CALIFACIL_MIN_AUTO_READ_RATIO,
+  buildCalifacilOmrReadingOverride,
+  runCalifacilOmrReadingPipeline,
+  type CalifacilOmrReadingResult,
+} from '@/lib/calificarOmrReading';
 import {
   playAutoCaptureClickSound,
   playScanCompleteChime,
@@ -240,7 +244,7 @@ async function cloneObjectUrl(url: string): Promise<string | null> {
 }
 
 /** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
-const MIN_AUTO_READ_RATIO = 0.9;
+const MIN_AUTO_READ_RATIO = CALIFACIL_MIN_AUTO_READ_RATIO;
 /** Fotogramas consecutivos con lectura estable antes de fijar borrador (consenso en vivo). */
 const STABLE_PARTIAL_TICKS = 3;
 /** Fotogramas consecutivos con hoja completa para disparar captura automática. */
@@ -250,7 +254,7 @@ const CONSENSUS_LOCK_TICKS = 4;
 /** Mínimo de filas leídas (ratio) para auto-captura móvil. */
 const MOBILE_AUTO_CAPTURE_MIN_RATIO = 0.9;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
-const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
@@ -399,30 +403,6 @@ async function pickPreferredDesktopCameraDeviceId(excludeDeviceId?: string): Pro
     filtered[0] ??
     videos[0];
   return preferred?.deviceId ?? null;
-}
-
-async function fetchVisionOmr(payload: {
-  examId: string;
-  imageBase64: string;
-  rows: { questionId: string; globalNumber: number; options: string[] }[];
-  omrColumnCount: number;
-  focusNumbers: number[];
-}) {
-  const headers = await dashboardAuthJsonHeaders();
-  const controller = new AbortController();
-  const timeoutMs = 9000;
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch('/api/calificar/vision-omr', {
-      method: 'POST',
-      headers: { ...headers },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
 }
 
 /**
@@ -1265,11 +1245,8 @@ export default function CalificarPage() {
         preWarped?: boolean;
         warpAlignment?: WarpAlignmentReport | null;
         skipSheetValidation?: boolean;
-        precomputedDraft?: Record<string, string>;
-        precomputedPicks?: (number | null)[];
-        precomputedGeometry?: CalifacilOmrScanGeometry | null;
-        precomputedControlNumber?: string | null;
         displaySource?: HTMLCanvasElement;
+        readingOverride?: CalifacilOmrReadingResult;
       }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       if (!examId || !exam || !supportsCalifacil) {
@@ -1346,129 +1323,47 @@ export default function CalificarPage() {
         return { success: false };
       }
 
-      if (opts?.precomputedDraft && preWarped && isMobileCamera && examCanvas) {
-        const mergedDraft = opts.precomputedDraft;
-        const picksInChunk =
-          opts.precomputedPicks ??
-          draftSelectionsToColumnPicks(chunk, mergedDraft).slice(0, chunk.length);
-        const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
-        let gradeStudentId = resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents) ?? '';
-        if (opts.precomputedControlNumber !== undefined) {
-          if (opts.precomputedControlNumber) {
-            setDetectedControlNumber(opts.precomputedControlNumber);
-            const matched = findStudentByControlNumber(
-              sortedStudents,
-              opts.precomputedControlNumber
-            );
-            if (matched) {
-              gradeStudentId = matched.id;
-              setSelectedStudentId(matched.id);
-            }
-          } else {
-            setDetectedControlNumber(null);
-          }
-        } else {
-          const controlRead = readAnswerSheetControlNumberFromCanvas(examCanvas, omrRowCount);
-          if (controlRead.controlNumber) {
-            setDetectedControlNumber(controlRead.controlNumber);
-            const matched = findStudentByControlNumber(sortedStudents, controlRead.controlNumber);
-            if (matched) {
-              gradeStudentId = matched.id;
-              setSelectedStudentId(matched.id);
-              if (!skipReviewUi) {
-                toast.success(`Alumno identificado (${controlRead.controlNumber}): ${matched.name}`);
-              }
-            } else if (!skipReviewUi) {
-              toast.error(
-                `El control ${controlRead.controlNumber} no coincide con ningún alumno del examen. Elige al alumno manualmente.`
-              );
-            }
-          } else {
-            setDetectedControlNumber(null);
-          }
-        }
-        let snapUrl: string | null = null;
-        let nameCropUrl: string | null = null;
-        let geom: CalifacilOmrScanGeometry | null = opts.precomputedGeometry ?? null;
-        const previewCanvas = opts?.displaySource ?? examCanvas;
-        if (previewCanvas instanceof HTMLCanvasElement) {
-          const pack = buildMobileZipGradePreviewPack(previewCanvas, omrCols, omrRowCount, {
-            warpAlignment: opts?.warpAlignment,
-          });
-          if (pack) {
-            snapUrl = pack.previewDataUrl;
-            nameCropUrl = pack.nameCropUrl;
-            if (opts.precomputedGeometry) {
-              geom = syncCalifacilOmrGeometryImageSize(
-                opts.precomputedGeometry,
-                pack.geometry.imageWidth,
-                pack.geometry.imageHeight
-              );
-            } else {
-              geom = pack.geometry;
-            }
-          } else {
-            snapUrl = canvasPreviewDataUrl(previewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
-            nameCropUrl = cropAnswerSheetNameSnippetDataUrl(previewCanvas);
-            if (geom) {
-              geom = syncCalifacilOmrGeometryImageSize(
-                geom,
-                previewCanvas.width,
-                previewCanvas.height
-              );
-            }
-          }
-        }
-        if (geom) {
-          if (!snapUrl && previewCanvas instanceof HTMLCanvasElement) {
-            snapUrl = canvasPreviewDataUrl(previewCanvas, 800);
-          }
-          let geomClone: CalifacilOmrScanGeometry;
-          try {
-            geomClone = structuredClone(geom);
-          } catch {
-            geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
-          }
-          setMobileSheetSnapshots((prev) => {
-            const next = [
-              ...prev,
-              {
-                sheetIndex: sheetIndexRef.current,
-                previewUrl: snapUrl ?? '',
-                geometry: geomClone,
-                questionIds: chunk.map((q) => q.id),
-                selectionsByQuestionId: { ...fullChunkDraft },
-                columnPicks: picksInChunk,
-                answerSheetLayout: true,
-                warpAlignment: opts?.warpAlignment,
-                nameCropUrl,
-              },
-            ];
-            setResultsSheetIdx(next.length - 1);
-            return next;
-          });
-        }
-        try {
-          await advanceOrPresentMobileGradeRef.current(fullChunkDraft, gradeStudentId || undefined);
-        } catch {
-          toast.error('No se pudo mostrar el resultado. Intenta de nuevo.');
-          return { success: false };
-        }
-        return { success: true, chunkDraft: fullChunkDraft };
+      const reading =
+        opts?.readingOverride ??
+        (await runCalifacilOmrReadingPipeline({
+          source,
+          oriented,
+          chunk,
+          examId,
+          omrCols,
+          omrRowCount,
+          chunkQuestionOffset,
+          preWarped,
+          isMobileCamera,
+          isMobile,
+          fallbackFile,
+          skipReviewUi,
+          sheetStrict,
+          preserveCapturedFrame,
+          includeWarpAlignment: OMR_DEBUG_ENABLED || Boolean(opts?.warpAlignment),
+          warpAlignment: opts?.warpAlignment,
+          liveLockedAnswers: liveLockedAnswersRef.current,
+        }));
+
+      if (isMobileCamera && skipReviewUi && !reading.meta.geometry) {
+        return { success: false };
       }
 
-      const useFixedTemplate = preWarped && isMobileCamera ? true : isMobileCamera ? sheetStrict : Boolean(fallbackFile);
-      let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
-      let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
-        skipGuideCrop: true,
-        geometryMode: preWarped && isMobileCamera ? 'fullSheet' : isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
-        preserveInputCanvas: preWarped && isMobileCamera ? true : isMobileCamera ? false : preserveCapturedFrame,
-        fixedTemplateAnchor: useFixedTemplate,
-        answerSheetTemplateOnly: preWarped && isMobileCamera,
-        rowCount: omrRowCount,
-        includeWarpAlignment: OMR_DEBUG_ENABLED || Boolean(opts?.warpAlignment),
-      });
-      const warpAlignment = opts?.warpAlignment ?? meta.warpAlignment ?? null;
+      const {
+        meta,
+        raw,
+        mapped,
+        mergedDraft,
+        mergedResolved,
+        picksInChunk,
+        activeScanSource,
+        warpAlignment,
+        mostlyBlank,
+        minResolved,
+        ambiguousIdx,
+        insufficientForReview,
+        updatedLiveLocks,
+      } = reading;
 
       if (
         isMobileCamera &&
@@ -1481,46 +1376,9 @@ export default function CalificarPage() {
         );
       }
 
-      let raw = [...meta.picks];
-      let mapped = mapRawToDraft(raw, chunk);
-      const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
-      const mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
-      if (mostlyBlank) {
-        raw = raw.map(() => null);
-        mapped = mapRawToDraft(raw, chunk);
-        if (!skipReviewUi) {
-          toast.message('Hoja sin respuestas marcadas — calificación 0%.');
-        }
+      if (mostlyBlank && (!skipReviewUi || isMobileCamera)) {
+        toast.message('Hoja sin respuestas marcadas — calificación 0%.');
       }
-
-      if (isMobile && mapped.resolvedCount < minResolved && !(preWarped && isMobileCamera)) {
-        const recoverySource =
-          autoOrientCalifacilSheet(source, omrCols, {
-            useGuideCrop: false,
-            allowTiltSweep: true,
-          }) ?? (oriented as HTMLCanvasElement | HTMLImageElement);
-
-        const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoverySource, omrCols, {
-          skipGuideCrop: true,
-          geometryMode: isMobileCamera ? 'auto' : fallbackFile ? 'fullSheet' : isMobile ? 'fullSheet' : 'auto',
-          preserveInputCanvas: false,
-          fixedTemplateAnchor: useFixedTemplate,
-          rowCount: omrRowCount,
-        });
-        const recoveryRaw = [...recoveryMeta.picks];
-        const recoveryMapped = mapRawToDraft(recoveryRaw, chunk);
-
-        if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
-          meta = recoveryMeta;
-          raw = recoveryRaw;
-          mapped = recoveryMapped;
-          activeScanSource = recoverySource;
-        }
-      }
-
-      const ambiguousIdx = meta.rows
-        .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
-        .filter((i) => i >= 0);
 
       if (
         isMobileCamera &&
@@ -1531,219 +1389,7 @@ export default function CalificarPage() {
         );
       }
 
-      const si = sheetIndexRef.current;
-      const picksInChunk = raw.slice(0, chunk.length);
-      const allSameCol =
-        chunk.length > 1 &&
-        picksInChunk.every((p, i) => i === 0 || p === picksInChunk[0]) &&
-        picksInChunk[0] !== null &&
-        picksInChunk.every((p) => p !== null);
-
-      if (
-        !mostlyBlank &&
-        CALIFACIL_VISION_POLICY.onAmbiguousRows &&
-        ambiguousIdx.length > 0 &&
-        examId &&
-        !fallbackFile
-      ) {
-        const rowsPayload = ambiguousIdx.map((i) => ({
-          questionId: chunk[i].id,
-          globalNumber: chunkQuestionOffset + i + 1,
-          options: chunk[i].options ?? [],
-        }));
-        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
-        try {
-          const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetchVisionOmr({
-            examId,
-            imageBase64,
-            rows: rowsPayload,
-            omrColumnCount: omrCols,
-            focusNumbers,
-          });
-          const payload = (await res.json().catch(() => ({}))) as {
-            selections?: Record<string, string>;
-            code?: string;
-            error?: string;
-          };
-          if (res.ok && payload.selections) {
-            for (const i of ambiguousIdx) {
-              const q = chunk[i];
-              const text = (payload.selections![q.id] ?? '').trim();
-              const opts = q.options ?? [];
-              if (text && opts.includes(text)) {
-                raw[i] = opts.indexOf(text);
-              }
-            }
-            if (ambiguousIdx.length > 0 && !skipReviewUi) {
-              toast.message('Filas dudosas revisadas con visión asistida.');
-            }
-          } else if (res.status === 503 && payload.code === 'NO_KEY') {
-            // Sin API key: se mantienen solo lecturas locales.
-          }
-        } catch {
-          // Fallo de red: mantener lectura local
-        }
-      }
-
-      if (
-        !mostlyBlank &&
-        CALIFACIL_VISION_POLICY.onManySameColumnAlign &&
-        examId &&
-        chunk.length >= 8 &&
-        meta.maxSameColumnCount >= 8 &&
-        !allSameCol &&
-        !fallbackFile
-      ) {
-        const rowsPayload = chunk.map((q, i) => ({
-          questionId: q.id,
-          globalNumber: chunkQuestionOffset + i + 1,
-          options: q.options ?? [],
-        }));
-        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
-        try {
-          const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetchVisionOmr({
-            examId,
-            imageBase64,
-            rows: rowsPayload,
-            omrColumnCount: omrCols,
-            focusNumbers,
-          });
-          const payload = (await res.json().catch(() => ({}))) as {
-            selections?: Record<string, string>;
-            code?: string;
-            error?: string;
-          };
-          if (res.ok && payload.selections) {
-            for (let i = 0; i < chunk.length; i++) {
-              const q = chunk[i];
-              const text = (payload.selections![q.id] ?? '').trim();
-              const opts = q.options ?? [];
-              if (text && opts.includes(text)) {
-                raw[i] = opts.indexOf(text);
-              }
-            }
-            if (!skipReviewUi) {
-              toast.message(
-                'Lectura revisada con visión (muchas filas en la misma columna; posible desalineación).'
-              );
-            }
-          }
-        } catch {
-          /* mantener lectura local */
-        }
-      }
-
-      if (
-        !mostlyBlank &&
-        CALIFACIL_VISION_POLICY.onAllSameColumn &&
-        allSameCol &&
-        examId &&
-        !ambiguousIdx.length &&
-        !fallbackFile
-      ) {
-        const rowsPayload = chunk.map((q, i) => ({
-          questionId: q.id,
-          globalNumber: chunkQuestionOffset + i + 1,
-          options: q.options ?? [],
-        }));
-        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
-        try {
-          const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetchVisionOmr({
-            examId,
-            imageBase64,
-            rows: rowsPayload,
-            omrColumnCount: omrCols,
-            focusNumbers,
-          });
-          const payload = (await res.json().catch(() => ({}))) as {
-            selections?: Record<string, string>;
-            code?: string;
-            error?: string;
-          };
-          if (res.ok && payload.selections) {
-            for (let i = 0; i < chunk.length; i++) {
-              const q = chunk[i];
-              const text = (payload.selections![q.id] ?? '').trim();
-              const opts = q.options ?? [];
-              if (text && opts.includes(text)) {
-                raw[i] = opts.indexOf(text);
-              }
-            }
-            if (!skipReviewUi) {
-              toast.message('Lectura revisada con visión (todas las filas coincidían en la misma columna).');
-            }
-          }
-        } catch {
-          /* mantener lectura local */
-        }
-      }
-
-      if (
-        !mostlyBlank &&
-        CALIFACIL_VISION_POLICY.onFinalizeEveryRow &&
-        examId &&
-        chunk.length > 0 &&
-        !fallbackFile
-      ) {
-        const rowsPayload = chunk.map((q, i) => ({
-          questionId: q.id,
-          globalNumber: chunkQuestionOffset + i + 1,
-          options: q.options ?? [],
-        }));
-        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
-        try {
-          const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetchVisionOmr({
-            examId,
-            imageBase64,
-            rows: rowsPayload,
-            omrColumnCount: omrCols,
-            focusNumbers,
-          });
-          const payload = (await res.json().catch(() => ({}))) as {
-            selections?: Record<string, string>;
-            code?: string;
-            error?: string;
-          };
-          if (res.ok && payload.selections) {
-            for (let i = 0; i < chunk.length; i++) {
-              const q = chunk[i];
-              const text = (payload.selections![q.id] ?? '').trim();
-              const opts = q.options ?? [];
-              if (text && opts.includes(text)) {
-                raw[i] = opts.indexOf(text);
-              }
-            }
-            if (!skipReviewUi) {
-              toast.message('Visión aplicada a toda la hoja (modo alta precisión).');
-            }
-          }
-        } catch {
-          /* mantener OMR local */
-        }
-      }
-
-      const locks = liveLockedAnswersRef.current;
-      const mergedDraft: Record<string, string> = {};
-      let mergedResolved = 0;
-      for (const q of chunk) {
-        const locked = locks[q.id]?.trim();
-        if (locked) {
-          mergedDraft[q.id] = locked;
-          mergedResolved++;
-        } else {
-          const v = mapped.draft[q.id]?.trim() ?? '';
-          mergedDraft[q.id] = v;
-          if (v) {
-            locks[q.id] = v;
-            mergedResolved++;
-          }
-        }
-      }
-      if (mergedResolved < minResolved && !isMobileCamera) {
+      if (insufficientForReview) {
         setDraftSelections({});
         setLiveDraftSelections(mergedDraft);
         setLiveResolvedCount(mergedResolved);
@@ -1773,11 +1419,7 @@ export default function CalificarPage() {
         );
       }
 
-      liveLockedAnswersRef.current = {};
-      for (const q of chunk) {
-        const v = mapped.draft[q.id]?.trim() ?? '';
-        if (v) liveLockedAnswersRef.current[q.id] = v;
-      }
+      liveLockedAnswersRef.current = updatedLiveLocks;
       setDraftSelections(mapped.draft);
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
@@ -3630,90 +3272,6 @@ export default function CalificarPage() {
         void previewMobileCaptureAlignmentRef.current(warped!, alignment);
       };
 
-      let omrMeta: OmrScanMetaResult | null = null;
-      let meta: {
-        picks: (number | null)[];
-        geometry: CalifacilOmrScanGeometry | null;
-        controlNumber: string | null;
-        controlNumberDigits: (number | null)[];
-      };
-      let displaySource: HTMLCanvasElement = scanCanvas;
-
-      if (sheetKind === 'zipgrade') {
-        const zgScan = scanZipGradeAnswerSheet(scanCanvas, omrCols, chunkRows);
-        meta = {
-          picks: zgScan.picks,
-          geometry: zgScan.geometry,
-          controlNumber: null,
-          controlNumberDigits: [],
-        };
-        if (chunkRows > 0 && !opts?.fromGallery) {
-          toast.message('Hoja ZipGrade detectada. Leyendo burbujas con plantilla de 3 columnas.');
-        }
-      } else {
-        omrMeta = scanWarpedMobileCaptureSheet(scanCanvas, omrCols, chunkRows);
-        const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, chunkRows, {
-          scanCanvas,
-          warpAlignment: alignment,
-        });
-        if (reviewAssets?.displayCanvas) displaySource = reviewAssets.displayCanvas;
-        meta = {
-          picks: omrMeta.picks,
-          geometry: omrMeta.geometry,
-          controlNumber: omrMeta.controlNumber,
-          controlNumberDigits: omrMeta.controlNumberDigits,
-        };
-      }
-
-      if (meta.geometry) {
-        setMobileScanPreviewGeometry(meta.geometry);
-        setMobileScanPreviewPicks([...meta.picks]);
-        setMobileScanPreviewOrangeFrame(
-          califacilOmrOrangeFrameRect(meta.geometry, chunkRows) ?? null
-        );
-      }
-      displaySource = displayCanvas;
-
-      const controlRead = {
-        controlNumber: meta.controlNumber,
-        digits: meta.controlNumberDigits,
-      };
-      if (sheetKind === 'califacil') {
-        applyControlNumberFromRead(controlRead, { silent: true });
-      }
-
-      const minResolved = mobileCaptureMinResolvedRows(chunkRows);
-      const resolvedCount = countResolvedOmrPicks(meta.picks);
-      const mostlyBlank =
-        omrMeta !== null && isAnswerSheetOmrMostlyBlank(omrMeta, chunkRows);
-      if (!meta.geometry) {
-        if (sheetKind === 'califacil') {
-          openManualCornerReview();
-          return;
-        }
-        toast.error('No se detectó la tabla de respuestas.');
-        setLiveStatus('Vuelve a escanear con la hoja bien iluminada y centrada.');
-        clearPreview();
-        return;
-      }
-      if (!mostlyBlank && resolvedCount < minResolved) {
-        if (sheetKind === 'califacil') {
-          openManualCornerReview();
-          return;
-        }
-        toast.error(
-          resolvedCount > 0
-            ? `Lectura insuficiente (${resolvedCount}/${chunkRows}). Mejora luz y encuadre.`
-            : 'No se leyeron burbujas en la hoja ZipGrade.'
-        );
-        setLiveStatus('Vuelve a escanear con la hoja bien iluminada y centrada.');
-        clearPreview();
-        return;
-      }
-      if (mostlyBlank && !opts?.fromGallery) {
-        toast.message('Hoja sin respuestas marcadas — calificación 0%.');
-      }
-
       if (
         sheetKind === 'califacil' &&
         alignment &&
@@ -3724,17 +3282,42 @@ export default function CalificarPage() {
         return;
       }
 
-      const mapped = mapRawToDraft([...meta.picks], chunk);
+      let readingOverride: CalifacilOmrReadingResult | undefined;
+      if (sheetKind === 'zipgrade') {
+        const zgScan = scanZipGradeAnswerSheet(scanCanvas, omrCols, chunkRows);
+        if (chunkRows > 0 && !opts?.fromGallery) {
+          toast.message('Hoja ZipGrade detectada. Leyendo burbujas con plantilla de 3 columnas.');
+        }
+        const zgRows = Array.from({ length: chunkRows }, () => ({
+          pick: null as number | null,
+          ambiguous: false,
+          inkFractions: [] as number[],
+        }));
+        readingOverride = buildCalifacilOmrReadingOverride(
+          {
+            picks: zgScan.picks,
+            rows: zgRows,
+            needsVisionAssist: false,
+            maxSameColumnCount: 0,
+            geometry: zgScan.geometry,
+            reviewSourceCanvas: scanCanvas,
+            controlNumberDigits: [],
+            controlNumber: null,
+          },
+          chunk,
+          scanCanvas,
+          liveLockedAnswersRef.current,
+          alignment
+        );
+      }
+
       const result = await finalizeCapturedSheet(scanCanvas, undefined, {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: sheetKind === 'zipgrade',
-        precomputedDraft: mapped.draft,
-        precomputedPicks: meta.picks,
-        precomputedGeometry: meta.geometry,
-        precomputedControlNumber: controlRead.controlNumber,
-        displaySource,
+        displaySource: displayCanvas,
+        readingOverride,
       });
       if (result.success) {
         setMobileScanPreviewUrl(null);
@@ -3745,14 +3328,17 @@ export default function CalificarPage() {
         return;
       }
 
+      if (sheetKind === 'califacil') {
+        openManualCornerReview();
+        return;
+      }
+
       toast.error('No se pudo calificar esta captura. Intenta escanear de nuevo.');
       setLiveStatus('Intenta de nuevo — hoja completa y buena luz.');
       clearPreview();
     },
     [
-      applyControlNumberFromRead,
       finalizeCapturedSheet,
-      mapRawToDraft,
       omrCols,
       setTorchEnabled,
       sheets,
@@ -3929,10 +3515,7 @@ export default function CalificarPage() {
         warpAlignment: mobileReviewAlign.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        precomputedDraft: mobileReviewAlign.draft,
-        precomputedPicks: mobileReviewAlign.picks,
-        precomputedGeometry: mobileReviewAlign.geometry,
-        precomputedControlNumber: detectedControlNumber,
+        displaySource: mobileReviewAlign.warped,
       });
       if (result.success) {
         playScanCompleteChime();
@@ -3947,7 +3530,7 @@ export default function CalificarPage() {
     } finally {
       setReviewScanning(false);
     }
-  }, [detectedControlNumber, finalizeCapturedSheet, mobileReviewAlign]);
+  }, [finalizeCapturedSheet, mobileReviewAlign]);
 
   finalizeMobileReviewGradeRef.current = finalizeMobileReviewGrade;
 
