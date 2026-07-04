@@ -86,6 +86,7 @@ import {
   buildMobileZipGradePreviewPack,
   canvasPreviewDataUrl,
   cropAnswerSheetNameSnippetDataUrl,
+  isAnswerSheetOmrMostlyBlank,
   downscaleCanvasForOmrScan,
   isMobileWarpedAnswerSheetReady,
   smoothMobileRoiQuad,
@@ -93,6 +94,7 @@ import {
   type WarpAlignmentReport,
   type CalifacilOmrScanGeometry,
   type OmrNormRect,
+  type OmrScanMetaResult,
   type CalifacilSheetQualityProbe,
 } from '@/lib/omrScan';
 import { findStudentByControlNumber } from '@/lib/controlNumberOmr';
@@ -102,6 +104,17 @@ import {
   normalizeCalificarStudentSelection,
   resolveCalificarStudentId,
 } from '@/lib/calificarStudentMode';
+import {
+  buildVirtualKeyMaps,
+  draftSelectionsToColumnPicks,
+  expectedPicksForChunk,
+  gradeMcDraftAgainstVirtualKey,
+  gradeMcQuestionForPersist,
+  gradeOmrChunkPicksAgainstVirtualKey,
+  isMcPickCorrect,
+  mapOmrPicksToMcDraftDetailed,
+  resolveStudentPickIndex,
+} from '@/lib/calificarGrading';
 import { warpCalifacilMobileCapture, warpCalifacilMobileCaptureFast } from '@/lib/omr/pipeline';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -238,9 +251,13 @@ const MOBILE_AUTO_CAPTURE_MIN_RATIO = 0.9;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
-const MOBILE_SCAN_MAX_WIDTH = 1080;
+const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 2400;
+const MOBILE_CAPTURE_MAX_SIDE = 3200;
+/** Resolución OMR post-captura (lectura de burbujas). */
+const MOBILE_OMR_SCAN_MAX_SIDE = 1600;
+/** Calidad JPEG de vista previa y resultados móvil. */
+const MOBILE_PREVIEW_JPEG_QUALITY = 0.94;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
 const MOBILE_MIN_WARPED_SHARPNESS = 7;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
@@ -270,8 +287,6 @@ const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 /** Valores centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
 const SELECT_NO_EXAM = '__califacil_no_exam__';
 const SELECT_NO_OPTION = '__califacil_no_option__';
-
-type McGradeStats = { pct: number; correct: number; wrong: number; total: number };
 
 type RoiQuad = [
   { x: number; y: number },
@@ -355,40 +370,6 @@ function frameQuadOnFullCanvas(
   );
 }
 
-/** Califica un borrador OMR: casilla vacía o sin lectura = respuesta incorrecta. */
-function gradeMcDraftAgainstKey(
-  draft: Record<string, string>,
-  questions: Question[],
-  virtualKey: Record<string, string>
-): McGradeStats {
-  const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
-  let correctCount = 0;
-  let earnedPoints = 0;
-  let maxMcPoints = 0;
-  let gradedTotal = 0;
-
-  for (const q of mcQuestions) {
-    const expected = (virtualKey[q.id] ?? '').trim();
-    if (!expected) continue;
-    gradedTotal++;
-    const pts = questionPoints(q);
-    maxMcPoints += pts;
-    const answerText = (draft[q.id] ?? '').trim();
-    const gotIdx = resolveOptionIndexFromValue(q.options, answerText);
-    const wantIdx = resolveOptionIndexFromValue(q.options, expected);
-    const isCorrect = gotIdx !== null && wantIdx !== null && gotIdx === wantIdx;
-    if (isCorrect) {
-      correctCount++;
-      earnedPoints += pts;
-    }
-  }
-
-  const total = gradedTotal;
-  const wrong = Math.max(0, total - correctCount);
-  const pct = maxMcPoints > 0 ? calculatePercentage(earnedPoints, maxMcPoints) : 0;
-  return { pct, correct: correctCount, wrong, total };
-}
-
 function buildMcDraftFromChunk(
   chunk: Question[],
   source: Record<string, string>
@@ -468,22 +449,6 @@ function countResolvedOmrPicks(picks: (number | null)[]): number {
 function omrPicksMeetInstantThreshold(picks: (number | null)[], minRatio = 0.7): boolean {
   if (picks.length === 0) return false;
   return countResolvedOmrPicks(picks) >= picks.length * minRatio;
-}
-
-/** Convierte borrador de texto a índice de columna OMR por fila (0 = A). */
-function draftSelectionsToColumnPicks(
-  chunk: Question[],
-  draft: Record<string, string>
-): (number | null)[] {
-  const out: (number | null)[] = Array(chunk.length).fill(null);
-  for (let i = 0; i < chunk.length; i++) {
-    const q = chunk[i];
-    const text = draft[q.id]?.trim() ?? '';
-    const opts = q.options ?? [];
-    const idx = resolveOptionIndexFromValue(opts, text);
-    out[i] = idx !== null ? idx : null;
-  }
-  return out;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -838,20 +803,9 @@ export default function CalificarPage() {
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
-  const examVirtualKeyByQuestionId = useMemo<Record<string, string>>(() => {
-    const out: Record<string, string> = {};
-    for (const row of virtualKey.rows) {
-      out[row.questionId] = row.correctOption;
-    }
-    return out;
-  }, [virtualKey.rows]);
-  const virtualKeyCorrectIndexByQuestionId = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const row of virtualKey.rows) {
-      out[row.questionId] = row.correctIndex;
-    }
-    return out;
-  }, [virtualKey.rows]);
+  const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
+  const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
+  const virtualKeyCorrectIndexByQuestionId = virtualKeyMaps.indexByQuestionId;
   const sheets = useMemo(
     () =>
       questions.length > 0
@@ -868,8 +822,8 @@ export default function CalificarPage() {
     return offset;
   }, [sheets, sheetIndex]);
   const expectedChunkPicks = useMemo(
-    () => draftSelectionsToColumnPicks(currentChunk, examVirtualKeyByQuestionId),
-    [currentChunk, examVirtualKeyByQuestionId]
+    () => expectedPicksForChunk(currentChunk, virtualKeyCorrectIndexByQuestionId),
+    [currentChunk, virtualKeyCorrectIndexByQuestionId]
   );
   const expectedChunkPicksRef = useRef(expectedChunkPicks);
   useEffect(() => {
@@ -877,10 +831,10 @@ export default function CalificarPage() {
   }, [expectedChunkPicks]);
   const mobileAlignPreviewProp = useMemo(() => {
     if (!mobileReviewAlign) return null;
-    const stats = gradeMcDraftAgainstKey(
+    const stats = gradeMcDraftAgainstVirtualKey(
       mobileReviewAlign.draft,
       currentChunk,
-      examVirtualKeyByQuestionId
+      virtualKeyMaps
     );
     return {
       geometry: mobileReviewAlign.geometry,
@@ -891,7 +845,7 @@ export default function CalificarPage() {
       orangeFrameNorm: mobileReviewAlign.orangeFrameNorm,
       score: { correct: stats.correct, total: stats.total, pct: stats.pct },
     };
-  }, [mobileReviewAlign, expectedChunkPicks, currentChunk, examVirtualKeyByQuestionId]);
+  }, [mobileReviewAlign, expectedChunkPicks, currentChunk, virtualKeyMaps]);
   const reviewOrangeFrameRect = useMemo(
     () =>
       reviewOmrGeometry
@@ -921,8 +875,8 @@ export default function CalificarPage() {
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
     const draft = buildMcDraftFromChunk(currentChunk, draftSelections);
-    return gradeMcDraftAgainstKey(draft, currentChunk, examVirtualKeyByQuestionId);
-  }, [currentChunk, draftSelections, examVirtualKeyByQuestionId]);
+    return gradeMcDraftAgainstVirtualKey(draft, currentChunk, virtualKeyMaps);
+  }, [currentChunk, draftSelections, virtualKeyMaps]);
 
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
@@ -965,7 +919,7 @@ export default function CalificarPage() {
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
           : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
-      const scanCanvas = downscaleCanvasForOmrScan(warped, 960);
+      const scanCanvas = downscaleCanvasForOmrScan(warped, MOBILE_OMR_SCAN_MAX_SIDE);
       return { meta, orangeFrameNorm, scanCanvas };
     },
     [omrCols, omrRowCount]
@@ -986,22 +940,14 @@ export default function CalificarPage() {
   const zipGradeSheets = useMemo((): ZipGradeSheetData[] => {
     return mobileSheetSnapshots.map((snap) => {
       const chunk = sheets[snap.sheetIndex] ?? [];
-      const expectedPicks = draftSelectionsToColumnPicks(chunk, examVirtualKeyByQuestionId);
+      const expectedPicks = expectedPicksForChunk(chunk, virtualKeyCorrectIndexByQuestionId);
       const picks =
         snap.columnPicks.length > 0
           ? snap.columnPicks
           : draftSelectionsToColumnPicks(chunk, snap.selectionsByQuestionId);
-      let correct = 0;
-      for (const q of chunk) {
-        const draftText = mobileResultsDraft[q.id]?.trim() || snap.selectionsByQuestionId[q.id]?.trim() || '';
-        const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
-        if (!expectedText) continue;
-        const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
-        const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
-        if (pi !== null && ei !== null && pi === ei) correct++;
-      }
+      const chunkStats = gradeOmrChunkPicksAgainstVirtualKey(chunk, picks, virtualKeyMaps);
       const total = chunk.length;
-      const pct = total > 0 ? calculatePercentage(correct, total) : 0;
+      const pct = total > 0 ? calculatePercentage(chunkStats.correct, total) : 0;
       return {
         previewUrl: snap.previewUrl,
         nameCropUrl: snap.nameCropUrl,
@@ -1009,12 +955,12 @@ export default function CalificarPage() {
         picks,
         expectedPicks,
         rowCount: chunk.length,
-        correct,
+        correct: chunkStats.correct,
         total,
         pct,
       };
     });
-  }, [mobileSheetSnapshots, sheets, examVirtualKeyByQuestionId, mobileResultsDraft]);
+  }, [mobileSheetSnapshots, sheets, virtualKeyMaps, virtualKeyCorrectIndexByQuestionId, mobileResultsDraft]);
 
   const currentZipGradeSheet = zipGradeSheets[resultsSheetIdx] ?? null;
 
@@ -1276,26 +1222,14 @@ export default function CalificarPage() {
     clearAutoSnapshot();
   }, [clearAutoSnapshot, setTorchEnabled]);
 
-  const mapRawToDraft = useCallback(
-    (raw: (number | null)[], chunk: Question[]) => {
-      const nextDraft: Record<string, string> = {};
-      let unresolvedCount = 0;
-      for (let i = 0; i < chunk.length; i++) {
-        const q = chunk[i];
-        const opts = q.options ?? [];
-        const col = raw[i];
-        const value = col !== null && col < opts.length ? opts[col] : '';
-        nextDraft[q.id] = value;
-        if (!value) unresolvedCount++;
-      }
-      return {
-        draft: nextDraft,
-        unresolvedCount,
-        resolvedCount: chunk.length - unresolvedCount,
-      };
-    },
-    []
-  );
+  const mapRawToDraft = useCallback((raw: (number | null)[], chunk: Question[]) => {
+    const mapped = mapOmrPicksToMcDraftDetailed(chunk, raw);
+    return {
+      draft: mapped.draft,
+      unresolvedCount: mapped.unresolvedCount,
+      resolvedCount: mapped.resolvedCount,
+    };
+  }, []);
 
   const setPreviewFromSource = useCallback(
     async (source: HTMLImageElement | HTMLCanvasElement, fallbackFile?: File) => {
@@ -1463,7 +1397,7 @@ export default function CalificarPage() {
             nameCropUrl = pack.nameCropUrl;
             geom = pack.geometry;
           } else {
-            snapUrl = canvasPreviewDataUrl(previewCanvas, 1400, 0.92);
+            snapUrl = canvasPreviewDataUrl(previewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
             nameCropUrl = cropAnswerSheetNameSnippetDataUrl(previewCanvas);
           }
         }
@@ -1532,6 +1466,14 @@ export default function CalificarPage() {
       let raw = [...meta.picks];
       let mapped = mapRawToDraft(raw, chunk);
       const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
+      const mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
+      if (mostlyBlank) {
+        raw = raw.map(() => null);
+        mapped = mapRawToDraft(raw, chunk);
+        if (!skipReviewUi) {
+          toast.message('Hoja sin respuestas marcadas — calificación 0%.');
+        }
+      }
 
       if (isMobile && mapped.resolvedCount < minResolved && !(preWarped && isMobileCamera)) {
         const recoverySource =
@@ -1580,6 +1522,7 @@ export default function CalificarPage() {
         picksInChunk.every((p) => p !== null);
 
       if (
+        !mostlyBlank &&
         CALIFACIL_VISION_POLICY.onAmbiguousRows &&
         ambiguousIdx.length > 0 &&
         examId &&
@@ -1626,6 +1569,7 @@ export default function CalificarPage() {
       }
 
       if (
+        !mostlyBlank &&
         CALIFACIL_VISION_POLICY.onManySameColumnAlign &&
         examId &&
         chunk.length >= 8 &&
@@ -1674,6 +1618,7 @@ export default function CalificarPage() {
       }
 
       if (
+        !mostlyBlank &&
         CALIFACIL_VISION_POLICY.onAllSameColumn &&
         allSameCol &&
         examId &&
@@ -1719,6 +1664,7 @@ export default function CalificarPage() {
       }
 
       if (
+        !mostlyBlank &&
         CALIFACIL_VISION_POLICY.onFinalizeEveryRow &&
         examId &&
         chunk.length > 0 &&
@@ -2256,6 +2202,22 @@ export default function CalificarPage() {
       }
       const attempts: MediaStreamConstraints[] = isMobile
         ? [
+            {
+              video: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 3840 },
+                height: { ideal: 2160 },
+              },
+              audio: false,
+            },
+            {
+              video: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+              audio: false,
+            },
             { video: { facingMode: { ideal: 'environment' } }, audio: false },
             { video: { facingMode: 'environment' }, audio: false },
             { video: true, audio: false },
@@ -3183,19 +3145,13 @@ export default function CalificarPage() {
     let maxMcPoints = 0;
     const rows = questions.map((question: Question) => {
       const answerText = (merged[question.id] ?? '').trim();
-      const expected = (effectiveKey[question.id] ?? '').trim();
-      const gotIdx = resolveOptionIndexFromValue(question.options, answerText);
-      const wantIdx = resolveOptionIndexFromValue(question.options, expected);
-      const isCorrect =
-        question.type === 'multiple_choice'
-          ? gotIdx !== null && wantIdx !== null && gotIdx === wantIdx
-          : null;
+      const { isCorrect, score } = gradeMcQuestionForPersist(question, answerText, virtualKeyMaps);
       const pts = questionPoints(question);
       if (question.type === 'multiple_choice') {
         maxMcPoints += pts;
         if (isCorrect) {
           correctCount++;
-          earnedPoints += pts;
+          earnedPoints += score;
         }
       }
 
@@ -3205,7 +3161,7 @@ export default function CalificarPage() {
         question_id: question.id,
         answer_text: answerText,
         is_correct: isCorrect,
-        score: isCorrect ? pts : 0,
+        score,
       };
     });
 
@@ -3221,7 +3177,7 @@ export default function CalificarPage() {
 
   const presentInstantCaptureGrade = useCallback(
     async (fullDraft: Record<string, string>, studentIdOverride?: string) => {
-      const stats = gradeMcDraftAgainstKey(fullDraft, questions, examVirtualKeyByQuestionId);
+      const stats = gradeMcDraftAgainstVirtualKey(fullDraft, questions, virtualKeyMaps);
       setAutoGradeStats(stats);
       setMobileResultsDraft({ ...fullDraft });
 
@@ -3282,7 +3238,7 @@ export default function CalificarPage() {
     },
     [
       canGradeStudents,
-      examVirtualKeyByQuestionId,
+      virtualKeyMaps,
       isMobile,
       questions,
       selectedStudentId,
@@ -3420,10 +3376,10 @@ export default function CalificarPage() {
     await yieldForSpinnerPaint();
     try {
       await persistStudentAnswers(mobileResultsDraft);
-      const stats = gradeMcDraftAgainstKey(
+      const stats = gradeMcDraftAgainstVirtualKey(
         mobileResultsDraft,
         questions,
-        examVirtualKeyByQuestionId
+        virtualKeyMaps
       );
       setAutoGradeStats(stats);
       toast.success('Cambios guardados en la nube.');
@@ -3600,7 +3556,7 @@ export default function CalificarPage() {
           : (prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: alignmentPrecise }) ??
             warped);
       const displayCanvas = prepareAnswerSheetDisplayCanvas(scanCanvas) ?? scanCanvas;
-      const scanPreview = canvasPreviewDataUrl(displayCanvas, 1800, 0.92);
+      const scanPreview = canvasPreviewDataUrl(displayCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
       if (scanPreview) {
         flushSync(() => setMobileScanPreviewUrl(scanPreview));
         if (video) pauseLiveVideoForScan(video);
@@ -3638,6 +3594,7 @@ export default function CalificarPage() {
         void previewMobileCaptureAlignmentRef.current(warped!, alignment);
       };
 
+      let omrMeta: OmrScanMetaResult | null = null;
       let meta: {
         picks: (number | null)[];
         geometry: CalifacilOmrScanGeometry | null;
@@ -3658,27 +3615,18 @@ export default function CalificarPage() {
           toast.message('Hoja ZipGrade detectada. Leyendo burbujas con plantilla de 3 columnas.');
         }
       } else {
+        omrMeta = scanWarpedMobileCaptureSheet(scanCanvas, omrCols, chunkRows);
         const reviewAssets = buildMobileAnswerSheetReviewFromWarp(warped, omrCols, chunkRows, {
           scanCanvas,
           warpAlignment: alignment,
         });
-        if (reviewAssets) {
-          meta = {
-            picks: reviewAssets.picks,
-            geometry: reviewAssets.geometry,
-            controlNumber: reviewAssets.controlNumber,
-            controlNumberDigits: reviewAssets.controlNumberDigits,
-          };
-          if (reviewAssets.displayCanvas) displaySource = reviewAssets.displayCanvas;
-        } else {
-          const scanned = scanWarpedMobileCaptureSheet(scanCanvas, omrCols, chunkRows);
-          meta = {
-            picks: scanned.picks,
-            geometry: scanned.geometry,
-            controlNumber: scanned.controlNumber,
-            controlNumberDigits: scanned.controlNumberDigits,
-          };
-        }
+        if (reviewAssets?.displayCanvas) displaySource = reviewAssets.displayCanvas;
+        meta = {
+          picks: omrMeta.picks,
+          geometry: omrMeta.geometry,
+          controlNumber: omrMeta.controlNumber,
+          controlNumberDigits: omrMeta.controlNumberDigits,
+        };
       }
 
       if (meta.geometry) {
@@ -3700,7 +3648,19 @@ export default function CalificarPage() {
 
       const minResolved = mobileCaptureMinResolvedRows(chunkRows);
       const resolvedCount = countResolvedOmrPicks(meta.picks);
-      if (!meta.geometry || resolvedCount < minResolved) {
+      const mostlyBlank =
+        omrMeta !== null && isAnswerSheetOmrMostlyBlank(omrMeta, chunkRows);
+      if (!meta.geometry) {
+        if (sheetKind === 'califacil') {
+          openManualCornerReview();
+          return;
+        }
+        toast.error('No se detectó la tabla de respuestas.');
+        setLiveStatus('Vuelve a escanear con la hoja bien iluminada y centrada.');
+        clearPreview();
+        return;
+      }
+      if (!mostlyBlank && resolvedCount < minResolved) {
         if (sheetKind === 'califacil') {
           openManualCornerReview();
           return;
@@ -3713,6 +3673,9 @@ export default function CalificarPage() {
         setLiveStatus('Vuelve a escanear con la hoja bien iluminada y centrada.');
         clearPreview();
         return;
+      }
+      if (mostlyBlank && !opts?.fromGallery) {
+        toast.message('Hoja sin respuestas marcadas — calificación 0%.');
       }
 
       if (
@@ -3848,7 +3811,7 @@ export default function CalificarPage() {
           toast.error('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? '';
+        const previewUrl = canvasPreviewDataUrl(scanCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
         setMobileReviewAlign({
           warped,
           alignment,
@@ -3891,7 +3854,7 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, 960);
+        const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, MOBILE_OMR_SCAN_MAX_SIDE);
         const meta = scanWarpedWithNormTableFrame(scanCanvas, omrCols, omrRowCount, frame);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3899,7 +3862,7 @@ export default function CalificarPage() {
           setReviewStatus('No se pudo leer con ese marco. Ajusta las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 960) ?? mobileReviewAlign.previewUrl;
+        const previewUrl = canvasPreviewDataUrl(scanCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? mobileReviewAlign.previewUrl;
         setMobileReviewAlign({
           ...mobileReviewAlign,
           geometry: meta.geometry,
@@ -4130,12 +4093,11 @@ export default function CalificarPage() {
     );
     const keyAnswers = chunk.map((q) => examVirtualKeyByQuestionId[q.id]?.trim() ?? '');
     const correctFlags = chunk.map((q, i) => {
-      const draft = studentAnswers[i];
-      const expected = keyAnswers[i];
-      if (!draft || !expected) return false;
-      const pi = resolveOptionIndexFromValue(q.options ?? [], draft);
-      const ei = resolveOptionIndexFromValue(q.options ?? [], expected);
-      return pi !== null && ei !== null && pi === ei;
+      const expectedIndex = virtualKeyCorrectIndexByQuestionId[q.id];
+      if (expectedIndex === undefined) return false;
+      const draft = studentAnswers[i] ?? '';
+      const studentPick = snap?.columnPicks[i] ?? resolveStudentPickIndex(q.options, draft);
+      return isMcPickCorrect(expectedIndex, studentPick, q.options, draft);
     });
     downloadCalificacionCsv({
       examTitle: exam.title,
@@ -4155,7 +4117,8 @@ export default function CalificarPage() {
     resultsSheetIdx,
     sheets,
     mobileResultsDraft,
-    examVirtualKeyByQuestionId,
+    virtualKeyMaps,
+    virtualKeyCorrectIndexByQuestionId,
     selectedStudentName,
     detectedControlNumber,
   ]);

@@ -89,7 +89,7 @@ const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
   minFillDarkness: 0.12,
   minScoreAbsolute: 0.032,
   minScoreGap: 0.018,
-  blankMaxInk: 0.07,
+  blankMaxInk: 0.095,
 } as const;
 
 /**
@@ -6299,18 +6299,6 @@ function pickAnswerSheetRowAbsolute(params: {
   const scoreGap = scoreVal - (scores[scoreSecond] ?? 0);
   const fillBest = fills[scoreBest] ?? 0;
 
-  let fillBestIdx = 0;
-  for (let c = 1; c < cols; c++) {
-    if ((fills[c] ?? 0) > (fills[fillBestIdx] ?? 0)) fillBestIdx = c;
-  }
-  let fillSecondIdx = fillBestIdx === 0 ? 1 : 0;
-  for (let c = 0; c < cols; c++) {
-    if (c === fillBestIdx) continue;
-    if ((fills[c] ?? 0) > (fills[fillSecondIdx] ?? 0)) fillSecondIdx = c;
-  }
-  const fillVal = fills[fillBestIdx] ?? 0;
-  const fillGap = fillVal - (fills[fillSecondIdx] ?? 0);
-
   const inkOk =
     inkVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction &&
     inkGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap;
@@ -6324,33 +6312,6 @@ function pickAnswerSheetRowAbsolute(params: {
       pick: inkBest,
       ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
       confidence: inkVal + scoreGap,
-    };
-  }
-
-  /** Tinta clara aunque el anillo falle (sombra / desalineación leve). */
-  if (inkOk && inkVal >= 0.28 && inkGap >= 0.06) {
-    return {
-      pick: inkBest,
-      ambiguous: !scoreOk || inkBest !== scoreBest,
-      confidence: inkVal + inkGap * 0.5,
-    };
-  }
-
-  /** Centro oscuro sin Otsu fuerte — típico en filas superiores mal alineadas. */
-  if (scoreOk && fillBest >= 0.14 && scoreGap >= 0.014) {
-    return {
-      pick: scoreBest,
-      ambiguous: !inkOk || inkBest !== scoreBest,
-      confidence: fillBest + scoreGap,
-    };
-  }
-
-  /** Burbuja rellenada sólidamente (anillo ≈ centro): prioriza oscuridad del disco. */
-  if (fillVal >= 0.16 && fillGap >= 0.035 && inkVal >= 0.1) {
-    return {
-      pick: fillBestIdx,
-      ambiguous: fillGap < 0.05 || inkBest !== fillBestIdx,
-      confidence: fillVal + fillGap,
     };
   }
 
@@ -6476,6 +6437,91 @@ export function readAnswerSheetPicksFromTemplateGeometry(
   });
 
   return { picks: out, rows: rowMetas, resolvedCount, confidenceSum, maxSameColumnCount };
+}
+
+function rowMaxInkFraction(row: OmrScanRowDetail): number {
+  if (!row.inkFractions?.length) return 0;
+  return row.inkFractions.reduce((a, b) => Math.max(a, b), 0);
+}
+
+/** Filas con marca OMR clara (no ruido de impresión en hoja en blanco). */
+export function countAnswerSheetMarkedRows(
+  meta: OmrScanMetaResult,
+  rowCount?: number
+): number {
+  const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
+  let n = 0;
+  for (let i = 0; i < rows; i++) {
+    const row = meta.rows[i];
+    if (!row || row.pick === null) continue;
+    if (rowMaxInkFraction(row) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) n++;
+  }
+  return n;
+}
+
+/** Hoja sin respuestas marcadas (evita calificar ruido como aciertos). */
+export function isAnswerSheetOmrMostlyBlank(
+  meta: OmrScanMetaResult,
+  rowCount?: number
+): boolean {
+  const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
+  if (rows <= 0) return true;
+  const marked = countAnswerSheetMarkedRows(meta, rows);
+  return marked < Math.max(1, Math.ceil(rows * 0.05));
+}
+
+/** Anula lecturas falsas en hojas en blanco o con pocas marcas reales. */
+export function sanitizeAnswerSheetOmrMeta(
+  meta: OmrScanMetaResult,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
+  const blankInk = CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.2;
+
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
+    return {
+      ...meta,
+      picks: Array(rows).fill(null),
+      rows: meta.rows.slice(0, rows).map((r) => ({
+        ...r,
+        pick: null,
+        ambiguous: false,
+      })),
+      maxSameColumnCount: 0,
+      needsVisionAssist: false,
+    };
+  }
+
+  const picks = meta.picks.slice(0, rows);
+  const rowMetas = meta.rows.slice(0, rows).map((row, i) => {
+    const maxInk = rowMaxInkFraction(row);
+    if (maxInk < blankInk || picks[i] === null) {
+      picks[i] = null;
+      return { ...row, pick: null, ambiguous: false };
+    }
+    if (maxInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction * 0.9) {
+      picks[i] = null;
+      return { ...row, pick: null, ambiguous: false };
+    }
+    return { ...row, pick: picks[i] ?? null };
+  });
+
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of picks) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  return {
+    ...meta,
+    picks,
+    rows: rowMetas,
+    maxSameColumnCount,
+    needsVisionAssist: rowMetas.some((r) => r.ambiguous),
+  };
 }
 
 function scanCalifacilOmrCanvasDetailedWithProfile(
@@ -7392,7 +7438,7 @@ export function buildMobileZipGradePreviewPack(
     ? scanWarpedMobileAnswerSheetPrecise(omrCanvas, columns, rowCount)
     : scanWarpedMobileCaptureSheet(omrCanvas, columns, rowCount);
   if (!meta.geometry) return null;
-  const maxSide = opts?.maxPreviewSide ?? 1400;
+  const maxSide = opts?.maxPreviewSide ?? 2200;
   const previewCanvas = drawSourceToCanvas(omrCanvas, maxSide) ?? omrCanvas;
   let previewDataUrl: string | null = null;
   try {
@@ -7459,8 +7505,8 @@ export function scanWarpedMobileCaptureSheet(
       bestControl = ctrl;
     }
 
-    const mid = downscaleCanvasForOmrScan(src, 960);
-    const hi = downscaleCanvasForOmrScan(src, 1100);
+    const mid = downscaleCanvasForOmrScan(src, 1280);
+    const hi = downscaleCanvasForOmrScan(src, 1600);
     const tableFrame = califacilOmrTableFrameNormRect(rows);
     const candidates: OmrScanMetaResult[] = [
       scanWarpedMobileAnswerSheetFast(hi, columns, rows),
@@ -7487,11 +7533,14 @@ export function scanWarpedMobileCaptureSheet(
   }
 
   if (!bestMeta) return empty;
-  return {
-    ...bestMeta,
-    controlNumberDigits: bestControl.digits,
-    controlNumber: bestControl.controlNumber,
-  };
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      ...bestMeta,
+      controlNumberDigits: bestControl.digits,
+      controlNumber: bestControl.controlNumber,
+    },
+    rows
+  );
 }
 
 /** Lectura móvil rápida (una pasada) para captura instantánea en teléfono. */
@@ -7545,7 +7594,7 @@ export function scanWarpedMobileCaptureSheetFast(
 /** Reduce un canvas para lectura OMR móvil sin bloquear el hilo principal tanto tiempo. */
 export function downscaleCanvasForOmrScan(
   source: HTMLCanvasElement,
-  maxSide = 960
+  maxSide = 1280
 ): HTMLCanvasElement {
   return drawSourceToCanvas(source, maxSide) ?? source;
 }
@@ -7820,19 +7869,22 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const controlRead = readAnswerSheetControlNumberFromCanvas(reviewCanvas, rowCount, thresholds);
 
-  return {
-    picks: best.picks,
-    rows: best.rows,
-    needsVisionAssist,
-    maxSameColumnCount: best.maxSameColumnCount,
-    geometry: best.geometry,
-    reviewSourceCanvas: reviewCanvas,
-    warpAlignment: opts?.includeWarpAlignment
-      ? measureWarpedFiducialAlignment(canvas)
-      : undefined,
-    controlNumberDigits: controlRead.digits,
-    controlNumber: controlRead.controlNumber,
-  };
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      picks: best.picks,
+      rows: best.rows,
+      needsVisionAssist,
+      maxSameColumnCount: best.maxSameColumnCount,
+      geometry: best.geometry,
+      reviewSourceCanvas: reviewCanvas,
+      warpAlignment: opts?.includeWarpAlignment
+        ? measureWarpedFiducialAlignment(canvas)
+        : undefined,
+      controlNumberDigits: controlRead.digits,
+      controlNumber: controlRead.controlNumber,
+    },
+    rowCount
+  );
 }
 
 /**

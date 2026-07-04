@@ -565,7 +565,7 @@ export function MobileSheetScanReview({
         )}
         <button
           type="button"
-          className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-400 text-black shadow-lg disabled:opacity-60 active:scale-95"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-orange-500 text-white shadow-lg disabled:opacity-60 active:scale-95 hover:bg-orange-600"
           style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
           aria-label={alignPreview ? 'Calificar' : 'Ver lectura de respuestas'}
           disabled={scanning && !alignPreview}
@@ -725,7 +725,7 @@ export function MobileSheetScanReview({
               <button
                 key={i}
                 type="button"
-                className="absolute z-10 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-amber-400 shadow-lg"
+                className="absolute z-10 h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-orange-500 shadow-lg"
                 style={{ left: p.x, top: p.y }}
                 aria-label={`Esquina ${i + 1}`}
                 onPointerDown={handlePointerDown(i)}
@@ -762,7 +762,7 @@ export function MobileSheetScanReview({
             </button>
             <button
               type="button"
-              className="flex-1 rounded-xl bg-amber-400 py-3 text-sm font-semibold text-black"
+              className="flex-1 rounded-xl bg-orange-600 py-3 text-sm font-semibold text-white hover:bg-orange-700"
               style={{ touchAction: 'manipulation' }}
               disabled={scanning}
               onClick={onFinalizeGrade}
