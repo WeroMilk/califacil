@@ -10,6 +10,7 @@ export {
 } from '@/components/exam-scanner/document-detector';
 export {
   CAPTURE_STABLE_TICKS_REQUIRED,
+  MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
   mobileCaptureMinResolvedRows,
   shouldTriggerAutoCapture,
 } from '@/components/exam-scanner/capture-controller';

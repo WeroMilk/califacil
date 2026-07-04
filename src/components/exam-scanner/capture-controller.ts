@@ -1,4 +1,6 @@
 export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
+/** Ticks de estabilidad en móvil antes de auto-captura (evita fotos al azar). */
+export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 4;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;

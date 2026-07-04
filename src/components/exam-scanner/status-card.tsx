@@ -138,10 +138,10 @@ function StatusCardBody({
           phase === 'stable' || phase === 'capturing' ? 'text-gray-500' : 'text-white/75'
         )}
       >
-        Esquinas: {fiducialCount}/4
-        {stripAligned ? ' · Franjas laterales detectadas' : ''}
+        Cuadros negros: {fiducialCount}/4
+        {stripAligned ? ' · Franjas OK' : ''}
       </p>
-      {showBar ? (
+      {showBar && pct > 4 ? (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/15">
           <div
             className={cn(

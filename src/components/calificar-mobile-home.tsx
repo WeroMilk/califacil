@@ -119,108 +119,112 @@ export function CalificarMobileHome({
     (Boolean(selectedStudentId) || autoIdentifyByControl);
 
   return (
-    <div className="calificar-mobile-enter mx-auto min-h-full w-full max-w-7xl space-y-4 pb-28 pt-1 lg:hidden">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Escanea la hoja de respuestas con la cámara. Calificación al instante.
-        </p>
+    <div className="calificar-mobile-enter flex min-h-full flex-col lg:hidden">
+      <div className="mx-auto w-full max-w-7xl flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-2">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            Escanea la hoja de respuestas con la cámara. Calificación al instante.
+          </p>
+        </div>
+
+        <Card className="shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Configuración</CardTitle>
+            <CardDescription>Elige el examen y el alumno antes de calificar.</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <ConfigRow
+              label="Examen"
+              value={examTitle}
+              hint={
+                examLoading
+                  ? 'Cargando preguntas…'
+                  : examId
+                    ? `${virtualKeyReady}/${virtualKeyTotal} reactivos con clave`
+                    : 'Toca para elegir un examen publicado'
+              }
+              onPress={() => !examsLoading && setExamPickerOpen(true)}
+              disabled={examsLoading}
+            />
+            <ConfigRow
+              label="Alumno"
+              value={studentLabel}
+              hint={
+                autoIdentifyByControl
+                  ? 'Opcional si la hoja tiene número de control marcado'
+                  : 'Requerido antes de calificar'
+              }
+              onPress={() => canGradeStudents && setStudentPickerOpen(true)}
+              disabled={!canGradeStudents || !examId}
+              last
+            />
+          </CardContent>
+        </Card>
+
+        {examId && examLoading ? (
+          <Card className="shadow-sm">
+            <CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
+              <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+              Preparando clave automática…
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {exam && supportsCalifacil && canGradeStudents ? (
+          <Card className="border-orange-200 bg-orange-50/80 shadow-sm">
+            <CardContent className="flex items-start gap-3 py-4">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Listo para calificar</p>
+                <p className="mt-0.5 text-xs leading-snug text-gray-600">
+                  Hoja {sheetIndex + 1} de {totalSheets}. Alinea los 4 cuadros negros de las
+                  esquinas de la hoja impresa.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {exam && !supportsCalifacil ? (
+          <Card className="border-amber-200 bg-amber-50 shadow-sm">
+            <CardContent className="py-3 text-sm text-amber-950">
+              Este examen necesita solo preguntas de opción múltiple (2–5 opciones).
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
 
-      <Card className="shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Configuración</CardTitle>
-          <CardDescription>Elige el examen y el alumno antes de calificar.</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <ConfigRow
-            label="Examen"
-            value={examTitle}
-            hint={
-              examLoading
-                ? 'Cargando preguntas…'
-                : examId
-                  ? `${virtualKeyReady}/${virtualKeyTotal} reactivos con clave`
-                  : 'Toca para elegir un examen publicado'
-            }
-            onPress={() => !examsLoading && setExamPickerOpen(true)}
-            disabled={examsLoading}
-          />
-          <ConfigRow
-            label="Alumno"
-            value={studentLabel}
-            hint={
-              autoIdentifyByControl
-                ? 'Opcional si la hoja tiene número de control marcado'
-                : 'Requerido antes de calificar'
-            }
-            onPress={() => canGradeStudents && setStudentPickerOpen(true)}
-            disabled={!canGradeStudents || !examId}
-            last
-          />
-        </CardContent>
-      </Card>
-
-      {examId && examLoading ? (
-        <Card className="shadow-sm">
-          <CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
-            <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
-            Preparando clave automática…
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {exam && supportsCalifacil && canGradeStudents ? (
-        <Card className="border-orange-200 bg-orange-50/80 shadow-sm">
-          <CardContent className="flex items-start gap-3 py-4">
-            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
-            <div>
-              <p className="text-sm font-semibold text-gray-900">Listo para calificar</p>
-              <p className="mt-0.5 text-xs leading-snug text-gray-600">
-                Hoja {sheetIndex + 1} de {totalSheets}. La cámara detectará las 4 esquinas negras
-                del examen antes de capturar.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {exam && !supportsCalifacil ? (
-        <Card className="border-amber-200 bg-amber-50 shadow-sm">
-          <CardContent className="py-3 text-sm text-amber-950">
-            Este examen necesita solo preguntas de opción múltiple (2–5 opciones).
-          </CardContent>
-        </Card>
-      ) : null}
-
       <div
-        className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] z-20 space-y-2 px-4"
-        style={{ pointerEvents: 'none' }}
+        className="shrink-0 border-t border-orange-100/90 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-md"
+        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
       >
-        <Button
-          type="button"
-          disabled={!readyToScan || scanBusy}
-          onClick={onScan}
-          className="pointer-events-auto h-12 w-full rounded-xl bg-orange-600 text-base font-semibold hover:bg-orange-700"
-        >
-          {scanBusy ? (
-            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-          ) : (
-            <Camera className="mr-2 h-5 w-5" strokeWidth={2.25} />
-          )}
-          Calificar
-        </Button>
-        {onImportPhoto ? (
+        <div className="mx-auto w-full max-w-7xl space-y-2">
           <Button
             type="button"
-            variant="outline"
             disabled={!readyToScan || scanBusy}
-            onClick={onImportPhoto}
-            className="pointer-events-auto w-full bg-white"
+            onClick={onScan}
+            className="h-12 w-full rounded-xl bg-orange-600 text-base font-semibold hover:bg-orange-700"
           >
-            Importar foto de galería
+            {scanBusy ? (
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+            ) : (
+              <Camera className="mr-2 h-5 w-5" strokeWidth={2.25} />
+            )}
+            Calificar
           </Button>
-        ) : null}
+          {onImportPhoto ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!readyToScan || scanBusy}
+              onClick={onImportPhoto}
+              className="h-11 w-full bg-white"
+            >
+              Importar foto de galería
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {examPickerOpen ? (

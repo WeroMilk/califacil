@@ -64,7 +64,7 @@ import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
   MOBILE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
-  isMobileSheetAlignedForCapture,
+  isMobileExamSheetReadyForCapture,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
@@ -111,6 +111,7 @@ import {
 } from '@/components/exam-scanner/document-detector';
 import {
   CAPTURE_STABLE_TICKS_REQUIRED,
+  MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
   mobileCaptureMinResolvedRows,
   shouldTriggerAutoCapture,
 } from '@/components/exam-scanner/capture-controller';
@@ -254,7 +255,7 @@ const MOBILE_ALIGN_HOLD_MS = CAPTURE_STABLE_TICKS_REQUIRED * MOBILE_CORNER_LOOP_
 /** Tolerancia de alineación fiducial en captura móvil (más permisivo que escritorio). */
 const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 10;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
-const MIN_FRAME_LUMINANCE = 0.07;
+const MIN_FRAME_LUMINANCE = 0.11;
 /** Superpone plantilla PDF y error fiducial en px (`.env`: `NEXT_PUBLIC_CALIFACIL_OMR_DEBUG=true`). */
 const OMR_DEBUG_ENABLED = process.env.NEXT_PUBLIC_CALIFACIL_OMR_DEBUG === 'true';
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
@@ -665,17 +666,32 @@ export default function CalificarPage() {
   const [mobileShadowWarning, setMobileShadowWarning] = useState(false);
   const [mobileScannerLowLight, setMobileScannerLowLight] = useState(false);
   const [mobileStableTicks, setMobileStableTicks] = useState(0);
+  const [mobileExamReadyForCapture, setMobileExamReadyForCapture] = useState(false);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const mobileStripAlignedRef = useRef(false);
+  const mobileCaptureGateRef = useRef<{
+    fiducialCount: number;
+    stripAligned: boolean;
+    quad: RoiQuad | null;
+    roiW: number;
+    roiH: number;
+    fillRatio: number;
+    roiCanvas: HTMLCanvasElement | null;
+  }>({
+    fiducialCount: 0,
+    stripAligned: false,
+    quad: null,
+    roiW: 0,
+    roiH: 0,
+    fillRatio: 0,
+    roiCanvas: null,
+  });
   useEffect(() => {
     mobileStripAlignedRef.current = mobileStripAligned;
   }, [mobileStripAligned]);
 
-  const mobileAlignedForCapture = isMobileSheetAlignedForCapture({
-    fiducialCount: mobileFiducialCount,
-    stripAligned: mobileStripAligned,
-  });
+  const mobileAlignedForCapture = mobileExamReadyForCapture;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const liveVideoLayoutRef = useRef<LiveVideoLetterbox | null>(null);
@@ -777,7 +793,6 @@ export default function CalificarPage() {
       opts?: {
         roiQuad?: RoiQuad | null;
         roiCapture?: MobileGuideRoiCapture | null;
-        force?: boolean;
       }
     ) => void
   >(() => {});
@@ -2385,8 +2400,10 @@ export default function CalificarPage() {
               setMobileSheetFillRatio(0);
               setMobileFiducialCount(0);
               setMobileFiducialCorners([false, false, false, false]);
+              setMobileStripAligned(false);
               setMobileShadowWarning(false);
               setMobileStableTicks(0);
+              setMobileExamReadyForCapture(false);
               setLiveScanGeometry(null);
               setLiveScanPicks([]);
               setLiveScanLockedRows([]);
@@ -2419,24 +2436,38 @@ export default function CalificarPage() {
 
             const stripAligned = stripQuad !== null;
             setMobileStripAligned(stripAligned);
-            const alignedForCapture = isMobileSheetAlignedForCapture({
-              fiducialCount,
-              stripAligned,
-            });
             const quadValid =
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
                 ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.38)
                 : null;
-            const fiducialsLocked = alignedForCapture;
+            const fillRatio =
+              roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
+            const examReadyForCapture = isMobileExamSheetReadyForCapture({
+              fiducialCount,
+              stripAligned,
+              quad: roiQuad,
+              roiW,
+              roiH,
+              fillRatio,
+              roiCanvas: roiCanvas,
+            });
+            mobileCaptureGateRef.current = {
+              fiducialCount,
+              stripAligned,
+              quad: roiQuad,
+              roiW,
+              roiH,
+              fillRatio,
+              roiCanvas,
+            };
+            setMobileExamReadyForCapture(examReadyForCapture);
             if (quadValid && roiQuad) {
               smoothedRoiQuadRef.current = roiQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
             }
             const layout = liveVideoLayoutRef.current;
-            const fillRatio =
-              roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
             const now = performance.now();
             if ((stripAligned || quadValid) && roiCapture && layout && roiQuad) {
               const viewportPoly = mapRoiQuadPolygonToViewportPx(roiQuad, roiCapture, layout);
@@ -2479,41 +2510,10 @@ export default function CalificarPage() {
             setLiveScanAmbiguousRows([]);
 
             if (!quadValid || !roiQuad) {
-              if (fiducialsLocked) {
-                fiducialStableTicksRef.current += 1;
-                cornerStableTicksRef.current = 0;
-                setMobileStableTicks(fiducialStableTicksRef.current);
-                setCornersAlignedView(true);
-                setLiveStatus(
-                  fiducialStableTicksRef.current < CAPTURE_STABLE_TICKS_REQUIRED
-                    ? 'Mantén quieto — captura automática…'
-                    : 'Calificando…'
-                );
-                if (
-                  shouldTriggerAutoCapture({
-                    autoShutterEnabled: autoShutterEnabledRef.current,
-                    captureBusy: mobileCaptureBusyRef.current,
-                    stableTicks: fiducialStableTicksRef.current,
-                  })
-                ) {
-                  fiducialStableTicksRef.current = 0;
-                  setMobileStableTicks(0);
-                  lastRoiCaptureMetaRef.current = roiCapture;
-                  setShutterFlash(true);
-                  window.setTimeout(() => setShutterFlash(false), 220);
-                  triggerMobileSheetCaptureRef.current(video, {
-                    roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
-                    roiCapture,
-                    force: true,
-                  });
-                }
-                nextDelay = MOBILE_CORNER_LOOP_MS;
-                return;
-              }
-
               fiducialStableTicksRef.current = 0;
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
+              setMobileExamReadyForCapture(false);
               if (!documentPolygonHoldRef.current) {
                 lastRoiQuadRef.current = null;
                 lastRawRoiQuadRef.current = null;
@@ -2530,6 +2530,8 @@ export default function CalificarPage() {
                 autotorchTriedRef.current = true;
                 void setTorchEnabled(true);
                 setLiveStatus('Activé el flash. Centra la hoja con las franjas negras visibles.');
+              } else if (!stripAligned && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
+                setLiveStatus('Alinea las franjas negras laterales del examen.');
               } else {
                 setLiveStatus(
                   `Esquinas: ${fiducialCount}/4. Encuadra la hoja con las 4 esquinas negras visibles.`
@@ -2589,19 +2591,25 @@ export default function CalificarPage() {
             cornerStableTicksRef.current += 1;
             lowVisibilityTicksRef.current = 0;
             setMobileStableTicks(cornerStableTicksRef.current);
-            setCornersAlignedView(alignedForCapture);
-            if (!alignedForCapture) {
+            setCornersAlignedView(examReadyForCapture);
+            if (!examReadyForCapture) {
               setLiveStatus(
-                `Esquinas detectadas: ${fiducialCount}/4. Encuadra las 4 esquinas negras del examen.`
+                !stripAligned
+                  ? 'Centra el examen — deben verse las franjas negras laterales.'
+                  : fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
+                    ? `Esquinas detectadas: ${fiducialCount}/4. Encuadra las 4 esquinas negras del examen.`
+                    : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
+                      ? 'Acerca el teléfono hasta ver la hoja completa.'
+                      : 'Ajusta la hoja — el interior debe verse blanco y nítido.'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
-            if (cornerStableTicksRef.current < CAPTURE_STABLE_TICKS_REQUIRED) {
+            if (cornerStableTicksRef.current < MOBILE_CAPTURE_STABLE_TICKS_REQUIRED) {
               const secsLeft = Math.max(
                 1,
                 Math.ceil(
-                  ((CAPTURE_STABLE_TICKS_REQUIRED - cornerStableTicksRef.current) *
+                  ((MOBILE_CAPTURE_STABLE_TICKS_REQUIRED - cornerStableTicksRef.current) *
                     MOBILE_CORNER_LOOP_MS) /
                     1000
                 )
@@ -2609,7 +2617,7 @@ export default function CalificarPage() {
               setLiveStatus(
                 autoShutterEnabledRef.current
                   ? `Captura automática en ~${secsLeft} s`
-                  : 'Hoja detectada — mantén quieto…'
+                  : 'Examen detectado — mantén quieto…'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2620,6 +2628,7 @@ export default function CalificarPage() {
                 autoShutterEnabled: autoShutterEnabledRef.current,
                 captureBusy: mobileCaptureBusyRef.current,
                 stableTicks: cornerStableTicksRef.current,
+                requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
               })
             ) {
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
@@ -3463,15 +3472,28 @@ export default function CalificarPage() {
       const alignmentFiducialCount = alignmentFiducials.filter(Boolean).length;
       const alignmentStripAligned =
         detectAnswerSheetQuadViaAlignStrips(alignmentCheckCanvas) !== null;
+      const alignmentFillRatio =
+        alignmentCheckQuad !== null
+          ? measureRoiSheetFillRatio(
+              alignmentCheckQuad,
+              alignmentCheckCanvas.width,
+              alignmentCheckCanvas.height
+            )
+          : 0;
       if (
-        !isMobileSheetAlignedForCapture({
+        !isMobileExamSheetReadyForCapture({
           fiducialCount: alignmentFiducialCount,
           stripAligned: alignmentStripAligned,
+          quad: alignmentCheckQuad,
+          roiW: alignmentCheckCanvas.width,
+          roiH: alignmentCheckCanvas.height,
+          fillRatio: alignmentFillRatio,
+          roiCanvas: alignmentCheckCanvas,
         })
       ) {
         clearPreview();
-        toast.error('No se detectaron las 4 esquinas negras. Encuadra el examen completo.');
-        setLiveStatus('Encuadra las 4 esquinas negras antes de capturar.');
+        toast.error('No se detectó un examen válido. Encuadra la hoja completa con franjas y esquinas negras.');
+        setLiveStatus('Encuadra el examen completo antes de capturar.');
         return;
       }
 
@@ -3935,9 +3957,9 @@ export default function CalificarPage() {
   const triggerMobileSheetCapture = useCallback(
     (
       video: HTMLVideoElement,
-      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null; force?: boolean }
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      if (mobileCaptureBusyRef.current && !opts?.force) return;
+      if (mobileCaptureBusyRef.current) return;
       mobileCaptureBusyRef.current = true;
       flushSync(() => {
         setScanBusy(true);
@@ -3978,43 +4000,20 @@ export default function CalificarPage() {
     return () => window.clearTimeout(timeout);
   }, [scanBusy]);
 
-  const requestMobileAutoCapture = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) {
-      toast.error('Cámara no disponible.');
-      return;
-    }
-    if (
-      !isMobileSheetAlignedForCapture({
-        fiducialCount: mobileFiducialCount,
-        stripAligned: mobileStripAlignedRef.current,
-      })
-    ) {
-      return;
-    }
-    if (video.readyState < 2 || video.videoWidth < 40) {
-      toast.error('La cámara está iniciando. Espera un segundo.');
-      return;
-    }
-    if (mobileCaptureBusyRef.current) return;
-    autoCaptureTriggeredRef.current = true;
-    setShutterFlash(true);
-    window.setTimeout(() => setShutterFlash(false), 220);
-    playAutoCaptureClickSound();
-    triggerMobileSheetCaptureRef.current(video, {
-      roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
-      roiCapture: lastRoiCaptureMetaRef.current,
-    });
-  }, [mobileFiducialCount]);
-
   const captureMobilePhotoManually = useCallback(async () => {
+    const gate = mobileCaptureGateRef.current;
     if (
-      !isMobileSheetAlignedForCapture({
-        fiducialCount: mobileFiducialCount,
-        stripAligned: mobileStripAlignedRef.current,
+      !isMobileExamSheetReadyForCapture({
+        fiducialCount: gate.fiducialCount,
+        stripAligned: gate.stripAligned,
+        quad: gate.quad,
+        roiW: gate.roiW,
+        roiH: gate.roiH,
+        fillRatio: gate.fillRatio,
+        roiCanvas: gate.roiCanvas,
       })
     ) {
-      toast.error('Encuadra las 4 esquinas negras del examen antes de capturar.');
+      toast.error('Encuadra el examen completo (4 esquinas negras y franjas laterales) antes de capturar.');
       return;
     }
 
@@ -4048,10 +4047,10 @@ export default function CalificarPage() {
       /* audio opcional */
     }
     triggerMobileSheetCapture(video, {
-      roiQuad: smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
+      roiQuad: gate.quad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
       roiCapture: lastRoiCaptureMetaRef.current,
     });
-  }, [attachStreamToVideo, mobileFiducialCount, triggerMobileSheetCapture]);
+  }, [attachStreamToVideo, triggerMobileSheetCapture]);
 
   const handleScannerClose = useCallback(() => {
     stopLiveCamera();
@@ -4077,23 +4076,6 @@ export default function CalificarPage() {
     },
     close: handleScannerClose,
   };
-
-  useEffect(() => {
-    if (!cameraOpen || phase !== 'capturar' || !isMobile || scanBusy) return;
-    if (!mobileAlignedForCapture) return;
-    if (mobileStableTicks < CAPTURE_STABLE_TICKS_REQUIRED) return;
-    if (!autoShutterEnabledRef.current) return;
-    if (autoCaptureTriggeredRef.current || mobileCaptureBusyRef.current) return;
-    requestMobileAutoCapture();
-  }, [
-    cameraOpen,
-    phase,
-    isMobile,
-    scanBusy,
-    mobileAlignedForCapture,
-    mobileStableTicks,
-    requestMobileAutoCapture,
-  ]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -4685,8 +4667,8 @@ export default function CalificarPage() {
               guideRect={staticScannerGuideRect}
               aligned={mobileAlignedForCapture && cornersAlignedView}
               stableProgress={
-                mobileAlignedForCapture
-                  ? Math.min(1, mobileStableTicks / CAPTURE_STABLE_TICKS_REQUIRED)
+                mobileExamReadyForCapture
+                  ? Math.min(1, mobileStableTicks / MOBILE_CAPTURE_STABLE_TICKS_REQUIRED)
                   : 0
               }
               lowLight={mobileScannerLowLight}

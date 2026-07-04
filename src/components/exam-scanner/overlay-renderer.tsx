@@ -1,10 +1,6 @@
 'use client';
 
 import { memo, useId, useMemo } from 'react';
-import {
-  califacilFiducialCornerGuidesOnViewportQuad,
-  califacilStaticFiducialCornerGuidesInViewportPx,
-} from '@/lib/omrScan';
 import { MobileAnswerSheetAlignGuideOverlay } from '@/components/mobile-answer-sheet-bubble-guide-overlay';
 import {
   createStaticScannerGuide,
@@ -79,18 +75,6 @@ function OverlayRendererInner({
   const guideQuad = staticGuide ? guideRectToViewportQuad(staticGuide) : null;
   const guidePoints = guideQuad?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
-  const cornerGuides = useMemo(() => {
-    if (showDetectedMask && smoothPoly) {
-      return califacilFiducialCornerGuidesOnViewportQuad(
-        smoothPoly as [ViewportPoint, ViewportPoint, ViewportPoint, ViewportPoint]
-      );
-    }
-    if (staticGuide) {
-      return califacilStaticFiducialCornerGuidesInViewportPx(staticGuide);
-    }
-    return null;
-  }, [showDetectedMask, smoothPoly, staticGuide]);
-
   const fiducialCount = fiducialCorners.filter(Boolean).length;
   const sheetAligned = fiducialCount >= 4;
 
@@ -147,7 +131,6 @@ function OverlayRendererInner({
               mask={`url(#${maskId})`}
               className="exam-scanner-dim"
             />
-            {cornerPaths(guideQuad, bracketLen, bracketStroke, 3.25)}
             {smoothPoly ? (
               <>
                 <polygon
@@ -168,54 +151,12 @@ function OverlayRendererInner({
       </svg>
 
       {alignGuideRect ? (
-        <MobileAnswerSheetAlignGuideOverlay guideRect={alignGuideRect} aligned={sheetAligned} />
-      ) : null}
-
-      {cornerGuides
-        ? cornerGuides.map((g, i) => (
-            <div
-              key={i}
-              className="absolute rounded-md border-[2.5px] transition-colors duration-200"
-              style={{
-                left: g.left,
-                top: g.top,
-                width: g.size,
-                height: g.size,
-                borderColor: fiducialCorners[i]
-                  ? 'rgba(251,146,60,0.98)'
-                  : 'rgba(255,255,255,0.45)',
-                backgroundColor: fiducialCorners[i]
-                  ? 'rgba(251,146,60,0.22)'
-                  : 'rgba(255,255,255,0.08)',
-              }}
-              aria-hidden
-            />
-          ))
-        : null}
-
-      {stripAligned && alignGuideRect ? (
-        <>
-          <div
-            className="pointer-events-none absolute z-[11] rounded-sm bg-black/55 ring-2 ring-orange-400/90"
-            style={{
-              left: alignGuideRect.left + alignGuideRect.width * 0.018,
-              top: alignGuideRect.top + alignGuideRect.height * 0.12,
-              width: Math.max(8, alignGuideRect.width * 0.028),
-              height: alignGuideRect.height * 0.76,
-            }}
-            aria-hidden
-          />
-          <div
-            className="pointer-events-none absolute z-[11] rounded-sm bg-black/55 ring-2 ring-orange-400/90"
-            style={{
-              left: alignGuideRect.left + alignGuideRect.width * 0.954,
-              top: alignGuideRect.top + alignGuideRect.height * 0.12,
-              width: Math.max(8, alignGuideRect.width * 0.028),
-              height: alignGuideRect.height * 0.76,
-            }}
-            aria-hidden
-          />
-        </>
+        <MobileAnswerSheetAlignGuideOverlay
+          guideRect={alignGuideRect}
+          aligned={sheetAligned}
+          fiducialCorners={fiducialCorners}
+          stripAligned={stripAligned}
+        />
       ) : null}
     </div>
   );

@@ -480,13 +480,7 @@ function countDarkCornerPatches(
     const px = Math.max(0, Math.round(x));
     const py = Math.max(0, Math.round(y));
     const id = ctx.getImageData(px, py, patchW, patchH);
-    let darkCount = 0;
-    const total = patchW * patchH;
-    for (let i = 0; i < id.data.length; i += 4) {
-      const lum = id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
-      if (lum < 95) darkCount++;
-    }
-    if (darkCount / total >= 0.07) darkCorners++;
+    if (isPrintedCornerFiducialPatch(id, patchW, patchH)) darkCorners++;
   }
   return darkCorners;
 }
@@ -501,10 +495,10 @@ export function isCalifacilWarpedLetterCanvas(canvas: HTMLCanvasElement): boolea
   return isWarpedLetterCanvas(canvas.width, canvas.height);
 }
 
-/** Hoja móvil enderezada lista para OMR y vista previa (carta + fiduciales). */
+/** Hoja móvil enderezada lista para OMR y vista previa (carta + 4 fiduciales). */
 export function isMobileWarpedAnswerSheetReady(canvas: HTMLCanvasElement): boolean {
   if (!isCalifacilWarpedLetterCanvas(canvas)) return false;
-  return countCalifacilCornerMarkers(canvas) >= 3;
+  return countCalifacilCornerMarkers(canvas) >= MOBILE_MIN_FIDUCIAL_CORNERS;
 }
 
 /** Parches de esquina en coords. de fiduciales impresos (hoja carta enderezada). */
@@ -2480,7 +2474,7 @@ export function detectAnswerSheetQuadViaAlignStrips(
 
   const profile: number[] = [];
   for (let x = 0; x < w; x++) {
-    profile.push(columnDarknessFraction(data, w, stripBandTop, stripBandBot, x, 88));
+    profile.push(columnDarknessFraction(data, w, stripBandTop, stripBandBot, x, 72));
   }
   const smooth = smoothColumnProfile(profile, 4);
 
@@ -2668,8 +2662,78 @@ export const MOBILE_MIN_FIDUCIAL_CORNERS = 4;
 export function isMobileSheetAlignedForCapture(opts: {
   fiducialCount: number;
   stripAligned?: boolean;
+  quad?: [Point, Point, Point, Point] | null;
+  roiW?: number;
+  roiH?: number;
+  fillRatio?: number;
+  roiCanvas?: HTMLCanvasElement | null;
 }): boolean {
-  return opts.fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
+  return isMobileExamSheetReadyForCapture(opts);
+}
+
+/** Luminancia media mínima (0–1) del interior del cuadrilátero — papel blanco del examen. */
+export const MOBILE_MIN_QUAD_INTERIOR_LUMINANCE = 0.4;
+
+/** Muestrea el interior del cuad de la hoja (evita bordes/fiduciales) y devuelve luminancia 0–1. */
+export function measureRoiQuadInteriorMeanLuminance(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point]
+): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 40 || h < 40) return 0;
+  const id = ctx.getImageData(0, 0, w, h);
+  const inset = 0.14;
+  const steps = 6;
+  let sum = 0;
+  let count = 0;
+  for (let gy = 0; gy < steps; gy++) {
+    for (let gx = 0; gx < steps; gx++) {
+      const u = inset + (1 - 2 * inset) * (steps <= 1 ? 0.5 : gx / (steps - 1));
+      const v = inset + (1 - 2 * inset) * (steps <= 1 ? 0.5 : gy / (steps - 1));
+      const p = bilinearPointInViewportQuad(quad, u, v);
+      const x = Math.round(p.x);
+      const y = Math.round(p.y);
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const i = (y * w + x) * 4;
+      sum +=
+        (id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114) / 255;
+      count++;
+    }
+  }
+  return count > 0 ? sum / count : 0;
+}
+
+/**
+ * Gate estricto: solo captura si hay hoja de examen real (quad + 4 esquinas + franjas + papel blanco).
+ */
+export function isMobileExamSheetReadyForCapture(opts: {
+  fiducialCount: number;
+  stripAligned?: boolean;
+  quad?: [Point, Point, Point, Point] | null;
+  roiW?: number;
+  roiH?: number;
+  fillRatio?: number;
+  roiCanvas?: HTMLCanvasElement | null;
+}): boolean {
+  if (opts.fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS) return false;
+  if (!opts.stripAligned) return false;
+  if (!opts.quad || !opts.roiW || !opts.roiH) return false;
+  if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
+
+  const fill =
+    opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
+  const minFill = opts.stripAligned ? 0.06 : MOBILE_MIN_ROI_FILL_RATIO;
+  if (fill < minFill) return false;
+
+  if (opts.roiCanvas) {
+    const interior = measureRoiQuadInteriorMeanLuminance(opts.roiCanvas, opts.quad);
+    if (interior < MOBILE_MIN_QUAD_INTERIOR_LUMINANCE) return false;
+  }
+
+  return true;
 }
 
 /** Alineación ideal: 4 esquinas + franjas negras laterales visibles. */
@@ -2720,6 +2784,64 @@ export function estimateCanvasShadowAsymmetry(canvas: HTMLCanvasElement): number
   return Math.abs(left - right) / Math.max(0.18, (left + right) * 0.5);
 }
 
+/** Evalúa si un parche contiene el cuadrado negro impreso de esquina (no sombra uniforme). */
+function isPrintedCornerFiducialPatch(
+  imageData: ImageData,
+  patchW: number,
+  patchH: number
+): boolean {
+  const { data } = imageData;
+  const w = patchW;
+  const h = patchH;
+  if (w < 8 || h < 8) return false;
+
+  let innerDark = 0;
+  let innerCount = 0;
+  let innerLumSum = 0;
+  let outerLumSum = 0;
+  let outerCount = 0;
+
+  const innerLo = 0.28;
+  const innerHi = 0.72;
+  const outerMargin = 0.14;
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const nx = px / w;
+      const ny = py / h;
+      const idx = (py * w + px) * 4;
+      const lum = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
+
+      const inInner = nx >= innerLo && nx <= innerHi && ny >= innerLo && ny <= innerHi;
+      const inOuterBand =
+        !inInner &&
+        (nx <= outerMargin || nx >= 1 - outerMargin || ny <= outerMargin || ny >= 1 - outerMargin);
+
+      if (inInner) {
+        innerCount++;
+        innerLumSum += lum;
+        if (lum < 52) innerDark++;
+      } else if (inOuterBand) {
+        outerCount++;
+        outerLumSum += lum;
+      }
+    }
+  }
+
+  if (innerCount < 4 || outerCount < 4) return false;
+
+  const innerDarkFrac = innerDark / innerCount;
+  const innerMean = innerLumSum / innerCount;
+  const outerMean = outerLumSum / outerCount;
+
+  if (innerDarkFrac < 0.68) return false;
+  if (innerMean > 62) return false;
+  if (outerMean - innerMean < 38) return false;
+  if (outerMean < 42 && innerMean < 38) return false;
+
+  return true;
+}
+
 /** Estado por esquina [TL, TR, BL, BR] de fiduciales negros en parches de esquina. */
 function detectFiducialsAtCornerPatches(
   ctx: CanvasRenderingContext2D,
@@ -2735,17 +2857,7 @@ function detectFiducialsAtCornerPatches(
     const px = Math.max(0, Math.min(W - patchW, Math.round(c.x - patchW / 2)));
     const py = Math.max(0, Math.min(H - patchH, Math.round(c.y - patchH / 2)));
     const id = ctx.getImageData(px, py, patchW, patchH);
-    let darkCount = 0;
-    let lumSum = 0;
-    const total = patchW * patchH;
-    for (let j = 0; j < id.data.length; j += 4) {
-      const lum = id.data[j]! * 0.299 + id.data[j + 1]! * 0.587 + id.data[j + 2]! * 0.114;
-      lumSum += lum;
-      if (lum < 88) darkCount++;
-    }
-    const darkFrac = darkCount / total;
-    const meanLum = lumSum / total;
-    detected[i] = darkFrac >= 0.1 && meanLum < 175;
+    detected[i] = isPrintedCornerFiducialPatch(id, patchW, patchH);
   }
   return detected;
 }
