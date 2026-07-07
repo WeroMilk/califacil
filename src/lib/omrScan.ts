@@ -3326,6 +3326,29 @@ export function prepareMobileScannedDocumentCanvasFast(
   return finishMobileScannedDocumentCanvas(src, opts);
 }
 
+/**
+ * Hoja enderezada lista para mostrar y calificar como un PDF impreso:
+ * recorte a límites de impresión, fondo limpio, proporción carta.
+ */
+export function prepareMobileGradeDocumentCanvas(
+  warped: HTMLCanvasElement,
+  warpAlignment?: WarpAlignmentReport | null
+): HTMLCanvasElement {
+  if (typeof document === 'undefined') return warped;
+  const precise = mobileWarpAlignmentIsPrecise(warpAlignment);
+  if (precise && isCalifacilWarpedLetterCanvas(warped)) {
+    const refined = refineWarpedCalifacilSheet(warped, { fast: false });
+    const deskewed = deskewWarpedCalifacilSheet(refined.canvas);
+    const trimmed = trimCanvasContentBorders(deskewed) ?? deskewed;
+    return cropWarpedAnswerSheetToPrintBounds(trimmed) ?? trimmed;
+  }
+  return (
+    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: false }) ??
+    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ??
+    warped
+  );
+}
+
 function buildAnswerSheetCaptureVariants(
   canvas: HTMLCanvasElement
 ): Array<{ canvas: HTMLCanvasElement; preferFullSheetFirst: boolean }> {
@@ -7544,8 +7567,9 @@ export function buildMobileAnswerSheetReviewFromWarp(
   const precise = mobileWarpAlignmentIsPrecise(alignment);
   const prepared =
     opts?.scanCanvas ??
-    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: precise }) ??
-    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: precise });
+    prepareMobileGradeDocumentCanvas(warped, opts?.warpAlignment) ??
+    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ??
+    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: false });
   const scanCanvas = precise && isCalifacilWarpedLetterCanvas(warped) ? warped : (prepared ?? warped);
   const meta = precise
     ? scanWarpedMobileAnswerSheetPrecise(scanCanvas, columns, rowCount)
@@ -7693,7 +7717,7 @@ export function scanWarpedMobileCaptureSheet(
   }
 
   if (!bestMeta) return empty;
-  const reviewCanvas = warped;
+  const reviewCanvas = prepareMobileGradeDocumentCanvas(warped);
   const geometry =
     bestMeta.geometry != null
       ? syncCalifacilOmrGeometryImageSize(

@@ -78,6 +78,7 @@ import {
   type MobileGuideRoiCapture,
   prepareMobileScannedDocumentCanvas,
   prepareMobileScannedDocumentCanvasFast,
+  prepareMobileGradeDocumentCanvas,
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
@@ -910,14 +911,15 @@ export default function CalificarPage() {
   );
 
   const runFastWarpedScan = useCallback(
-    (warped: HTMLCanvasElement) => {
-      const meta = scanWarpedMobileCaptureSheet(warped, omrCols, omrRowCount);
+    (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
+      const docCanvas = prepareMobileGradeDocumentCanvas(warped, warpAlignment);
+      const meta = scanWarpedMobileCaptureSheet(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
           : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
-      const scanCanvas = downscaleCanvasForOmrScan(warped, MOBILE_OMR_SCAN_MAX_SIDE);
-      return { meta, orangeFrameNorm, scanCanvas };
+      const scanCanvas = downscaleCanvasForOmrScan(docCanvas, MOBILE_OMR_SCAN_MAX_SIDE);
+      return { meta, orangeFrameNorm, scanCanvas, docCanvas };
     },
     [omrCols, omrRowCount]
   );
@@ -1466,6 +1468,7 @@ export default function CalificarPage() {
       if (isMobile && skipReviewUi) {
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
         const reviewCanvas =
+          (opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null) ??
           meta.reviewSourceCanvas ??
           (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null);
         let snapUrl: string | null = null;
@@ -1900,12 +1903,6 @@ export default function CalificarPage() {
           toast.error('No se pudo leer la imagen.');
           return;
         }
-        const scanCanvas =
-          downscaleCanvasForOmrScan(fullCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? fullCanvas;
-        flushSync(() => setLiveStatus('Leyendo respuestas…'));
-        await yieldForSpinnerPaint();
-        const galleryResult = await finalizeCapturedSheet(scanCanvas, file, { skipReviewUi: true });
-        if (galleryResult.success) return;
         if (!cameraOpen) {
           await startLiveCamera({ skipPhaseGuard: true });
           await sleep(200);
@@ -3405,11 +3402,11 @@ export default function CalificarPage() {
         }
       }
 
-      const scanCanvas =
+      const docCanvas =
         sheetKind === 'zipgrade'
           ? warped
-          : (prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: true }) ?? warped);
-      const scanPreview = canvasPreviewDataUrl(scanCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
+          : prepareMobileGradeDocumentCanvas(warped, alignment);
+      const scanPreview = canvasPreviewDataUrl(docCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
       if (scanPreview) {
         flushSync(() => setMobileScanPreviewUrl(scanPreview));
         if (video) pauseLiveVideoForScan(video);
@@ -3424,7 +3421,7 @@ export default function CalificarPage() {
         return;
       }
 
-      const sharpness = estimateCanvasSharpness(scanCanvas);
+      const sharpness = estimateCanvasSharpness(docCanvas);
       if (sharpness < MOBILE_MIN_WARPED_SHARPNESS) {
         clearPreview();
         toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
@@ -3459,7 +3456,7 @@ export default function CalificarPage() {
 
       let readingOverride: CalifacilOmrReadingResult | undefined;
       if (sheetKind === 'zipgrade') {
-        const zgScan = scanZipGradeAnswerSheet(scanCanvas, omrCols, chunkRows);
+        const zgScan = scanZipGradeAnswerSheet(docCanvas, omrCols, chunkRows);
         if (chunkRows > 0 && !opts?.fromGallery) {
           toast.message('Hoja ZipGrade detectada. Leyendo burbujas con plantilla de 3 columnas.');
         }
@@ -3475,31 +3472,43 @@ export default function CalificarPage() {
             needsVisionAssist: false,
             maxSameColumnCount: 0,
             geometry: zgScan.geometry,
-            reviewSourceCanvas: scanCanvas,
+            reviewSourceCanvas: docCanvas,
             controlNumberDigits: [],
             controlNumber: null,
           },
           chunk,
-          scanCanvas,
+          docCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
       } else if (sheetKind === 'califacil') {
-        const { meta: warpMeta } = runFastWarpedScan(scanCanvas);
+        const { meta: warpMeta } = runFastWarpedScan(warped, alignment);
         readingOverride = buildCalifacilOmrReadingOverride(
-          warpMeta,
+          {
+            ...warpMeta,
+            reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
+            geometry:
+              warpMeta.geometry != null
+                ? syncCalifacilOmrGeometryImageSize(
+                    warpMeta.geometry,
+                    docCanvas.width,
+                    docCanvas.height
+                  )
+                : null,
+          },
           chunk,
-          scanCanvas,
+          docCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
       }
 
-      const result = await finalizeCapturedSheet(scanCanvas, undefined, {
+      const result = await finalizeCapturedSheet(docCanvas, undefined, {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: sheetKind === 'zipgrade',
+        displaySource: docCanvas,
         readingOverride,
       });
       if (result.success) {
@@ -3595,7 +3604,7 @@ export default function CalificarPage() {
         if (scanGen !== reviewScanGenRef.current) return;
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
-        const { meta, orangeFrameNorm, scanCanvas } = runFastWarpedScan(warped);
+        const { meta, orangeFrameNorm, docCanvas } = runFastWarpedScan(warped, alignment);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
@@ -3603,11 +3612,16 @@ export default function CalificarPage() {
           toast.error('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
+        const geometry = syncCalifacilOmrGeometryImageSize(
+          meta.geometry,
+          docCanvas.width,
+          docCanvas.height
+        );
+        const previewUrl = canvasPreviewDataUrl(docCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
         setMobileReviewAlign({
           warped,
           alignment,
-          geometry: meta.geometry,
+          geometry,
           picks: [...meta.picks],
           draft: mapped.draft,
           previewUrl,
@@ -3646,7 +3660,11 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const scanCanvas = downscaleCanvasForOmrScan(mobileReviewAlign.warped, MOBILE_OMR_SCAN_MAX_SIDE);
+        const docCanvas = prepareMobileGradeDocumentCanvas(
+          mobileReviewAlign.warped,
+          mobileReviewAlign.alignment
+        );
+        const scanCanvas = downscaleCanvasForOmrScan(docCanvas, MOBILE_OMR_SCAN_MAX_SIDE);
         const meta = scanWarpedWithNormTableFrame(scanCanvas, omrCols, omrRowCount, frame);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3654,10 +3672,17 @@ export default function CalificarPage() {
           setReviewStatus('No se pudo leer con ese marco. Ajusta las esquinas.');
           return;
         }
-        const previewUrl = canvasPreviewDataUrl(scanCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? mobileReviewAlign.previewUrl;
+        const geometry = syncCalifacilOmrGeometryImageSize(
+          meta.geometry,
+          docCanvas.width,
+          docCanvas.height
+        );
+        const previewUrl =
+          canvasPreviewDataUrl(docCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ??
+          mobileReviewAlign.previewUrl;
         setMobileReviewAlign({
           ...mobileReviewAlign,
-          geometry: meta.geometry,
+          geometry,
           picks: [...meta.picks],
           draft: mapped.draft,
           previewUrl,
@@ -3685,19 +3710,34 @@ export default function CalificarPage() {
         setReviewStatus('No hay preguntas en esta hoja.');
         return;
       }
-      const { meta, scanCanvas: gradedCanvas } = runFastWarpedScan(mobileReviewAlign.warped);
+      const { meta, docCanvas } = runFastWarpedScan(
+        mobileReviewAlign.warped,
+        mobileReviewAlign.alignment
+      );
       const readingOverride = buildCalifacilOmrReadingOverride(
-        meta,
+        {
+          ...meta,
+          reviewSourceCanvas: docCanvas,
+          geometry:
+            meta.geometry != null
+              ? syncCalifacilOmrGeometryImageSize(
+                  meta.geometry,
+                  docCanvas.width,
+                  docCanvas.height
+                )
+              : null,
+        },
         chunk,
-        gradedCanvas,
+        docCanvas,
         liveLockedAnswersRef.current,
         mobileReviewAlign.alignment
       );
-      const result = await finalizeCapturedSheet(gradedCanvas, undefined, {
+      const result = await finalizeCapturedSheet(docCanvas, undefined, {
         preWarped: true,
         warpAlignment: mobileReviewAlign.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
+        displaySource: docCanvas,
         readingOverride,
       });
       if (result.success) {
