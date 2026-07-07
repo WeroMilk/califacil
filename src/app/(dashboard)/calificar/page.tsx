@@ -82,6 +82,7 @@ import {
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
+  scanCalifacilDesktopGradeDocument,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileCaptureSheet,
   scanWarpedMobileCaptureSheetFast,
@@ -921,7 +922,27 @@ export default function CalificarPage() {
   const runFastWarpedScan = useCallback(
     (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
       const docCanvas = prepareMobileGradeDocumentCanvas(warped, warpAlignment);
-      const meta = scanWarpedMobileCaptureSheet(docCanvas, omrCols, omrRowCount);
+      let meta = scanCalifacilDesktopGradeDocument(docCanvas, omrCols, omrRowCount);
+      const resolved = meta.picks.filter((p) => p !== null).length;
+      const minRecovery = Math.max(1, Math.ceil(omrRowCount * 0.45));
+      if (resolved < minRecovery) {
+        const recovery = scanWarpedMobileCaptureSheet(docCanvas, omrCols, omrRowCount);
+        const recoveryResolved = recovery.picks.filter((p) => p !== null).length;
+        if (recoveryResolved > resolved) {
+          meta = recovery;
+          if (meta.geometry) {
+            meta = {
+              ...meta,
+              geometry: syncCalifacilOmrGeometryImageSize(
+                meta.geometry,
+                docCanvas.width,
+                docCanvas.height
+              ),
+              reviewSourceCanvas: docCanvas,
+            };
+          }
+        }
+      }
       const orangeFrameNorm =
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)

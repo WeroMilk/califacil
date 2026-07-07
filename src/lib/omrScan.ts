@@ -7644,6 +7644,45 @@ export function buildMobileZipGradePreviewPack(
  * Lectura móvil post-captura: prueba CLAHE, varias escalas y algoritmos;
  * elige el mejor resultado y el número de control más completo.
  */
+export const CALIFACIL_DESKTOP_GRADE_SCAN_OPTS = {
+  skipGuideCrop: true,
+  geometryMode: 'fullSheet' as const,
+  preserveInputCanvas: true,
+  fixedTemplateAnchor: true,
+  answerSheetTemplateOnly: false,
+};
+
+/**
+ * Misma lectura que desktop al subir imagen/PDF: barrido fullSheet + plantilla fija.
+ * Usar en hoja ya enderezada (PDF rasterizado, warp móvil, archivo subido).
+ */
+export function scanCalifacilDesktopGradeDocument(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const scanned = scanCalifacilOmrSheetWithMeta(canvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    rowCount: rows,
+  });
+  const geometry = scanned.geometry
+    ? syncCalifacilOmrGeometryImageSize(scanned.geometry, canvas.width, canvas.height)
+    : null;
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      ...scanned,
+      geometry,
+      reviewSourceCanvas: canvas,
+    },
+    rows
+  );
+}
+
+/**
+ * Lectura móvil post-captura: prueba CLAHE, varias escalas y algoritmos;
+ * elige el mejor resultado y el número de control más completo.
+ */
 export function scanWarpedMobileCaptureSheet(
   warped: HTMLCanvasElement,
   columns: number,
@@ -7689,11 +7728,7 @@ export function scanWarpedMobileCaptureSheet(
     const hi = downscaleCanvasForOmrScan(src, 1600);
     const tableFrame = califacilOmrTableFrameNormRect(rows);
     const desktopScanOpts = {
-      skipGuideCrop: true,
-      geometryMode: 'fullSheet' as const,
-      preserveInputCanvas: true,
-      fixedTemplateAnchor: true,
-      answerSheetTemplateOnly: false,
+      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
       rowCount: rows,
     };
     const candidates: OmrScanMetaResult[] = [

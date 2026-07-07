@@ -6,6 +6,7 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
+  scanCalifacilDesktopGradeDocument,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileCaptureSheet,
   syncCalifacilOmrGeometryImageSize,
@@ -139,17 +140,28 @@ export async function runCalifacilOmrReadingPipeline(
 
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
   let meta: OmrScanMetaResult;
-  if (preWarped && isMobileCamera && oriented instanceof HTMLCanvasElement) {
-    meta = scanWarpedMobileCaptureSheet(oriented, omrCols, omrRowCount);
-    if (meta.geometry && meta.reviewSourceCanvas) {
-      meta = {
-        ...meta,
-        geometry: syncCalifacilOmrGeometryImageSize(
-          meta.geometry,
-          meta.reviewSourceCanvas.width,
-          meta.reviewSourceCanvas.height
-        ),
-      };
+  if (oriented instanceof HTMLCanvasElement && (Boolean(fallbackFile) || (preWarped && isMobileCamera))) {
+    meta = scanCalifacilDesktopGradeDocument(oriented, omrCols, omrRowCount);
+    if (preWarped && isMobileCamera) {
+      const resolved = meta.picks.filter((p) => p !== null).length;
+      const minRecovery = Math.max(1, Math.ceil(omrRowCount * 0.45));
+      if (resolved < minRecovery) {
+        const recovery = scanWarpedMobileCaptureSheet(oriented, omrCols, omrRowCount);
+        const recoveryResolved = recovery.picks.filter((p) => p !== null).length;
+        if (recoveryResolved > resolved) {
+          meta = recovery;
+          if (meta.geometry && meta.reviewSourceCanvas) {
+            meta = {
+              ...meta,
+              geometry: syncCalifacilOmrGeometryImageSize(
+                meta.geometry,
+                meta.reviewSourceCanvas.width,
+                meta.reviewSourceCanvas.height
+              ),
+            };
+          }
+        }
+      }
     }
   } else {
     meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
