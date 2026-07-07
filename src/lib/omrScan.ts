@@ -147,6 +147,11 @@ export type CalifacilScanOptions = {
   rowCount?: number;
   /** Incluye métricas de alineación fiducial en el resultado (modo depuración). */
   includeWarpAlignment?: boolean;
+  /**
+   * PDF o raster ya alineado: una sola variante de imagen y menos plantillas/desplazamientos.
+   * El barrido completo sigue disponible como fallback en {@link scanCalifacilDesktopGradeDocument}.
+   */
+  nativeDocumentFast?: boolean;
 };
 
 type ScanThresholds = {
@@ -4598,10 +4603,23 @@ function resolveFixedTemplateCandidates(
     opts?.geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
   if (!strictFixedTemplateMode) return [];
   const detectedTemplate = detectFullSheetFixedTemplate(canvas);
-  return [
+  const all = [
     ...(detectedTemplate ? [detectedTemplate] : []),
     ...buildFullSheetFixedTemplateCandidates(rowCount),
   ];
+  if (opts?.nativeDocumentFast) {
+    const out: OmrFixedTemplate[] = [];
+    const seen = new Set<string>();
+    for (const t of all) {
+      const key = `${t.tableLeftRatio.toFixed(4)}:${t.tableTopRatio.toFixed(4)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(t);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+  return all;
 }
 
 /**
@@ -7384,7 +7402,9 @@ export function scanCalifacilOmrSheet(
   const fixedTemplateShifts = strictFixedTemplateMode
     ? templateGridOnly
       ? ([0] as const)
-      : ([-10, -6, -3, 0, 3, 6, 10] as const)
+      : opts?.nativeDocumentFast
+        ? ([-6, -3, 0, 3, 6] as const)
+        : ([-10, -6, -3, 0, 3, 6, 10] as const)
     : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
@@ -7655,6 +7675,8 @@ export const CALIFACIL_DESKTOP_GRADE_SCAN_OPTS = {
 /**
  * Misma lectura que desktop al subir imagen/PDF: barrido fullSheet + plantilla fija.
  * Usar en hoja ya enderezada (PDF rasterizado, warp móvil, archivo subido).
+ *
+ * Ruta rápida: plantilla fija sin desplazamiento → documento nativo acotado → barrido completo.
  */
 export function scanCalifacilDesktopGradeDocument(
   canvas: HTMLCanvasElement,
@@ -7662,21 +7684,60 @@ export function scanCalifacilDesktopGradeDocument(
   rowCount?: number
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
-  const scanned = scanCalifacilOmrSheetWithMeta(canvas, columns, {
+  const finish = (scanned: OmrScanMetaResult) => {
+    const geometry = scanned.geometry
+      ? syncCalifacilOmrGeometryImageSize(scanned.geometry, canvas.width, canvas.height)
+      : null;
+    return sanitizeAnswerSheetOmrMeta(
+      {
+        ...scanned,
+        geometry,
+        reviewSourceCanvas: canvas,
+      },
+      rows
+    );
+  };
+
+  const countResolved = (meta: OmrScanMetaResult) => meta.picks.filter((p) => p !== null).length;
+  const minAutoRead = Math.max(1, Math.ceil(rows * 0.9));
+  const minRecovery = Math.max(1, Math.ceil(rows * 0.45));
+  const isGoodEnough = (meta: OmrScanMetaResult) => {
+    if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
+    const resolved = countResolved(meta);
+    if (resolved < minRecovery) return false;
+    if (!meta.geometry) return false;
+    return validateAnswerSheetGeometry(meta.geometry, rows).ok && resolved >= minAutoRead;
+  };
+
+  const fast = scanCalifacilOmrSheetWithMeta(canvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    answerSheetTemplateOnly: true,
+    rowCount: rows,
+  });
+  if (isGoodEnough(fast)) return finish(fast);
+
+  const medium = scanCalifacilOmrSheetWithMeta(canvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    nativeDocumentFast: true,
+    rowCount: rows,
+  });
+  if (isGoodEnough(medium)) return finish(medium);
+
+  const full = scanCalifacilOmrSheetWithMeta(canvas, columns, {
     ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
     rowCount: rows,
   });
-  const geometry = scanned.geometry
-    ? syncCalifacilOmrGeometryImageSize(scanned.geometry, canvas.width, canvas.height)
-    : null;
-  return sanitizeAnswerSheetOmrMeta(
-    {
-      ...scanned,
-      geometry,
-      reviewSourceCanvas: canvas,
-    },
-    rows
-  );
+
+  let best = full;
+  let bestScore = scoreOmrMetaPicks(full, rows);
+  for (const candidate of [medium, fast]) {
+    const score = scoreOmrMetaPicks(candidate, rows);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return finish(best);
 }
 
 /**
@@ -7920,9 +7981,11 @@ export function scanCalifacilOmrSheetWithMeta(
 
   const corrected = opts?.preserveInputCanvas ? canvas : applyPerspectiveCorrection(canvas);
   const variants = opts?.preserveInputCanvas
-    ? templateGridOnly
+    ? opts?.nativeDocumentFast
       ? [{ canvas, preferFullSheetFirst: true }]
-      : buildPreservedInputVariants(canvas)
+      : templateGridOnly
+        ? [{ canvas, preferFullSheetFirst: true }]
+        : buildPreservedInputVariants(canvas)
     : buildOmrScanCanvasVariants(canvas, corrected);
 
   const emptyRows: OmrScanRowDetail[] = Array.from({ length: rowCount }, () => ({
@@ -7971,7 +8034,9 @@ export function scanCalifacilOmrSheetWithMeta(
   const fixedTemplateShifts = strictFixedTemplateMode
     ? templateGridOnly
       ? ([0] as const)
-      : ([-10, -6, -3, 0, 3, 6, 10] as const)
+      : opts?.nativeDocumentFast
+        ? ([-6, -3, 0, 3, 6] as const)
+        : ([-10, -6, -3, 0, 3, 6, 10] as const)
     : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
