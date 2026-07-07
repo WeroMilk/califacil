@@ -7664,19 +7664,23 @@ export function scanWarpedMobileCaptureSheet(
     const mid = downscaleCanvasForOmrScan(src, 1280);
     const hi = downscaleCanvasForOmrScan(src, 1600);
     const tableFrame = califacilOmrTableFrameNormRect(rows);
+    const desktopScanOpts = {
+      skipGuideCrop: true,
+      geometryMode: 'fullSheet' as const,
+      preserveInputCanvas: true,
+      fixedTemplateAnchor: true,
+      answerSheetTemplateOnly: false,
+      rowCount: rows,
+    };
     const candidates: OmrScanMetaResult[] = [
       scanWarpedMobileAnswerSheetFast(hi, columns, rows),
       scanWarpedMobileAnswerSheetFast(mid, columns, rows),
+      scanWarpedWithNormTableFrame(hi, columns, rows, tableFrame),
       scanWarpedWithNormTableFrame(mid, columns, rows, tableFrame),
+      scanWarpedWithBestTableFrame(hi, columns, rows).meta,
       scanWarpedWithBestTableFrame(mid, columns, rows).meta,
-      scanCalifacilOmrSheetWithMeta(src, columns, {
-        skipGuideCrop: true,
-        geometryMode: 'fullSheet',
-        preserveInputCanvas: true,
-        fixedTemplateAnchor: true,
-        answerSheetTemplateOnly: true,
-        rowCount: rows,
-      }),
+      scanCalifacilOmrSheetWithMeta(src, columns, desktopScanOpts),
+      scanCalifacilOmrSheetWithMeta(hi, columns, desktopScanOpts),
     ];
 
     for (const meta of candidates) {
@@ -7689,9 +7693,20 @@ export function scanWarpedMobileCaptureSheet(
   }
 
   if (!bestMeta) return empty;
+  const reviewCanvas = warped;
+  const geometry =
+    bestMeta.geometry != null
+      ? syncCalifacilOmrGeometryImageSize(
+          bestMeta.geometry,
+          reviewCanvas.width,
+          reviewCanvas.height
+        )
+      : null;
   return sanitizeAnswerSheetOmrMeta(
     {
       ...bestMeta,
+      geometry,
+      reviewSourceCanvas: reviewCanvas,
       controlNumberDigits: bestControl.digits,
       controlNumber: bestControl.controlNumber,
     },

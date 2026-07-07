@@ -7,6 +7,8 @@ import {
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
   scanCalifacilOmrSheetWithMeta,
+  scanWarpedMobileCaptureSheet,
+  syncCalifacilOmrGeometryImageSize,
   type OmrScanMetaResult,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
@@ -136,25 +138,37 @@ export async function runCalifacilOmrReadingPipeline(
     preWarped && isMobileCamera ? true : isMobileCamera ? sheetStrict : Boolean(fallbackFile);
 
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
-  let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
-    skipGuideCrop: true,
-    geometryMode:
-      preWarped && isMobileCamera
-        ? 'fullSheet'
-        : isMobileCamera
+  let meta: OmrScanMetaResult;
+  if (preWarped && isMobileCamera && oriented instanceof HTMLCanvasElement) {
+    meta = scanWarpedMobileCaptureSheet(oriented, omrCols, omrRowCount);
+    if (meta.geometry && meta.reviewSourceCanvas) {
+      meta = {
+        ...meta,
+        geometry: syncCalifacilOmrGeometryImageSize(
+          meta.geometry,
+          meta.reviewSourceCanvas.width,
+          meta.reviewSourceCanvas.height
+        ),
+      };
+    }
+  } else {
+    meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
+      skipGuideCrop: true,
+      geometryMode:
+        isMobileCamera
           ? 'auto'
           : fallbackFile
             ? 'fullSheet'
             : isMobile
               ? 'fullSheet'
               : 'auto',
-    preserveInputCanvas:
-      preWarped && isMobileCamera ? true : isMobileCamera ? false : preserveCapturedFrame,
-    fixedTemplateAnchor: useFixedTemplate,
-    answerSheetTemplateOnly: preWarped && isMobileCamera,
-    rowCount: omrRowCount,
-    includeWarpAlignment: Boolean(input.includeWarpAlignment) || Boolean(input.warpAlignment),
-  });
+      preserveInputCanvas: isMobileCamera ? false : preserveCapturedFrame,
+      fixedTemplateAnchor: useFixedTemplate,
+      answerSheetTemplateOnly: false,
+      rowCount: omrRowCount,
+      includeWarpAlignment: Boolean(input.includeWarpAlignment) || Boolean(input.warpAlignment),
+    });
+  }
 
   const warpAlignment = input.warpAlignment ?? meta.warpAlignment ?? null;
 
