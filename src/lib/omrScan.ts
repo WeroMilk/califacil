@@ -6012,17 +6012,70 @@ export function scanWarpedWithNormTableFrame(
       controlNumber: null,
     };
   }
-  const geometry = buildUniformBubbleGridInNormFrame(
+  const geometry = buildAnswerSheetOmrGeometryInNormRect(
     tableFrame,
     rows,
     columns,
     warped.width,
     warped.height,
-    warped.getContext('2d', { willReadFrequently: true })?.getImageData(0, 0, warped.width, warped.height)
-      .data ?? null
+    warped
   );
   const refined = refineAnswerSheetGeometryToBubblePeaks(warped, geometry);
   return omrMetaFromGeometry(warped, refined, rows, columns);
+}
+
+/**
+ * Hoja enderezada/recortada: detecta líneas impresas y centra celdas en burbujas reales.
+ * Usar en capturas móviles y fotos de cámara (no en PDF rasterizado plano).
+ */
+export function scanWarpedGradeDocument(
+  docCanvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const emptyRows = (): OmrScanRowDetail[] =>
+    Array.from({ length: rows }, () => ({ pick: null, ambiguous: false, inkFractions: [] }));
+  const empty: OmrScanMetaResult = {
+    picks: Array(rows).fill(null),
+    rows: emptyRows(),
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: null,
+    reviewSourceCanvas: docCanvas,
+    controlNumberDigits: [],
+    controlNumber: null,
+  };
+  if (typeof document === 'undefined' || docCanvas.width < 40 || docCanvas.height < 40) {
+    return empty;
+  }
+
+  const candidates: OmrScanMetaResult[] = [
+    scanWarpedWithBestTableFrame(docCanvas, columns, rows).meta,
+    scanWarpedMobileCaptureSheet(docCanvas, columns, rows),
+  ];
+
+  let best = candidates[0]!;
+  let bestScore = scoreOmrMetaPicks(best, rows);
+  for (const candidate of candidates.slice(1)) {
+    const score = scoreOmrMetaPicks(candidate, rows);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  const geometry = best.geometry
+    ? syncCalifacilOmrGeometryImageSize(best.geometry, docCanvas.width, docCanvas.height)
+    : null;
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      ...best,
+      geometry,
+      reviewSourceCanvas: docCanvas,
+    },
+    rows
+  );
 }
 
 /**
@@ -6109,7 +6162,37 @@ export function buildRegisteredAnswerSheetGeometry(
     return buildAnswerSheetOmrGeometry(rowCount, columns, width, height);
   }
 
-  const columnEdges = uniformColEdges;
+  let columnEdges = uniformColEdges;
+  if (imageData) {
+    const detectedCols = inferColumnEdgesFromVerticalLines(
+      imageData,
+      width,
+      height,
+      bubbleAreaLeft,
+      bubbleAreaW,
+      cols,
+      dataTop,
+      rowH
+    );
+    if (detectedCols && detectedCols.length === cols + 1) {
+      const span = detectedCols[cols]! - detectedCols[0]!;
+      let maxEdgeDev = 0;
+      const cellW = bubbleAreaW / cols;
+      for (let i = 0; i <= cols; i++) {
+        maxEdgeDev = Math.max(maxEdgeDev, Math.abs(detectedCols[i]! - uniformColEdges[i]!));
+      }
+      if (
+        span >= bubbleAreaW * 0.58 &&
+        span <= bubbleAreaW * 1.42 &&
+        maxEdgeDev <= cellW * 0.78
+      ) {
+        columnEdges = detectedCols.map((x, i) =>
+          Math.round(x * 0.8 + uniformColEdges[i]! * 0.2)
+        );
+      }
+    }
+  }
+
   const cells: OmrNormRect[][] = [];
   for (let row = 0; row < rows; row++) {
     const yRowTop = lineYs[row]!;
