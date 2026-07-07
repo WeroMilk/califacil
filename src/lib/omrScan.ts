@@ -7706,7 +7706,13 @@ export function scanCalifacilDesktopGradeDocument(
     const resolved = countResolved(meta);
     if (resolved < minRecovery) return false;
     if (!meta.geometry) return false;
-    return validateAnswerSheetGeometry(meta.geometry, rows).ok && resolved >= minAutoRead;
+    if (!validateAnswerSheetGeometry(meta.geometry, rows).ok) return false;
+    if (resolved < minAutoRead) return false;
+    const same = meta.maxSameColumnCount ?? 0;
+    if (same >= Math.ceil(rows * 0.75)) return false;
+    const ambiguous = meta.rows.slice(0, rows).filter((r) => r.ambiguous).length;
+    if (ambiguous > Math.ceil(rows * 0.35)) return false;
+    return scoreOmrMetaPicks(meta, rows) >= rows * 70;
   };
 
   const fast = scanCalifacilOmrSheetWithMeta(canvas, columns, {

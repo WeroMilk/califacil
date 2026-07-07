@@ -140,9 +140,9 @@ export async function runCalifacilOmrReadingPipeline(
 
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
   let meta: OmrScanMetaResult;
-  if (oriented instanceof HTMLCanvasElement && (Boolean(fallbackFile) || (preWarped && isMobileCamera))) {
+  if (oriented instanceof HTMLCanvasElement && (Boolean(fallbackFile) || preWarped)) {
     meta = scanCalifacilDesktopGradeDocument(oriented, omrCols, omrRowCount);
-    if (preWarped && isMobileCamera) {
+    if (preWarped) {
       const resolved = meta.picks.filter((p) => p !== null).length;
       const minRecovery = Math.max(1, Math.ceil(omrRowCount * 0.45));
       if (resolved < minRecovery) {
