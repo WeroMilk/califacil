@@ -381,7 +381,8 @@ export async function runCalifacilOmrReadingPipeline(
     if (v) updatedLiveLocks[q.id] = v;
   }
 
-  const insufficientForReview = mergedResolved < minResolved && !isMobileCamera;
+  const insufficientForReview =
+    !mostlyBlank && mergedResolved < minResolved && !isMobileCamera;
 
   return {
     meta,
@@ -457,7 +458,7 @@ export function buildCalifacilOmrReadingOverride(
     mostlyBlank,
     minResolved,
     ambiguousIdx,
-    insufficientForReview: mergedResolved < minResolved,
+    insufficientForReview: !mostlyBlank && mergedResolved < minResolved,
     updatedLiveLocks,
   };
 }

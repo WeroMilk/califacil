@@ -13,11 +13,18 @@ import {
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, Info, LayoutDashboard, Loader2, X } from 'lucide-react';
+import { AlertCircle, FileUp, Info, LayoutDashboard, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
 import { downloadCalificacionCsv } from '@/lib/calificarExport';
+import {
+  canvasToJpegFile,
+  createPdfGradingHandle,
+  PDF_OMR_RENDER_MAX_SIDE,
+  renderPdfGradingPageCanvas,
+  type PdfGradingHandle,
+} from '@/lib/pdfClientPreview';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
@@ -700,6 +707,14 @@ export default function CalificarPage() {
     ((opts?: { skipPhaseGuard?: boolean }) => Promise<boolean>) | undefined
   >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const pendingPdfGradingRef = useRef<{
+    handle: PdfGradingHandle;
+    nextPage: number;
+    lastPage: number;
+  } | null>(null);
+  const prefetchedPdfCanvasRef = useRef<{ page: number; canvas: HTMLCanvasElement } | null>(null);
+  const prefetchPdfPageTaskRef = useRef(0);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
   const sheetIndexRef = useRef(0);
   const prevPhaseRef = useRef<Phase>('elegir');
@@ -1519,12 +1534,15 @@ export default function CalificarPage() {
         setReviewOmrPicks(raw.slice(0, chunk.length));
         setPhase('revisar_hoja');
         setLiveStatus(
-          mapped.unresolvedCount > 0
-            ? `Lectura parcial: ${mapped.unresolvedCount} sin lectura clara.`
-            : 'Lectura completa lista para confirmar.'
+          mostlyBlank
+            ? 'Hoja sin respuestas marcadas (0%). Confirma para guardar.'
+            : mapped.unresolvedCount > 0
+              ? `Lectura parcial: ${mapped.unresolvedCount} sin lectura clara.`
+              : 'Lectura completa lista para confirmar.'
         );
-        const scanNote =
-          mapped.unresolvedCount > 0
+        const scanNote = mostlyBlank
+          ? 'Hoja en blanco detectada (0%). Revisa y confirma.'
+          : mapped.unresolvedCount > 0
             ? `Lectura realizada (${mapped.unresolvedCount} sin lectura clara). Revisa y confirma.`
             : 'Lectura realizada. Revisa y confirma.';
         toast.message(scanNote);
@@ -1687,6 +1705,70 @@ export default function CalificarPage() {
     };
   }, [stopLiveCamera]);
 
+  const clearPendingPdfGrading = useCallback(() => {
+    prefetchPdfPageTaskRef.current += 1;
+    pendingPdfGradingRef.current?.handle.dispose();
+    pendingPdfGradingRef.current = null;
+    prefetchedPdfCanvasRef.current = null;
+  }, []);
+
+  const schedulePrefetchNextPdfPage = useCallback(() => {
+    const pending = pendingPdfGradingRef.current;
+    if (!pending) return;
+    const page = pending.nextPage;
+    if (page > pending.lastPage) return;
+    const task = prefetchPdfPageTaskRef.current;
+    void pending.handle.renderPageAsCanvas(page).then((canvas) => {
+      if (task !== prefetchPdfPageTaskRef.current) return;
+      if (!canvas || pendingPdfGradingRef.current !== pending) return;
+      if (pending.nextPage !== page) return;
+      prefetchedPdfCanvasRef.current = { page, canvas };
+    });
+  }, []);
+
+  const takeNextPdfPageCanvas = useCallback(async (): Promise<{
+    canvas: HTMLCanvasElement;
+    page: number;
+  } | null> => {
+    const pending = pendingPdfGradingRef.current;
+    if (!pending) return null;
+    const page = pending.nextPage;
+    if (page > pending.lastPage) {
+      clearPendingPdfGrading();
+      return null;
+    }
+    prefetchPdfPageTaskRef.current += 1;
+    const prefetched = prefetchedPdfCanvasRef.current;
+    let canvas: HTMLCanvasElement | null = null;
+    if (prefetched?.page === page) {
+      canvas = prefetched.canvas;
+      prefetchedPdfCanvasRef.current = null;
+    } else {
+      canvas = await pending.handle.renderPageAsCanvas(page);
+    }
+    if (!canvas) return null;
+    pending.nextPage += 1;
+    if (pending.nextPage > pending.lastPage) {
+      pending.handle.dispose();
+      pendingPdfGradingRef.current = null;
+    } else {
+      schedulePrefetchNextPdfPage();
+    }
+    return { canvas, page };
+  }, [clearPendingPdfGrading, schedulePrefetchNextPdfPage]);
+
+  const finalizePdfPageForGrading = useCallback(
+    async (rawCanvas: HTMLCanvasElement, pageNumber: number) => {
+      const scanCanvas =
+        downscaleCanvasForOmrScan(rawCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? rawCanvas;
+      const pseudoFile = await canvasToJpegFile(scanCanvas, `pdf-pagina-${pageNumber}.jpg`);
+      flushSync(() => setLiveStatus('Leyendo respuestas…'));
+      await yieldForSpinnerPaint();
+      await finalizeCapturedSheet(scanCanvas, pseudoFile);
+    },
+    [finalizeCapturedSheet]
+  );
+
   const resetFlow = useCallback(() => {
     stopLiveCamera();
     clearMobileSnapshots();
@@ -1712,7 +1794,8 @@ export default function CalificarPage() {
     setReviewOmrPicks([]);
     setSelectedStudentId(CALIFICAR_AUTO_STUDENT_ID);
     setDetectedControlNumber(null);
-  }, [stopLiveCamera, isMobile, clearMobileSnapshots]);
+    clearPendingPdfGrading();
+  }, [stopLiveCamera, isMobile, clearMobileSnapshots, clearPendingPdfGrading]);
 
   const handleStudentChange = (studentId: string) => {
     if (!canGradeStudents) {
@@ -1797,7 +1880,9 @@ export default function CalificarPage() {
     if (phase === 'elegir') {
       setPhase('capturar');
     }
+    clearPendingPdfGrading();
     setScanBusy(true);
+    setLiveStatus('Leyendo imagen…');
     await yieldForSpinnerPaint();
     try {
       const img = await fileToImage(file);
@@ -1817,6 +1902,73 @@ export default function CalificarPage() {
       }
     } catch {
       toast.error('No se pudo leer la imagen. Prueba otra foto más nítida.');
+    } finally {
+      setScanBusy(false);
+    }
+  };
+
+  const handlePdfFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!examId || !exam || !supportsCalifacil) {
+      toast.error('Selecciona primero un examen válido.');
+      return;
+    }
+    if (phase !== 'capturar' && phase !== 'elegir') {
+      toast.error('Termina la hoja actual antes de importar otro archivo.');
+      return;
+    }
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      toast.error('Elige un archivo PDF.');
+      return;
+    }
+    if (phase === 'elegir') {
+      setPhase('capturar');
+    }
+    setScanBusy(true);
+    await yieldForSpinnerPaint();
+    try {
+      clearPendingPdfGrading();
+      flushSync(() => setLiveStatus('Renderizando página 1 del PDF en el servidor…'));
+      await yieldForSpinnerPaint();
+      const { canvas: firstCanvas, numPages } = await renderPdfGradingPageCanvas(file, 1);
+      if (numPages === 0) {
+        toast.error('El PDF no tiene páginas legibles.');
+        return;
+      }
+      const handle = createPdfGradingHandle(file, numPages);
+      const sheetsNeeded = Math.max(1, totalSheets - sheetIndexRef.current);
+      const lastPage = Math.min(numPages, sheetsNeeded);
+      if (numPages > lastPage) {
+        toast.message(
+          `PDF con ${numPages} páginas: se usarán ${lastPage} para las hojas restantes del examen.`
+        );
+      } else if (numPages > 1 && totalSheets === 1) {
+        toast.message('PDF con varias páginas: se calificará la página 1.');
+      } else if (numPages > 1) {
+        toast.message(
+          `PDF con ${numPages} página(s). Tras confirmar cada hoja se cargará la siguiente automáticamente.`
+        );
+      }
+      await finalizePdfPageForGrading(firstCanvas, 1);
+      if (lastPage > 1) {
+        pendingPdfGradingRef.current = { handle, nextPage: 2, lastPage };
+        schedulePrefetchNextPdfPage();
+      } else {
+        handle.dispose();
+      }
+    } catch (err) {
+      clearPendingPdfGrading();
+      const message =
+        err instanceof Error ? err.message : 'No se pudo leer el PDF.';
+      toast.error(
+        message.includes('Sesión') || message.length < 120
+          ? message
+          : 'No se pudo leer el PDF. Prueba otro archivo o exporta las páginas como imagen.'
+      );
     } finally {
       setScanBusy(false);
     }
@@ -2770,7 +2922,9 @@ export default function CalificarPage() {
     await pushMobileSheetSnapshot();
 
     if (!isLast) {
-      setSheetIndex((s) => s + 1);
+      const nextIdx = sheetIndex + 1;
+      setSheetIndex(nextIdx);
+      sheetIndexRef.current = nextIdx;
       setReviewOmrGeometry(null);
       setReviewOmrPicks([]);
       setPreviewUrl((u) => {
@@ -2785,6 +2939,21 @@ export default function CalificarPage() {
           ? `Hoja ${sheetIndex + 1} guardada. Pulsa «Tomar foto» para la siguiente hoja.`
           : `Hoja ${sheetIndex + 1} guardada. Importa la foto de la siguiente hoja.`
       );
+      const nextPdf = !isMobile ? await takeNextPdfPageCanvas() : null;
+      if (nextPdf) {
+        setScanBusy(true);
+        flushSync(() =>
+          setLiveStatus(`Renderizando página ${nextPdf.page} del PDF en el servidor…`)
+        );
+        await yieldForSpinnerPaint();
+        try {
+          await finalizePdfPageForGrading(nextPdf.canvas, nextPdf.page);
+        } catch {
+          toast.error('No se pudo leer la siguiente página del PDF.');
+        } finally {
+          setScanBusy(false);
+        }
+      }
       return;
     }
 
@@ -3970,7 +4139,26 @@ export default function CalificarPage() {
           aria-hidden
           onChange={handleGalleryFile}
         />
-      ) : null}
+      ) : (
+        <>
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            aria-hidden
+            onChange={handleGalleryFile}
+          />
+          <input
+            ref={pdfInputRef}
+            type="file"
+            accept=".pdf,application/pdf"
+            className="sr-only"
+            aria-hidden
+            onChange={handlePdfFile}
+          />
+        </>
+      )}
 
       <div
         className={cn(
@@ -3982,7 +4170,7 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Cámara a pantalla completa: encuadra toda la hoja impresa. Captura automática al detectar respuestas, o pulsa el botón naranja.'
-            : 'En ordenador sube exámenes escaneados (JPG/PNG) para leer la tabla CaliFacil y calificar automáticamente.'}
+            : 'En ordenador sube exámenes escaneados (JPG, PNG o PDF) para leer la tabla CaliFacil y calificar automáticamente.'}
         </p>
       </div>
 
@@ -4084,6 +4272,45 @@ export default function CalificarPage() {
                   >
                     Ver tabla clave
                   </Button>
+                </div>
+              )}
+
+              {!isMobile && exam && supportsCalifacil && canGradeStudents && (
+                <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
+                  <p className="text-sm text-gray-700">
+                    Sube el escaneo de la hoja de respuestas en <strong>imagen</strong> o{' '}
+                    <strong>PDF</strong> (una página por hoja del examen).
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      className="bg-orange-600 hover:bg-orange-700"
+                      disabled={scanBusy}
+                      onClick={() => galleryInputRef.current?.click()}
+                    >
+                      {scanBusy ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                          Leyendo archivo…
+                        </>
+                      ) : (
+                        'Elegir imagen…'
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                      disabled={scanBusy}
+                      onClick={() => pdfInputRef.current?.click()}
+                    >
+                      <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                      Subir PDF…
+                    </Button>
+                  </div>
+                  {scanBusy && liveStatus ? (
+                    <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
+                  ) : null}
                 </div>
               )}
 
@@ -4336,41 +4563,47 @@ export default function CalificarPage() {
           <CardContent className="space-y-4">
             {phase === 'capturar' && (
               <div className="space-y-3">
-                <input
-                  ref={galleryInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="sr-only"
-                  onChange={handleGalleryFile}
-                />
                 <div className="space-y-3">
                   <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
                     <p className="text-sm text-gray-700">
-                      En ordenador sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
-                      CaliFácil con preguntas y tabla al pie) o recorta solo el recuadro CaliFacil. Se leen las
-                      casillas A–D y al guardar se califica comparando con la clave del examen.
+                      Sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
+                      CaliFácil con preguntas y tabla al pie), un recorte del recuadro CaliFacil, o un{' '}
+                      <strong>PDF</strong> escaneado. Se leen las casillas A–D y al guardar se califica
+                      comparando con la clave del examen.
                     </p>
-                    <Button
-                      type="button"
-                      className={cn(
-                        'mt-4 bg-orange-600 hover:bg-orange-700',
-                        scanBusy && 'disabled:opacity-100'
-                      )}
-                      disabled={scanBusy}
-                      onClick={() => galleryInputRef.current?.click()}
-                    >
-                      {scanBusy ? (
-                        <>
-                          <Loader2
-                            className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                            aria-hidden
-                          />
-                          Leyendo imagen…
-                        </>
-                      ) : (
-                        'Elegir imagen…'
-                      )}
-                    </Button>
+                    <div className="mt-4 flex flex-wrap justify-center gap-2">
+                      <Button
+                        type="button"
+                        className={cn(
+                          'bg-orange-600 hover:bg-orange-700',
+                          scanBusy && 'disabled:opacity-100'
+                        )}
+                        disabled={scanBusy}
+                        onClick={() => galleryInputRef.current?.click()}
+                      >
+                        {scanBusy ? (
+                          <>
+                            <Loader2
+                              className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
+                              aria-hidden
+                            />
+                            Leyendo archivo…
+                          </>
+                        ) : (
+                          'Elegir imagen…'
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                        disabled={scanBusy}
+                        onClick={() => pdfInputRef.current?.click()}
+                      >
+                        <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                        Subir PDF…
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4492,6 +4725,7 @@ export default function CalificarPage() {
                         return;
                       }
                       setPhase('capturar');
+                      clearPendingPdfGrading();
                       setReviewOmrGeometry(null);
                       setReviewOmrPicks([]);
                       setPreviewUrl((u) => {

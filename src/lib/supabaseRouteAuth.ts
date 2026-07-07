@@ -80,3 +80,12 @@ export async function dashboardAuthJsonHeaders(): Promise<HeadersInit> {
   }
   return headers;
 }
+
+/** Solo Authorization (para FormData sin Content-Type fijo). */
+export async function dashboardAuthHeadersOnly(): Promise<Record<string, string>> {
+  const authHeaders = await dashboardAuthJsonHeaders();
+  const headers: Record<string, string> = {};
+  const auth = (authHeaders as Record<string, string>).Authorization;
+  if (auth) headers.Authorization = auth;
+  return headers;
+}
