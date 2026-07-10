@@ -191,7 +191,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { useIsMobile } from '@/hooks/use-mobile';
+import { useCalificarLiveCamera, useIsMobile } from '@/hooks/use-mobile';
 import {
   CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO,
   CALIFACIL_MIN_AUTO_READ_RATIO,
@@ -543,8 +543,8 @@ function CalifacilReviewImageStack({
 export default function CalificarPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
-  // En desktop la calificación debe hacerse solo por carga de imágenes escaneadas.
-  const useLiveCameraUi = isMobile;
+  // Cámara solo en móvil táctil; en escritorio (ratón) solo subida de archivos.
+  const useLiveCameraUi = useCalificarLiveCamera();
   const { user } = useAuth();
   const { exams, loading: examsLoading } = useExams(user?.id);
 
@@ -989,7 +989,7 @@ export default function CalificarPage() {
       }
       const orangeFrame =
         geometry != null
-          ? califacilReviewOrangeFrameRect(geometry, rowCount)
+          ? califacilOmrOrangeFrameRect(geometry, rowCount)
           : orangeFrameNorm != null
             ? {
                 x: orangeFrameNorm.x,
@@ -1373,7 +1373,7 @@ export default function CalificarPage() {
       let gradeSkipSheetValidation = opts?.skipSheetValidation;
 
       /** PDF rasterizado: plano. Foto de cámara: auto-orientar y/o warp previo. */
-      const isMobileCamera = isMobile && !fallbackFile;
+      const isMobileCamera = useLiveCameraUi && !fallbackFile;
       const isDesktopFileUpload = !isMobile && Boolean(fallbackFile);
 
       let classifiedUploadKind: DesktopUploadKind | undefined;
@@ -1725,7 +1725,7 @@ export default function CalificarPage() {
 
       return { success: true, chunkDraft: mapped.draft };
     },
-    [exam, examId, isMobile, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil]
+    [exam, examId, isMobile, useLiveCameraUi, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil]
   );
 
   finalizeCapturedSheetRef.current = finalizeCapturedSheet;
@@ -1789,6 +1789,13 @@ export default function CalificarPage() {
       stopLiveCamera();
     }
   }, [cameraOpen, phase, stopLiveCamera]);
+
+  useEffect(() => {
+    if (!useLiveCameraUi) {
+      stopLiveCamera();
+      setCameraPermissionPhase('granted');
+    }
+  }, [useLiveCameraUi, stopLiveCamera]);
 
   useEffect(() => {
     setCameraPortalReady(true);
@@ -2069,7 +2076,7 @@ export default function CalificarPage() {
     await yieldForSpinnerPaint();
     try {
       const img = await fileToImage(file);
-      if (isMobile) {
+      if (useLiveCameraUi) {
         const fullCanvas = captureImageFullFrame(img, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
         if (!fullCanvas) {
           toast.error('No se pudo leer la imagen.');
@@ -2160,6 +2167,7 @@ export default function CalificarPage() {
   };
 
   const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
+    if (!useLiveCameraUi) return false;
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return false;
@@ -2960,6 +2968,7 @@ export default function CalificarPage() {
     flashOn,
     flashSupported,
     isMobile,
+    useLiveCameraUi,
     stopLiveCamera,
     updateLiveVideoLayout,
     isMobile,
@@ -3006,16 +3015,26 @@ export default function CalificarPage() {
         setPhase('capturar');
       });
       phaseRef.current = 'capturar';
+      if (!useLiveCameraUi) return;
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           void startLiveCamera({ skipPhaseGuard: true });
         });
       });
     },
-    [sheets, startLiveCamera, stopLiveCamera]
+    [useLiveCameraUi, sheets, startLiveCamera, stopLiveCamera]
   );
 
   const openMobileCapture = useCallback(() => {
+    if (!useLiveCameraUi) {
+      flushSync(() => {
+        setPhase('capturar');
+        setCameraPermissionPhase('granted');
+      });
+      phaseRef.current = 'capturar';
+      setLiveStatus('Sube una imagen escaneada para leer respuestas.');
+      return;
+    }
     if (examLoading) {
       toast.error('Cargando examen, espera un momento.');
       return;
@@ -3042,16 +3061,19 @@ export default function CalificarPage() {
     exam,
     examId,
     examLoading,
+    isMobile,
+    useLiveCameraUi,
     stopLiveCamera,
     supportsCalifacil,
   ]);
 
   const requestCameraFromGate = useCallback(() => {
+    if (!useLiveCameraUi) return;
     setCameraPermissionPhase('requesting');
     void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
       setCameraPermissionPhase(ok ? 'granted' : 'denied');
     });
-  }, [startLiveCamera]);
+  }, [startLiveCamera, useLiveCameraUi]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -3303,7 +3325,7 @@ export default function CalificarPage() {
         const video = videoRef.current;
         if (video && streamRef.current) {
           resumeLiveVideoAfterScan(video);
-        } else if (phaseRef.current === 'capturar') {
+        } else if (useLiveCameraUi && phaseRef.current === 'capturar') {
           void startLiveCamera({ skipPhaseGuard: true });
         }
         return;
@@ -3311,7 +3333,7 @@ export default function CalificarPage() {
 
       await presentInstantCaptureGrade(mergedNow, gradeStudentId);
     },
-    [presentInstantCaptureGrade, sheets.length, startLiveCamera, mobileScanPreviewSetters]
+    [useLiveCameraUi, presentInstantCaptureGrade, sheets.length, startLiveCamera, mobileScanPreviewSetters]
   );
 
   advanceOrPresentMobileGradeRef.current = advanceOrPresentMobileGrade;
@@ -3793,12 +3815,12 @@ export default function CalificarPage() {
             updateLiveVideoLayout();
             await applyFlashMode(flashModeRef.current);
           })();
-        } else if (phaseRef.current === 'capturar') {
+        } else if (useLiveCameraUi && phaseRef.current === 'capturar') {
           void startLiveCamera({ skipPhaseGuard: true });
         }
       });
     });
-  }, [applyFlashMode, attachStreamToVideo, startLiveCamera, updateLiveVideoLayout]);
+  }, [applyFlashMode, attachStreamToVideo, useLiveCameraUi, startLiveCamera, updateLiveVideoLayout]);
 
   const previewMobileCaptureAlignment = useCallback(
     async (warped: HTMLCanvasElement, alignment: WarpAlignmentReport | null) => {

@@ -20,7 +20,7 @@ import {
   referenceTableFrameNorm,
   canvasMatchesReferenceGrade,
   canvasNearReferenceGrade,
-  useReferenceGradeCanvasAnchor,
+  isReferenceGradeCanvasAnchor,
   scaleReferenceColEdges,
   scaleReferenceLineYs,
 } from '@/lib/omr/reference-grade-merge';
@@ -95,11 +95,11 @@ export function alignCanvasToReferenceGrade(
   const dstFrame = referenceTableFrameNorm();
   const srcFrame = detectSourceTableFrame(canvas, rowCount, columns);
   if (!srcFrame) {
-    if (useReferenceGradeCanvasAnchor(canvas.width, canvas.height)) return canvas;
+    if (isReferenceGradeCanvasAnchor(canvas.width, canvas.height)) return canvas;
     return scaleCanvasToMaxSide(canvas, REFERENCE_GRADE_MAX_SIDE);
   }
 
-  if (useReferenceGradeCanvasAnchor(canvas.width, canvas.height)) {
+  if (isReferenceGradeCanvasAnchor(canvas.width, canvas.height)) {
     return canvas;
   }
 

@@ -31,7 +31,7 @@ import type { InitialGeometryResult } from '@/lib/omr/engine/detect-initial-geom
 import {
   isReferenceGradeExam,
   hasReferenceGradeCalibration,
-  useReferenceGradeCanvasAnchor,
+  isReferenceGradeCanvasAnchor,
   canvasMatchesReferenceGrade,
   canvasNearReferenceGrade,
 } from '@/lib/omr/reference-grade-merge';
@@ -213,7 +213,7 @@ export function runUnifiedOmrPipeline(
   }
 
   const isReferenceSizedCanvas =
-    isReferenceGradeExam(rows, cols) && useReferenceGradeCanvasAnchor(canvas.width, canvas.height);
+    isReferenceGradeExam(rows, cols) && isReferenceGradeCanvasAnchor(canvas.width, canvas.height);
 
   const initial = detectInitialGeometry(canvas, cols, rows);
   const preCheck = shouldUseStripFallback({ initial, rows, columns: cols, canvas });

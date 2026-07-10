@@ -43,7 +43,7 @@ export function canvasNearReferenceGrade(width: number, height: number): boolean
   return wOk && hOk;
 }
 
-export function useReferenceGradeCanvasAnchor(width: number, height: number): boolean {
+export function isReferenceGradeCanvasAnchor(width: number, height: number): boolean {
   return canvasMatchesReferenceGrade(width, height) || canvasNearReferenceGrade(width, height);
 }
 
