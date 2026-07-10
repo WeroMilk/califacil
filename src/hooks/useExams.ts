@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Exam, Question, Answer, ExamWithQuestions } from '@/types';
+import { isMissingSortOrderColumnError, sortExamQuestions } from '@/lib/examQuestions';
 
 export function useExams(teacherId: string | undefined) {
   const [exams, setExams] = useState<Exam[]>([]);
@@ -125,7 +126,7 @@ export function useExam(examId: string | undefined) {
 
       if (questionsError) throw questionsError;
 
-      setExam({ ...examData, questions: questionsData || [] });
+      setExam({ ...examData, questions: sortExamQuestions(questionsData || []) });
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -139,16 +140,39 @@ export function useExam(examId: string | undefined) {
 
   const addQuestions = async (questions: Partial<Question>[]): Promise<Question[] | null> => {
     if (!examId) return null;
-    
-    try {
-      const questionsWithExamId = questions.map(q => ({ ...q, exam_id: examId }));
-      const { data, error } = await supabase
-        .from('questions')
-        .insert(questionsWithExamId)
-        .select();
 
+    try {
+      let baseOrder = 0;
+      const { count } = await supabase
+        .from('questions')
+        .select('id', { count: 'exact', head: true })
+        .eq('exam_id', examId);
+      baseOrder = count ?? 0;
+
+      const withOrder = questions.map((q, i) => ({
+        ...q,
+        exam_id: examId,
+        sort_order: baseOrder + i,
+      }));
+      const withoutOrder = questions.map((q) => ({ ...q, exam_id: examId }));
+
+      let data: Question[] | null = null;
+      let error: { message: string } | null = null;
+      ({ data, error } = await supabase.from('questions').insert(withOrder).select());
+      if (error && isMissingSortOrderColumnError(error.message)) {
+        ({ data, error } = await supabase.from('questions').insert(withoutOrder).select());
+      }
       if (error) throw error;
-      setExam(prev => prev ? { ...prev, questions: [...prev.questions, ...(data || [])] } : null);
+
+      const merged = sortExamQuestions([...(data || [])]);
+      setExam((prev) =>
+        prev
+          ? {
+              ...prev,
+              questions: sortExamQuestions([...prev.questions, ...merged]),
+            }
+          : null
+      );
       return data || [];
     } catch (err: any) {
       setError(err.message);

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 import { dedupeExamQuestions } from '@/lib/utils';
+import { isMissingSortOrderColumnError } from '@/lib/examQuestions';
 
 export async function POST(
   request: NextRequest,
@@ -40,11 +41,18 @@ export async function POST(
       return NextResponse.json({ error: 'Questions array is required' }, { status: 400 });
     }
 
-    const rows = uniqueQuestions.map((q) => {
+    const { count: existingCount } = await supabase
+      .from('questions')
+      .select('id', { count: 'exact', head: true })
+      .eq('exam_id', examId);
+
+    const baseOrder = existingCount ?? 0;
+
+    const buildRow = (q: { text: string }, index: number, includeSortOrder: boolean) => {
       const row = q as Record<string, unknown>;
       const type = row.type === 'open_answer' ? 'open_answer' : 'multiple_choice';
       const opts = row.options;
-      return {
+      const base = {
         exam_id: examId,
         text: String(row.text ?? '').trim() || '(sin texto)',
         type,
@@ -69,9 +77,16 @@ export async function POST(
               ? Number(row.points)
               : 1,
       };
-    });
+      return includeSortOrder ? { ...base, sort_order: baseOrder + index } : base;
+    };
 
-    const { data, error } = await supabase.from('questions').insert(rows).select();
+    let rows = uniqueQuestions.map((q, index) => buildRow(q, index, true));
+    let { data, error } = await supabase.from('questions').insert(rows).select();
+
+    if (error && isMissingSortOrderColumnError(error.message)) {
+      rows = uniqueQuestions.map((q, index) => buildRow(q, index, false));
+      ({ data, error } = await supabase.from('questions').insert(rows).select());
+    }
 
     if (error) {
       console.error('[questions POST]', error);

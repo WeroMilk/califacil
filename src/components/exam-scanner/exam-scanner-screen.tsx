@@ -182,18 +182,6 @@ export function ExamScannerScreen({
                   alt=""
                   className="absolute inset-0 h-full w-full object-contain"
                 />
-                {scanPreviewOrangeFrame ? (
-                  <div
-                    className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
-                    style={{
-                      left: `${scanPreviewOrangeFrame.x * 100}%`,
-                      top: `${scanPreviewOrangeFrame.y * 100}%`,
-                      width: `${scanPreviewOrangeFrame.w * 100}%`,
-                      height: `${scanPreviewOrangeFrame.h * 100}%`,
-                    }}
-                    aria-hidden
-                  />
-                ) : null}
                 {scanPreviewOverlay ? (
                   <div className="pointer-events-none absolute inset-0 z-[2]">{scanPreviewOverlay}</div>
                 ) : null}
