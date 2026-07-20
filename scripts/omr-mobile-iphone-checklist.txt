@@ -1,12 +1,13 @@
 /**
- * Checklist manual iPhone (fase 5 del plan OMR móvil fiable)
- * -----------------------------------------------------------
- * 1. Auto-captura con hoja CaliFacil bien iluminada → resultado con overlay
- *    naranja/verde/rojo alineado en < ~3 s.
- * 2. No debe rechazar tras “Listo” si la hoja sigue en el encuadre.
- * 3. Rechazo solo si hoja realmente ilegible (oscuridad/blur extremo).
- * 4. Galería: misma ruta (documento enderezado → bolitas → nota).
- * 5. Review manual de esquinas: realign usa motor unificado.
+ * Checklist manual iPhone — Calificar móvil instantáneo
+ * ----------------------------------------------------
+ * 1. Abrir Calificar → Permitir cámara.
+ * 2. Encuadrar hoja: 4 esquinas negras + franjas laterales.
+ * 3. Debe auto-disparar en ~1 s con status «Listo — capturando…».
+ * 4. En < ~3 s: popup con % y bolitas naranja/verde/rojo.
+ * 5. Botones: «Calificar de nuevo» (reabre cámara) y «Calificar otro examen» (home).
+ * 6. No debe pedir ajuste manual de esquinas en happy path.
+ * 7. Rechazo solo si hoja ilegible (oscuridad/blur extremo).
  *
  * Automatizado: npm run test:omr-mobile
  */

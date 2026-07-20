@@ -46,8 +46,8 @@ export function MobileZipGradeScanCompleteModal({
   studentName,
   controlNumber,
   onRetake,
-  onReview,
-  onAnotherStudent,
+  onReview: _onReview,
+  onAnotherStudent: _onAnotherStudent,
   onBackToCalificar,
 }: ScanCompleteModalProps) {
   const showOverlayPreview = Boolean(sheet?.geometry && (sheet.previewUrl || previewUrl));
@@ -161,21 +161,13 @@ export function MobileZipGradeScanCompleteModal({
             <Button
               type="button"
               className="w-full bg-orange-600 hover:bg-orange-700"
-              onClick={onAnotherStudent}
+              onClick={onRetake}
             >
-              Calificar otro alumno
+              Calificar de nuevo
             </Button>
             <Button type="button" variant="outline" className="w-full" onClick={onBackToCalificar}>
-              Volver a Calificar
+              Calificar otro examen
             </Button>
-            <div className="flex gap-2 pt-1">
-              <Button type="button" variant="ghost" className="flex-1 text-orange-700" onClick={onRetake}>
-                Repetir captura
-              </Button>
-              <Button type="button" variant="ghost" className="flex-1 text-orange-700" onClick={onReview}>
-                Revisión detallada
-              </Button>
-            </div>
           </div>
         </div>
       </div>

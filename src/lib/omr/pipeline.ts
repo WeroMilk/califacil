@@ -80,6 +80,8 @@ function finalizeWarpCandidate(
 export function warpCalifacilMobileCaptureFast(
   fullCanvas: HTMLCanvasElement,
   opts?: {
+    /** Quad ya en coordenadas del fotograma completo. */
+    frameQuad?: RoiQuad | null;
     roiQuad?: RoiQuad | null;
     roiCapture?: MobileGuideRoiCapture | null;
     maxErrorPx?: number;
@@ -87,6 +89,17 @@ export function warpCalifacilMobileCaptureFast(
 ): MobileWarpPipelineResult {
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
+
+  if (opts?.frameQuad) {
+    const frameWarp = warpAndValidateCalifacilSheet(fullCanvas, opts.frameQuad, maxErrorPx);
+    const finalized = finalizeWarpCandidate(frameWarp.warped, frameWarp.alignment, maxErrorPx, true);
+    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
+      return { ...finalized, source: 'full_res' };
+    }
+    if (finalized.warped) {
+      return { ...finalized, source: 'full_res' };
+    }
+  }
 
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;

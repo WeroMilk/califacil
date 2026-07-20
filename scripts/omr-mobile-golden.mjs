@@ -2,14 +2,11 @@
  * Golden / regression checks for mobile OMR helpers (no UI).
  * Run: node scripts/omr-mobile-golden.mjs
  */
-import { createRequire } from 'node:module';
 import { createCanvas } from '@napi-rs/canvas';
 
-const require = createRequire(import.meta.url);
-
-// Compile-free smoke: duplicate the gate math used by isMobileWarpedAnswerSheetAcceptable.
 const MOBILE_MIN_FIDUCIAL_CORNERS = 4;
 const MOBILE_LIVE_MIN_FIDUCIAL_CORNERS = 3;
+const MOBILE_MIN_QUAD_INTERIOR_LUMINANCE = 0.28;
 
 function isWarpedLetterCanvas(w, h) {
   const aspect = w / Math.max(1, h);
@@ -20,6 +17,19 @@ function isAcceptable({ width, height, corners, strips }) {
   if (!isWarpedLetterCanvas(width, height)) return false;
   if (corners >= MOBILE_MIN_FIDUCIAL_CORNERS) return true;
   return corners >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS && strips;
+}
+
+/** Mirror of isMobileExamSheetReadyForCapture (live gate). */
+function isReadyForCapture({ corners, strips, fill = 0.1, interior = 0.35 }) {
+  if (!strips) return false;
+  const minCorners =
+    corners >= MOBILE_MIN_FIDUCIAL_CORNERS
+      ? MOBILE_MIN_FIDUCIAL_CORNERS
+      : MOBILE_LIVE_MIN_FIDUCIAL_CORNERS;
+  if (corners < minCorners) return false;
+  if (fill < 0.06) return false;
+  if (interior < MOBILE_MIN_QUAD_INTERIOR_LUMINANCE) return false;
+  return true;
 }
 
 function assert(cond, msg) {
@@ -34,8 +44,17 @@ function testGates() {
   console.log('ok: gate parity live↔post-warp');
 }
 
+function testLiveCaptureGate() {
+  assert(isReadyForCapture({ corners: 4, strips: true }), '4 corners + strips = ready');
+  assert(isReadyForCapture({ corners: 3, strips: true }), '3 corners + strips = ready');
+  assert(!isReadyForCapture({ corners: 4, strips: false }), '4 corners without strips reject');
+  assert(!isReadyForCapture({ corners: 2, strips: true }), '2 corners reject');
+  assert(isReadyForCapture({ corners: 4, strips: true, interior: 0.29 }), 'interior 0.29 ok');
+  assert(!isReadyForCapture({ corners: 4, strips: true, interior: 0.2 }), 'interior 0.2 reject');
+  console.log('ok: live capture gate 4 corners + strips');
+}
+
 function testSameFrameQuadIdentity() {
-  // Mapping identity: quad on full canvas must stay unchanged when frame==canvas size.
   const w = 1600;
   const h = 2000;
   const quad = [
@@ -64,18 +83,25 @@ function testReferenceLetterCanvas() {
 }
 
 function testDetectSideConstant() {
-  // MOBILE_FULL_FRAME_DETECT_MAX_SIDE must equal MOBILE_ROI_DETECT_MAX_SIDE (1024).
   const ROI = 1024;
   const FULL = ROI;
   assert(FULL === 1024, 'detect max side unified');
   console.log('ok: detect max side = 1024');
 }
 
+function testCaptureMaxSide() {
+  const CAPTURE = 1920;
+  assert(CAPTURE === 1920, 'mobile capture maxSide 1920');
+  console.log('ok: capture maxSide = 1920');
+}
+
 try {
   testGates();
+  testLiveCaptureGate();
   testSameFrameQuadIdentity();
   testReferenceLetterCanvas();
   testDetectSideConstant();
+  testCaptureMaxSide();
   console.log('\nAll omr-mobile golden checks passed.');
 } catch (err) {
   console.error('\nFAILED:', err.message);

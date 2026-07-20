@@ -123,6 +123,7 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
   prepareCalifacilGradeScanCanvas,
   warpCalifacilMobileCapture,
+  warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
@@ -268,9 +269,9 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 3200;
-/** Calidad JPEG de vista previa y resultados móvil. */
-const MOBILE_PREVIEW_JPEG_QUALITY = 0.94;
+const MOBILE_CAPTURE_MAX_SIDE = 1920;
+/** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
+const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
 const MOBILE_MIN_WARPED_SHARPNESS = 7;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
@@ -1421,7 +1422,7 @@ export default function CalificarPage() {
           ? oriented
           : prepareCalifacilScanInput(oriented, { useGuideCrop: false });
       const sheetLikely = examCanvas
-        ? gradeSkipSheetValidation
+        ? gradeSkipSheetValidation || Boolean(gradeReadingOverride?.meta?.geometry)
           ? true
           : isMobileCamera && gradePreWarped
             ? isCalifacilAnswerSheetReadyForGrading(
@@ -1494,7 +1495,13 @@ export default function CalificarPage() {
         }));
 
       if (isMobileCamera && skipReviewUi && !reading.meta.geometry) {
-        return { success: false };
+        const hasPicks = reading.meta.picks.some((p) => p != null);
+        if (!hasPicks) {
+          toast.error('No se pudo leer la hoja. Encuadra de nuevo e intenta otra vez.');
+          setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
+          return { success: false };
+        }
+        toast.message('Lectura parcial: se muestra el resultado con lo detectado.');
       }
 
       const {
@@ -2573,17 +2580,9 @@ export default function CalificarPage() {
               return;
             }
             if (cornerStableTicksRef.current < MOBILE_CAPTURE_STABLE_TICKS_REQUIRED) {
-              const secsLeft = Math.max(
-                1,
-                Math.ceil(
-                  ((MOBILE_CAPTURE_STABLE_TICKS_REQUIRED - cornerStableTicksRef.current) *
-                    MOBILE_CORNER_LOOP_MS) /
-                    1000
-                )
-              );
               setLiveStatus(
                 autoShutterEnabledRef.current
-                  ? `Captura automática en ~${secsLeft} s`
+                  ? 'Listo — capturando…'
                   : 'Examen detectado — mantén quieto…'
               );
               nextDelay = MOBILE_CORNER_LOOP_MS;
@@ -2598,6 +2597,7 @@ export default function CalificarPage() {
                 requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
               })
             ) {
+              setLiveStatus('Listo — capturando…');
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
               const captureRoi = lastRoiCaptureMetaRef.current;
               cornerStableTicksRef.current = 0;
@@ -3030,6 +3030,8 @@ export default function CalificarPage() {
     startingCameraRef.current = false;
     mobileCaptureBusyRef.current = false;
     setScanBusy(false);
+    setAutoShutterEnabled(true);
+    autoShutterEnabledRef.current = true;
     clearMobileSnapshots();
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
@@ -3292,31 +3294,15 @@ export default function CalificarPage() {
       confirmedAnswersRef.current = mergedNow;
 
       const isLast = si >= sheets.length - 1;
-      if (!isLast) {
-        const nextIdx = si + 1;
-        setSheetIndex(nextIdx);
-        sheetIndexRef.current = nextIdx;
-        toast.success(
-          `Hoja ${si + 1} de ${sheets.length} calificada. Escanea la hoja ${nextIdx + 1}.`
-        );
-        setLiveStatus(`Escanea la hoja de respuestas ${nextIdx + 1} de ${sheets.length}…`);
-        clearMobileScanPreview(null, mobileScanPreviewSetters);
-        mobileReviewOpenRef.current = false;
-        setMobileCaptureReview(null);
-        setMobileReviewAlign(null);
-        setScanBusy(false);
-        const video = videoRef.current;
-        if (video && streamRef.current) {
-          resumeLiveVideoAfterScan(video);
-        } else if (useLiveCameraUi && phaseRef.current === 'capturar') {
-          void startLiveCamera({ skipPhaseGuard: true });
-        }
-        return;
-      }
-
+      // Siempre mostrar popup de nota (también en multi-hoja con la hoja actual).
       await presentInstantCaptureGrade(mergedNow, gradeStudentId);
+      if (!isLast) {
+        toast.message(
+          `Hoja ${si + 1} de ${sheets.length} lista. Pulsa «Calificar de nuevo» para la siguiente.`
+        );
+      }
     },
-    [useLiveCameraUi, presentInstantCaptureGrade, sheets.length, startLiveCamera, mobileScanPreviewSetters]
+    [presentInstantCaptureGrade, sheets.length]
   );
 
   advanceOrPresentMobileGradeRef.current = advanceOrPresentMobileGrade;
@@ -3444,7 +3430,6 @@ export default function CalificarPage() {
         return;
       }
 
-      // Detectar siempre sobre el mismo canvas que se warpea (sin ROI stale del live).
       const frameQuad =
         opts?.frameQuad ??
         detectMobileLiveSheetQuad(fullCanvas) ??
@@ -3459,13 +3444,24 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+        // Happy path: warp rápido con el mismo frameQuad; full solo si falla.
+        const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad,
           maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
         });
-        warped = primaryWarp.warped;
-        alignment = primaryWarp.alignment;
+        warped = fastWarp.warped;
+        alignment = fastWarp.alignment;
+        if (!warped || !isMobileWarpedAnswerSheetAcceptable(warped)) {
+          const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+            frameQuad,
+            maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+            fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
+          });
+          if (primaryWarp.warped) {
+            warped = primaryWarp.warped;
+            alignment = primaryWarp.alignment;
+          }
+        }
         if (!warped) {
           const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
           if (warpedOnly) {
@@ -3479,7 +3475,6 @@ export default function CalificarPage() {
         }
       }
 
-      // ZipGrade solo si el clasificador lo marcó, no como fallback de un warp CaliFacil flojo.
       if (!warped && sheetKind === 'zipgrade') {
         const zgWarp = warpZipGradeAnswerSheet(fullCanvas);
         if (zgWarp.warped) {
@@ -3497,76 +3492,11 @@ export default function CalificarPage() {
         return;
       }
 
-      if (sheetKind === 'califacil' && !isMobileWarpedAnswerSheetAcceptable(warped)) {
-        clearPreview();
-        const frameForReview = frameQuad ?? resolveCaptureFrameQuad(fullCanvas, null, null);
-        mobileReviewOpenRef.current = true;
-        setMobileCaptureReview({
-          sourceCanvas: fullCanvas,
-          frameQuad: frameForReview,
-          warped,
-          alignment,
-        });
-        toast.message('Ajusta las esquinas manualmente y vuelve a leer.');
-        void previewMobileCaptureAlignmentRef.current(warped, alignment);
-        return;
-      }
-
-      const previewRowCount = Math.max(
-        1,
-        (sheets[sheetIndexRef.current] ?? []).length || omrRowCount
-      );
-      let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
-      let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
-      let docCanvas: HTMLCanvasElement = warped;
-
-      if (sheetKind === 'califacil') {
-        califacilFastScan = await runFastWarpedScan(warped, alignment);
-        docCanvas = califacilFastScan.docCanvas;
-      } else {
-        const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, previewRowCount);
-        zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
-        docCanvas = warped;
-      }
-
-      const scanPreview = canvasPreviewDataUrl(docCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
-      if (scanPreview) {
-        if (califacilFastScan) {
-          showMobileScanPreviewState(
-            scanPreview,
-            docCanvas,
-            califacilFastScan.meta,
-            califacilFastScan.orangeFrameNorm,
-            previewRowCount
-          );
-        } else if (zipPreviewMeta) {
-          showMobileScanPreviewState(
-            scanPreview,
-            docCanvas,
-            zipPreviewMeta,
-            null,
-            previewRowCount
-          );
-        } else {
-          flushSync(() => setMobileScanPreviewUrl(scanPreview));
-        }
-        if (video) pauseLiveVideoForScan(video);
-        await yieldForSpinnerPaint();
-      }
-
       const chunk = sheets[sheetIndexRef.current] ?? [];
       const chunkRows = chunk.length;
-      if (chunkRows === 0 || !warped) {
+      if (chunkRows === 0) {
         clearPreview();
         toast.error('No hay preguntas para calificar en esta hoja.');
-        return;
-      }
-
-      const sharpness = estimateCanvasSharpness(docCanvas);
-      if (sharpness < MOBILE_MIN_WARPED_SHARPNESS) {
-        clearPreview();
-        toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
-        setLiveStatus('Mantén el teléfono quieto al escanear.');
         return;
       }
 
@@ -3576,36 +3506,65 @@ export default function CalificarPage() {
       }
 
       setLiveStatus('Leyendo respuestas…');
-      const openManualCornerReview = () => {
-        clearPreview();
-        const reviewQuad = frameQuad ?? resolveCaptureFrameQuad(fullCanvas, null, null);
-        mobileReviewOpenRef.current = true;
-        setMobileCaptureReview({
-          sourceCanvas: fullCanvas,
-          frameQuad: reviewQuad,
-          warped: warped!,
-          alignment,
-        });
-        toast.message('Ajusta las esquinas manualmente y vuelve a leer.');
-        void previewMobileCaptureAlignmentRef.current(warped!, alignment);
-      };
+      if (video) pauseLiveVideoForScan(video);
 
-      if (
-        sheetKind === 'califacil' &&
-        alignment &&
-        !alignment.ok &&
-        (alignment.maxErrorPx ?? 99) > MOBILE_WARP_FALLBACK_MAX_ERROR_PX
-      ) {
-        openManualCornerReview();
+      let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
+      let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
+      let docCanvas: HTMLCanvasElement = warped;
+
+      if (sheetKind === 'califacil') {
+        califacilFastScan = await runFastWarpedScan(warped, alignment);
+        docCanvas = califacilFastScan.docCanvas;
+      } else {
+        const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, chunkRows);
+        zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
+        docCanvas = warped;
+      }
+
+      const hasOmr =
+        sheetKind === 'califacil'
+          ? Boolean(
+              califacilFastScan?.meta.geometry ||
+                califacilFastScan?.meta.picks.some((p) => p != null)
+            )
+          : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
+
+      // Con lectura OMR válida: ir directo al popup (sin review manual ni abort por warp flojo).
+      if (sheetKind === 'califacil' && !hasOmr) {
+        clearPreview();
+        toast.error('No se pudo leer las burbujas. Encuadra de nuevo e intenta otra vez.');
+        setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
+        if (video) resumeLiveVideoAfterScan(video);
         return;
       }
 
+      const sharpness = estimateCanvasSharpness(docCanvas);
+      if (sharpness < MOBILE_MIN_WARPED_SHARPNESS && !hasOmr) {
+        clearPreview();
+        toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
+        setLiveStatus('Mantén el teléfono quieto al escanear.');
+        if (video) resumeLiveVideoAfterScan(video);
+        return;
+      }
+
+      // Preview ligero solo si vamos a calificar (no mostrar bolitas y luego abortar).
+      const scanPreview = canvasPreviewDataUrl(docCanvas, 1400, MOBILE_PREVIEW_JPEG_QUALITY);
+      if (scanPreview && califacilFastScan) {
+        showMobileScanPreviewState(
+          scanPreview,
+          docCanvas,
+          califacilFastScan.meta,
+          califacilFastScan.orangeFrameNorm,
+          chunkRows
+        );
+        await yieldForSpinnerPaint();
+      } else if (scanPreview && zipPreviewMeta) {
+        showMobileScanPreviewState(scanPreview, docCanvas, zipPreviewMeta, null, chunkRows);
+        await yieldForSpinnerPaint();
+      }
+
       let readingOverride: CalifacilOmrReadingResult | undefined;
-      if (sheetKind === 'zipgrade') {
-        const zgScan = scanZipGradeAnswerSheet(docCanvas, omrCols, chunkRows);
-        if (chunkRows > 0 && !opts?.fromGallery) {
-          toast.message('Hoja ZipGrade detectada. Leyendo burbujas con plantilla de 3 columnas.');
-        }
+      if (sheetKind === 'zipgrade' && zipPreviewMeta) {
         const zgRows = Array.from({ length: chunkRows }, () => ({
           pick: null as number | null,
           ambiguous: false,
@@ -3613,11 +3572,11 @@ export default function CalificarPage() {
         }));
         readingOverride = buildCalifacilOmrReadingOverride(
           {
-            picks: zgScan.picks,
+            picks: zipPreviewMeta.picks,
             rows: zgRows,
             needsVisionAssist: false,
             maxSameColumnCount: 0,
-            geometry: zgScan.geometry,
+            geometry: zipPreviewMeta.geometry,
             reviewSourceCanvas: docCanvas,
             controlNumberDigits: [],
             controlNumber: null,
@@ -3653,7 +3612,7 @@ export default function CalificarPage() {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
-        skipSheetValidation: sheetKind === 'zipgrade',
+        skipSheetValidation: true,
         displaySource: docCanvas,
         readingOverride,
       });
@@ -3666,14 +3625,10 @@ export default function CalificarPage() {
         return;
       }
 
-      if (sheetKind === 'califacil') {
-        openManualCornerReview();
-        return;
-      }
-
+      clearPreview();
       toast.error('No se pudo calificar esta captura. Intenta escanear de nuevo.');
       setLiveStatus('Intenta de nuevo — hoja completa y buena luz.');
-      clearPreview();
+      if (video) resumeLiveVideoAfterScan(video);
     },
     [
       clearMobileScanPreviewState,

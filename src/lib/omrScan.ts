@@ -2992,7 +2992,7 @@ export function isMobileSheetAlignedForCapture(opts: {
 }
 
 /** Luminancia media mínima (0–1) del interior del cuadrilátero — papel blanco del examen. */
-export const MOBILE_MIN_QUAD_INTERIOR_LUMINANCE = 0.4;
+export const MOBILE_MIN_QUAD_INTERIOR_LUMINANCE = 0.28;
 
 /** Muestrea el interior del cuad de la hoja (evita bordes/fiduciales) y devuelve luminancia 0–1. */
 export function measureRoiQuadInteriorMeanLuminance(
@@ -3027,7 +3027,10 @@ export function measureRoiQuadInteriorMeanLuminance(
 }
 
 /**
- * Gate estricto: solo captura si hay hoja de examen real (quad + 4 esquinas + franjas + papel blanco).
+ * Gate de captura móvil: franjas laterales + esquinas negras.
+ * - Ideal: 4 esquinas + franjas (contrato producto).
+ * - Mínimo: 3 esquinas + franjas (aula real / 4.ª parcial).
+ * Luminancia interior relajada (0.28) para no bloquear por sombra parcial.
  */
 export function isMobileExamSheetReadyForCapture(opts: {
   fiducialCount: number;
@@ -3041,18 +3044,18 @@ export function isMobileExamSheetReadyForCapture(opts: {
 }): boolean {
   const corners = opts.fiducialCorners;
   const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
-  const minCorners = opts.stripAligned
-    ? MOBILE_LIVE_MIN_FIDUCIAL_CORNERS
-    : MOBILE_MIN_FIDUCIAL_CORNERS;
-  if (count < minCorners) return false;
   if (!opts.stripAligned) return false;
+  const minCorners =
+    count >= MOBILE_MIN_FIDUCIAL_CORNERS
+      ? MOBILE_MIN_FIDUCIAL_CORNERS
+      : MOBILE_LIVE_MIN_FIDUCIAL_CORNERS;
+  if (count < minCorners) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
 
   const fill =
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
-  const minFill = opts.stripAligned ? 0.06 : MOBILE_MIN_ROI_FILL_RATIO;
-  if (fill < minFill) return false;
+  if (fill < 0.06) return false;
 
   if (opts.roiCanvas) {
     const interior = measureRoiQuadInteriorMeanLuminance(opts.roiCanvas, opts.quad);

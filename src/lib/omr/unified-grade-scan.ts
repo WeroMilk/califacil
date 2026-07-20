@@ -110,8 +110,9 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 120;
-const MOBILE_ESCALATE_RESOLVED_RATIO = 0.7;
+const MOBILE_FAST_OPTIMIZE_ITERS = 100;
+/** Solo re-escanea full optimize si casi no hay lecturas (< 40%). */
+const MOBILE_ESCALATE_RESOLVED_RATIO = 0.4;
 
 function countResolvedPicks(meta: OmrScanMetaResult): number {
   return meta.picks.filter((p) => p != null).length;
