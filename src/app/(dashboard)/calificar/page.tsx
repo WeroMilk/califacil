@@ -2996,12 +2996,18 @@ export default function CalificarPage() {
       setScanBusy(false);
       flushSync(() => {
         setPhase('capturar');
+        setCameraPermissionPhase('granted');
       });
       phaseRef.current = 'capturar';
       if (!useLiveCameraUi) return;
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          void startLiveCamera({ skipPhaseGuard: true });
+          void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
+            if (!ok) {
+              setCameraPermissionPhase('denied');
+              setCameraOpen(false);
+            }
+          });
         });
       });
     },
@@ -3035,18 +3041,34 @@ export default function CalificarPage() {
     clearMobileSnapshots();
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
+    setZipGradeModalOpen(false);
+    setZipGradeReviewOpen(false);
+    // Permiso ya concedido en sesiones previas: abrir cámara de inmediato (sin pantalla de gate).
     flushSync(() => {
       setPhase('capturar');
-      setCameraPermissionPhase('pending');
+      setCameraPermissionPhase('granted');
       setCameraOpen(false);
     });
     phaseRef.current = 'capturar';
+    setLiveStatus('Coloca la hoja en el visor…');
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
+          if (!ok) {
+            setCameraPermissionPhase('denied');
+            setCameraOpen(false);
+          } else {
+            setCameraPermissionPhase('granted');
+          }
+        });
+      });
+    });
   }, [
     clearMobileSnapshots,
     exam,
     examId,
     examLoading,
-    isMobile,
+    startLiveCamera,
     useLiveCameraUi,
     stopLiveCamera,
     supportsCalifacil,
@@ -4080,14 +4102,12 @@ export default function CalificarPage() {
   ]);
 
   const exitMobileResultsView = useCallback(() => {
-    clearMobileSnapshots();
-    setMobileResultsDraft({});
-    setResultsSheetIdx(0);
+    // «Calificar otro examen»: volver a la cámara de inmediato (mismo examen / siguiente hoja).
     setZipGradeModalOpen(false);
     setZipGradeReviewOpen(false);
     setZipGradeStudentPickerOpen(false);
-    setPhase('elegir');
-  }, [clearMobileSnapshots]);
+    openMobileCapture();
+  }, [openMobileCapture]);
 
   useEffect(() => {
     const immersive =
