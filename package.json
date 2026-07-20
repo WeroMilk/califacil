@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "postinstall": "node scripts/copy-pdfjs-client.mjs",
+    "test:omr-mobile": "node scripts/omr-mobile-golden.mjs",
     "create-test-user": "node scripts/create-test-user.mjs",
     "logo:knockout-black": "node scripts/knockout-logo-black.mjs",
     "logo:knockout-banner": "node scripts/knockout-print-banner.mjs"

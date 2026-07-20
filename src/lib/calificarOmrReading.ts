@@ -528,6 +528,43 @@ export async function runCalifacilOmrReadingPipeline(
     }
   }
 
+  const resolvedRatio = chunk.length > 0 ? mapped.resolvedCount / chunk.length : 0;
+  if (
+    !mostlyBlank &&
+    CALIFACIL_VISION_POLICY.onLowResolvedRatio &&
+    examId &&
+    chunk.length > 0 &&
+    !visionDisabled &&
+    resolvedRatio > 0 &&
+    resolvedRatio < CALIFACIL_VISION_POLICY.lowResolvedRatioThreshold
+  ) {
+    const rowsPayload = chunk.map((q, i) => ({
+      questionId: q.id,
+      globalNumber: chunkQuestionOffset + i + 1,
+      options: q.options ?? [],
+    }));
+    try {
+      const imageBase64 = califacilImageToJpegDataUrl(visionImageSource);
+      const res = await fetchVisionOmr({
+        examId,
+        imageBase64,
+        rows: rowsPayload,
+        omrColumnCount: omrCols,
+        focusNumbers: rowsPayload.map((r) => r.globalNumber),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        selections?: Record<string, string>;
+      };
+      if (res.ok && payload.selections) {
+        for (let i = 0; i < chunk.length; i++) {
+          await applyVisionSelections(raw, chunk, [i], payload.selections);
+        }
+      }
+    } catch {
+      /* mantener OMR local */
+    }
+  }
+
   mapped = mapRawToDraftDetailed(raw, chunk);
   const picksInChunk = raw.slice(0, chunk.length);
 

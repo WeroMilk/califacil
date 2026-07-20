@@ -81,10 +81,8 @@ import {
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
   scanCalifacilOmrSheetWithMeta,
-  scanWarpedGradeDocumentAsync,
   scanWarpedMobileAnswerSheetFast,
   scanWarpedWithBestTableFrame,
-  scanWarpedWithNormTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
   canvasPreviewDataUrl,
@@ -92,7 +90,7 @@ import {
   isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
-  isMobileWarpedAnswerSheetReady,
+  isMobileWarpedAnswerSheetAcceptable,
   syncCalifacilOmrGeometryImageSize,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
@@ -125,8 +123,8 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
   prepareCalifacilGradeScanCanvas,
   warpCalifacilMobileCapture,
-  warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
+import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -271,8 +269,6 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
 const MOBILE_CAPTURE_MAX_SIDE = 3200;
-/** Resolución OMR post-captura (lectura de burbujas). */
-const MOBILE_OMR_SCAN_MAX_SIDE = 1600;
 /** Calidad JPEG de vista previa y resultados móvil. */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.94;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
@@ -340,21 +336,6 @@ function resolveCaptureFrameQuad(
     { x: w, y: h },
     { x: 0, y: h },
   ];
-}
-
-/** Detección en ROI baja resolución → warp/OMR en fotograma completo alta resolución. */
-function warpMobileCaptureWithFallback(
-  fullCanvas: HTMLCanvasElement,
-  roiQuad: RoiQuad | null,
-  roiCapture: MobileGuideRoiCapture | null
-): { warped: HTMLCanvasElement | null; alignment: WarpAlignmentReport | null } {
-  const result = warpCalifacilMobileCapture(fullCanvas, {
-    roiQuad,
-    roiCapture,
-    maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-    fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
-  });
-  return { warped: result.warped, alignment: result.alignment };
 }
 
 /** Foto de cámara subida en desktop: warp vía normalizeCalifacilGradeDocumentCanvas. */
@@ -938,13 +919,12 @@ export default function CalificarPage() {
         warpAlignment,
       });
       await yieldForSpinnerPaint();
-      const meta = await scanWarpedGradeDocumentAsync(docCanvas, omrCols, omrRowCount);
+      const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
           : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
-      const scanCanvas = downscaleCanvasForOmrScan(docCanvas, MOBILE_OMR_SCAN_MAX_SIDE);
-      return { meta, orangeFrameNorm, scanCanvas, docCanvas };
+      return { meta, orangeFrameNorm, docCanvas };
     },
     [omrCols, omrRowCount]
   );
@@ -1497,11 +1477,14 @@ export default function CalificarPage() {
           isMobile,
           fallbackFile,
           uploadKind: desktopUploadKind,
-          disableVisionAssist: desktopUploadKind
-            ? desktopUploadKind === 'pdf' ||
-              desktopUploadKind === 'flatDocument' ||
-              desktopUploadKind === 'flatScan'
-            : !isMobileCamera,
+          disableVisionAssist:
+            Boolean(skipReviewUi) ||
+            Boolean(gradeReadingOverride) ||
+            (desktopUploadKind
+              ? desktopUploadKind === 'pdf' ||
+                desktopUploadKind === 'flatDocument' ||
+                desktopUploadKind === 'flatScan'
+              : Boolean(isMobileCamera)),
           skipReviewUi,
           sheetStrict,
           preserveCapturedFrame,
@@ -3447,8 +3430,8 @@ export default function CalificarPage() {
       fullCanvas: HTMLCanvasElement,
       video: HTMLVideoElement | null,
       opts?: {
-        roiQuad?: RoiQuad | null;
-        roiCapture?: MobileGuideRoiCapture | null;
+        /** Quad en coordenadas del fotograma completo (mismo canvas). */
+        frameQuad?: RoiQuad | null;
         fromGallery?: boolean;
       }
     ) => {
@@ -3461,68 +3444,12 @@ export default function CalificarPage() {
         return;
       }
 
-      let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
-      let roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
-
-      let validationCanvas = fullCanvas;
-      let validationQuad: RoiQuad | null = null;
-      if (roiQuad && roiCapture) {
-        const frameQuad = mapRoiQuadToFrame(
-          roiQuad,
-          roiCapture.roiRect,
-          roiCapture.roiCanvas.width,
-          roiCapture.roiCanvas.height
-        );
-        validationQuad = scaleQuadToCanvas(
-          frameQuad,
-          roiCapture.frameW,
-          roiCapture.frameH,
-          fullCanvas.width,
-          fullCanvas.height
-        );
-      } else if (roiCapture?.roiCanvas) {
-        validationCanvas = roiCapture.roiCanvas;
-        validationQuad =
-          roiQuad ??
-          detectMobileLiveSheetQuad(validationCanvas) ??
-          detectLargestQuadInRoiCanvas(validationCanvas);
-      } else {
-        validationQuad =
-          detectMobileLiveSheetQuad(fullCanvas) ?? detectLargestQuadInRoiCanvas(fullCanvas);
-      }
-      const validationFiducials = detectAnswerSheetFiducialsInRoi(
-        validationCanvas,
-        validationQuad
-      );
-      const validationFiducialCount = validationFiducials.filter(Boolean).length;
-      const validationStripAligned =
-        detectAnswerSheetQuadViaAlignStrips(validationCanvas) !== null ||
-        detectAnswerSheetQuadViaAlignStrips(fullCanvas) !== null;
-      const validationFillRatio =
-        validationQuad !== null
-          ? measureRoiSheetFillRatio(
-              validationQuad,
-              validationCanvas.width,
-              validationCanvas.height
-            )
-          : 0;
-      if (
-        !isMobileExamSheetReadyForCapture({
-          fiducialCount: validationFiducialCount,
-          fiducialCorners: validationFiducials,
-          stripAligned: validationStripAligned,
-          quad: validationQuad,
-          roiW: validationCanvas.width,
-          roiH: validationCanvas.height,
-          fillRatio: validationFillRatio,
-          roiCanvas: validationCanvas,
-        })
-      ) {
-        clearPreview();
-        toast.error('No se detectó un examen válido. Encuadra la hoja completa con franjas y esquinas negras.');
-        setLiveStatus('Encuadra el examen completo antes de capturar.');
-        return;
-      }
+      // Detectar siempre sobre el mismo canvas que se warpea (sin ROI stale del live).
+      const frameQuad =
+        opts?.frameQuad ??
+        detectMobileLiveSheetQuad(fullCanvas) ??
+        detectAnswerSheetQuadViaAlignStrips(fullCanvas) ??
+        detectLargestQuadInRoiCanvas(fullCanvas);
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3532,26 +3459,13 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
-          roiQuad,
-          roiCapture,
+        const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
+          frameQuad,
           maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
         });
-        warped = fastWarp.warped;
-        alignment = fastWarp.alignment;
-        if (!warped) {
-          const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
-            roiQuad,
-            roiCapture,
-            maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-            fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
-          });
-          warped = primaryWarp.warped;
-          alignment = primaryWarp.alignment;
-        }
-        if (!warped && roiCapture && roiQuad) {
-          ({ warped, alignment } = warpMobileCaptureWithFallback(fullCanvas, roiQuad, roiCapture));
-        }
+        warped = primaryWarp.warped;
+        alignment = primaryWarp.alignment;
         if (!warped) {
           const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
           if (warpedOnly) {
@@ -3565,12 +3479,12 @@ export default function CalificarPage() {
         }
       }
 
-      if (!warped) {
+      // ZipGrade solo si el clasificador lo marcó, no como fallback de un warp CaliFacil flojo.
+      if (!warped && sheetKind === 'zipgrade') {
         const zgWarp = warpZipGradeAnswerSheet(fullCanvas);
         if (zgWarp.warped) {
           warped = zgWarp.warped;
           alignment = zgWarp.alignment;
-          sheetKind = 'zipgrade';
         }
       }
 
@@ -3583,43 +3497,38 @@ export default function CalificarPage() {
         return;
       }
 
-      if (sheetKind === 'califacil') {
-        if (!isMobileWarpedAnswerSheetReady(warped)) {
-          const zgWarp = warpZipGradeAnswerSheet(fullCanvas);
-          if (zgWarp.warped) {
-            warped = zgWarp.warped;
-            alignment = zgWarp.alignment;
-            sheetKind = 'zipgrade';
-          } else {
-            clearPreview();
-            toast.error(
-              'Hoja no reconocida. Usa la hoja CaliFacil impresa o una hoja ZipGrade con esquinas negras.'
-            );
-            setLiveStatus('Encuadra el documento completo antes de escanear.');
-            return;
-          }
-        }
+      if (sheetKind === 'califacil' && !isMobileWarpedAnswerSheetAcceptable(warped)) {
+        clearPreview();
+        const frameForReview = frameQuad ?? resolveCaptureFrameQuad(fullCanvas, null, null);
+        mobileReviewOpenRef.current = true;
+        setMobileCaptureReview({
+          sourceCanvas: fullCanvas,
+          frameQuad: frameForReview,
+          warped,
+          alignment,
+        });
+        toast.message('Ajusta las esquinas manualmente y vuelve a leer.');
+        void previewMobileCaptureAlignmentRef.current(warped, alignment);
+        return;
       }
 
-      const docCanvas =
-        sheetKind === 'zipgrade'
-          ? warped
-          : prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
-              preWarped: true,
-              warpAlignment: alignment,
-            });
       const previewRowCount = Math.max(
         1,
         (sheets[sheetIndexRef.current] ?? []).length || omrRowCount
       );
       let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
       let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
+      let docCanvas: HTMLCanvasElement = warped;
+
       if (sheetKind === 'califacil') {
         califacilFastScan = await runFastWarpedScan(warped, alignment);
+        docCanvas = califacilFastScan.docCanvas;
       } else {
-        const zgPreview = scanZipGradeAnswerSheet(docCanvas, omrCols, previewRowCount);
+        const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, previewRowCount);
         zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
+        docCanvas = warped;
       }
+
       const scanPreview = canvasPreviewDataUrl(docCanvas, 2400, MOBILE_PREVIEW_JPEG_QUALITY);
       if (scanPreview) {
         if (califacilFastScan) {
@@ -3669,9 +3578,14 @@ export default function CalificarPage() {
       setLiveStatus('Leyendo respuestas…');
       const openManualCornerReview = () => {
         clearPreview();
-        const frameQuad = resolveCaptureFrameQuad(fullCanvas, roiQuad, roiCapture);
+        const reviewQuad = frameQuad ?? resolveCaptureFrameQuad(fullCanvas, null, null);
         mobileReviewOpenRef.current = true;
-        setMobileCaptureReview({ sourceCanvas: fullCanvas, frameQuad, warped: warped!, alignment });
+        setMobileCaptureReview({
+          sourceCanvas: fullCanvas,
+          frameQuad: reviewQuad,
+          warped: warped!,
+          alignment,
+        });
         toast.message('Ajusta las esquinas manualmente y vuelve a leer.');
         void previewMobileCaptureAlignmentRef.current(warped!, alignment);
       };
@@ -3776,7 +3690,7 @@ export default function CalificarPage() {
   const processMobileSheetCapture = useCallback(
     async (
       video: HTMLVideoElement,
-      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       setLiveStatus('Escaneando documento…');
       playAutoCaptureClickSound();
@@ -3790,12 +3704,15 @@ export default function CalificarPage() {
         return;
       }
 
-      let roiCapture = opts?.roiCapture ?? lastRoiCaptureMetaRef.current;
-      const roiQuad = opts?.roiQuad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
+      // Un solo frame: detectar quad sobre el canvas capturado (nunca smoothed del live).
+      const frameQuad =
+        detectMobileLiveSheetQuad(fullCanvas) ??
+        detectAnswerSheetQuadViaAlignStrips(fullCanvas) ??
+        detectLargestQuadInRoiCanvas(fullCanvas);
 
-      await processMobileCapturedCanvas(fullCanvas, video, { ...opts, roiQuad, roiCapture });
+      await processMobileCapturedCanvas(fullCanvas, video, { frameQuad });
     },
-    [processMobileCapturedCanvas]
+    [processMobileCapturedCanvas, mobileScanPreviewSetters]
   );
 
   const retakeMobileCaptureReview = useCallback(() => {
@@ -3895,17 +3812,10 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const docCanvas = prepareCalifacilGradeScanCanvas(
+        const { meta, orangeFrameNorm, docCanvas } = await runFastWarpedScan(
           mobileReviewAlign.warped,
-          omrCols,
-          omrRowCount,
-          {
-            preWarped: true,
-            warpAlignment: mobileReviewAlign.alignment,
-          }
+          mobileReviewAlign.alignment
         );
-        const scanCanvas = downscaleCanvasForOmrScan(docCanvas, MOBILE_OMR_SCAN_MAX_SIDE);
-        const meta = scanWarpedWithNormTableFrame(scanCanvas, omrCols, omrRowCount, frame);
         if (scanGen !== reviewScanGenRef.current) return;
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
@@ -3926,7 +3836,8 @@ export default function CalificarPage() {
           picks: [...meta.picks],
           draft: mapped.draft,
           previewUrl,
-          orangeFrameNorm: frame,
+          // Conserva el marco que movió el usuario para la UI; la lectura es unified.
+          orangeFrameNorm: frame ?? orangeFrameNorm,
         });
         setReviewStatus(null);
       } catch {
@@ -3936,7 +3847,7 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, sheets]
+    [mapRawToDraft, mobileReviewAlign, runFastWarpedScan, sheets]
   );
 
   const finalizeMobileReviewGrade = useCallback(async () => {

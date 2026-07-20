@@ -561,6 +561,19 @@ export function isMobileWarpedAnswerSheetReady(canvas: HTMLCanvasElement): boole
   return countCalifacilCornerMarkers(canvas) >= MOBILE_MIN_FIDUCIAL_CORNERS;
 }
 
+/**
+ * Acepta warp móvil alineado al gate live: 4 fiduciales, o 3 + franjas laterales.
+ * Evita el falso rechazo “Listo” → post-captura con solo 3 esquinas visibles.
+ */
+export function isMobileWarpedAnswerSheetAcceptable(canvas: HTMLCanvasElement): boolean {
+  if (!isCalifacilWarpedLetterCanvas(canvas)) return false;
+  const corners = countCalifacilCornerMarkers(canvas);
+  if (corners >= MOBILE_MIN_FIDUCIAL_CORNERS) return true;
+  return (
+    corners >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS && hasCalifacilAlignStrips(canvas)
+  );
+}
+
 /** Parches de esquina en coords. de fiduciales impresos (hoja carta enderezada). */
 function printedFiducialCornerPatches(
   W: number,
@@ -2438,8 +2451,8 @@ export function captureCalifacilGuideFrame(
 
 /** Resolución máxima del lado largo al analizar el ROI en vivo (velocidad móvil). */
 export const MOBILE_ROI_DETECT_MAX_SIDE = 1024;
-/** Resolución del fotograma completo para detección estilo Escáner de documentos (iOS). */
-export const MOBILE_FULL_FRAME_DETECT_MAX_SIDE = 720;
+/** Misma escala que el live detect: un solo tamaño para live y post-captura. */
+export const MOBILE_FULL_FRAME_DETECT_MAX_SIDE = MOBILE_ROI_DETECT_MAX_SIDE;
 
 export type MobileGuideRoiCapture = {
   roiCanvas: HTMLCanvasElement;
@@ -9237,7 +9250,7 @@ export function buildMobileAnswerSheetReviewFromWarp(
   rowCount?: number,
   opts?: { scanCanvas?: HTMLCanvasElement; warpAlignment?: WarpAlignmentReport | null }
 ): MobileAnswerSheetReviewAssets | null {
-  if (!isMobileWarpedAnswerSheetReady(warped)) return null;
+  if (!isMobileWarpedAnswerSheetAcceptable(warped)) return null;
   const alignment =
     opts?.warpAlignment ?? measureWarpedFiducialAlignment(warped, MAX_WARP_ALIGNMENT_ERROR_PX);
   const precise = mobileWarpAlignmentIsPrecise(alignment);

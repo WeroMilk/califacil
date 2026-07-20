@@ -110,6 +110,54 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
+const MOBILE_FAST_OPTIMIZE_ITERS = 120;
+const MOBILE_ESCALATE_RESOLVED_RATIO = 0.7;
+
+function countResolvedPicks(meta: OmrScanMetaResult): number {
+  return meta.picks.filter((p) => p != null).length;
+}
+
+/**
+ * Perfil móvil: same unified engine as desktop, fastMode first (~2–3 s),
+ * escalate to full optimize only if few rows resolve.
+ */
+export async function scanWarpedGradeMobileAsync(
+  displayCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): Promise<OmrScanMetaResult> {
+  const scanCanvas = gradeScanCanvas(displayCanvas, OMR_GRADE_SCAN_MAX_SIDE);
+  if (!isUnifiedOmrEngineEnabled()) {
+    return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
+  }
+
+  let unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+    fastMode: true,
+    maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+  });
+  let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+  const resolved = countResolvedPicks(meta);
+  const needEscalate =
+    rows > 0 &&
+    resolved < Math.ceil(rows * MOBILE_ESCALATE_RESOLVED_RATIO) &&
+    !isAnswerSheetMostlyBlank(meta, rows);
+
+  if (needEscalate) {
+    unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: false,
+      maxOptimizeIterations: 320,
+    });
+    meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+  }
+  return meta;
+}
+
+function isAnswerSheetMostlyBlank(meta: OmrScanMetaResult, rows: number): boolean {
+  if (rows <= 0) return true;
+  const resolved = countResolvedPicks(meta);
+  return resolved / rows < 0.12;
+}
+
 export function scanLiveOmrUnifiedOrLegacy(
   source: HTMLImageElement | HTMLCanvasElement,
   columns: number,

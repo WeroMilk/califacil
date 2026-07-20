@@ -11,6 +11,7 @@ import {
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
+  isMobileWarpedAnswerSheetAcceptable,
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
@@ -57,7 +58,7 @@ function warpCandidateScore(
   const corners = countCalifacilCornerMarkers(warped);
   const align = alignmentScore(alignment);
   if (corners < 2) return align + 400;
-  if (!isMobileWarpedAnswerSheetReady(warped)) return align + 120;
+  if (!isMobileWarpedAnswerSheetAcceptable(warped)) return align + 120;
   return align - corners * 3;
 }
 
@@ -102,7 +103,7 @@ export function warpCalifacilMobileCaptureFast(
     );
     const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
     const finalized = finalizeWarpCandidate(roiWarp.warped, roiWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
+    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
       return { ...finalized, source: 'roi' };
     }
   }
@@ -113,7 +114,7 @@ export function warpCalifacilMobileCaptureFast(
     if (!stripQuad) continue;
     const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
     const finalized = finalizeWarpCandidate(stripWarp.warped, stripWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetReady(finalized.warped)) {
+    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
       return { ...finalized, source: 'strips' };
     }
   }
@@ -126,6 +127,9 @@ export function warpCalifacilMobileCaptureFast(
       fallbackMaxErrorPx,
       true
     );
+    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
+      return { ...finalized, source: 'corner_markers' };
+    }
     if (finalized.warped) {
       return { ...finalized, source: 'corner_markers' };
     }
@@ -140,6 +144,8 @@ export function warpCalifacilMobileCaptureFast(
 export function warpCalifacilMobileCapture(
   fullCanvas: HTMLCanvasElement,
   opts?: {
+    /** Quad ya en coordenadas del fotograma completo (mismo canvas que se warpea). */
+    frameQuad?: RoiQuad | null;
     roiQuad?: RoiQuad | null;
     roiCapture?: MobileGuideRoiCapture | null;
     maxErrorPx?: number;
@@ -175,6 +181,11 @@ export function warpCalifacilMobileCapture(
     ? [preprocessed, fullCanvas]
     : [fullCanvas];
 
+  if (opts?.frameQuad) {
+    const frameWarp = warpAndValidateCalifacilSheet(fullCanvas, opts.frameQuad, maxErrorPx);
+    consider(frameWarp.warped, frameWarp.alignment, 'full_res', maxErrorPx);
+  }
+
   const roiQuad = opts?.roiQuad;
   const roiCapture = opts?.roiCapture;
   if (roiQuad && roiCapture) {
@@ -204,7 +215,9 @@ export function warpCalifacilMobileCapture(
     if (!quad) continue;
     const fullWarp = warpAndValidateCalifacilSheet(fullCanvas, quad, maxErrorPx);
     consider(fullWarp.warped, fullWarp.alignment, 'full_res', maxErrorPx);
-    if (best.warped && isMobileWarpedAnswerSheetReady(best.warped) && best.alignment?.ok) break;
+    if (best.warped && isMobileWarpedAnswerSheetAcceptable(best.warped) && best.alignment?.ok) {
+      break;
+    }
   }
 
   const cornerWarped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
@@ -292,7 +305,7 @@ export function normalizeCalifacilGradeDocumentCanvas(
     return finish(base, null, false);
   }
 
-  if (isMobileWarpedAnswerSheetReady(base)) {
+  if (isMobileWarpedAnswerSheetAcceptable(base)) {
     const doc = prepareMobileGradeDocumentCanvas(base, null);
     return finish(
       doc,
@@ -302,11 +315,11 @@ export function normalizeCalifacilGradeDocumentCanvas(
   }
 
   for (const attempt of [
-    () => warpCalifacilMobileCaptureFast(base, { maxErrorPx }),
     () => warpCalifacilMobileCapture(base, { maxErrorPx, fallbackMaxErrorPx: maxErrorPx + 12 }),
+    () => warpCalifacilMobileCaptureFast(base, { maxErrorPx }),
   ]) {
     const result = attempt();
-    if (result.warped && isMobileWarpedAnswerSheetReady(result.warped)) {
+    if (result.warped && isMobileWarpedAnswerSheetAcceptable(result.warped)) {
       const doc = prepareMobileGradeDocumentCanvas(result.warped, result.alignment);
       return finish(doc, result.alignment, true);
     }

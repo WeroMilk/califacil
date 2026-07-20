@@ -23,6 +23,7 @@ export {
   scanDesktopGradeUnifiedOrLegacyAsync,
   scanWarpedGradeUnifiedOrLegacy,
   scanWarpedGradeUnifiedOrLegacyAsync,
+  scanWarpedGradeMobileAsync,
   scanLiveOmrUnifiedOrLegacy,
 } from '@/lib/omr/unified-grade-scan';
 export {
