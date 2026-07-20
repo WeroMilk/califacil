@@ -5,7 +5,6 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
-import { califacilOmrOrangeFrameRect } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import { Button } from '@/components/ui/button';
 import type { Student } from '@/types';
@@ -51,10 +50,6 @@ export function MobileZipGradeScanCompleteModal({
   onAnotherStudent,
   onBackToCalificar,
 }: ScanCompleteModalProps) {
-  const orangeFrameRect = useMemo(
-    () => (sheet ? califacilOmrOrangeFrameRect(sheet.geometry, sheet.rowCount) : null),
-    [sheet]
-  );
   const showOverlayPreview = Boolean(sheet?.geometry && (sheet.previewUrl || previewUrl));
   const previewSrc = sheet?.previewUrl || previewUrl;
   const overlayW = sheet ? Math.max(1, sheet.geometry.imageWidth) : 1;
@@ -147,18 +142,6 @@ export function MobileZipGradeScanCompleteModal({
                   alt="Hoja escaneada con clave"
                   className="absolute inset-0 z-0 h-full w-full object-contain object-center"
                 />
-                {orangeFrameRect ? (
-                  <div
-                    className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
-                    style={{
-                      left: `${orangeFrameRect.x * 100}%`,
-                      top: `${orangeFrameRect.y * 100}%`,
-                      width: `${orangeFrameRect.w * 100}%`,
-                      height: `${orangeFrameRect.h * 100}%`,
-                    }}
-                    aria-hidden
-                  />
-                ) : null}
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}
                   picks={sheet.picks}
@@ -247,10 +230,6 @@ export function MobileZipGradeReviewScreen({
   }, [sheet]);
 
   const wrongCount = sheet ? Math.max(0, sheet.total - sheet.correct) : 0;
-  const orangeFrameRect = useMemo(
-    () => (sheet ? califacilOmrOrangeFrameRect(sheet.geometry, sheet.rowCount) : null),
-    [sheet]
-  );
 
   if (!open || !sheet || typeof document === 'undefined') return null;
 
@@ -373,18 +352,6 @@ export function MobileZipGradeReviewScreen({
                   alt="Hoja escaneada"
                   className="absolute inset-0 z-0 h-full w-full object-contain object-center"
                 />
-                {orangeFrameRect ? (
-                  <div
-                    className="pointer-events-none absolute z-[1] rounded-lg border-[2.5px] border-orange-400/95"
-                    style={{
-                      left: `${orangeFrameRect.x * 100}%`,
-                      top: `${orangeFrameRect.y * 100}%`,
-                      width: `${orangeFrameRect.w * 100}%`,
-                      height: `${orangeFrameRect.h * 100}%`,
-                    }}
-                    aria-hidden
-                  />
-                ) : null}
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}
                   picks={sheet.picks}

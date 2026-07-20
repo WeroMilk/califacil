@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { printExamDocument, openPrintPreviewWindow } from '@/lib/printExam';
 import { downloadExamWord } from '@/lib/wordExam';
+import { sortExamQuestions } from '@/lib/examQuestions';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -503,7 +504,7 @@ async function fetchExamWithQuestions(examId: string): Promise<ExamWithQuestions
     .eq('exam_id', examId)
     .order('created_at', { ascending: true });
   if (qError) return null;
-  return { ...examData, questions: questions ?? [] };
+  return { ...examData, questions: sortExamQuestions(questions ?? []) };
 }
 
 function ExamCard({

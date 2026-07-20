@@ -1,21 +1,38 @@
 import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
+import { prepareReferenceGradeCanvas } from '@/lib/omr/reference-grade';
 import type { WarpAlignmentReport } from '@/lib/omrScan';
 import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
+  autoOrientCalifacilSheet,
+  captureImageFullFrame,
   countCalifacilCornerMarkers,
   detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
+  isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
+  hasCalifacilAlignStrips,
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
+  prepareMobileGradeDocumentCanvas,
   refineWarpedCalifacilSheet,
+  scaleCanvasToMaxSide,
   scaleQuadToCanvas,
   warpAndValidateCalifacilSheet,
   warpCalifacilSheetFromCornerMarkers,
   type MobileGuideRoiCapture,
   type Point,
 } from '@/lib/omrScan';
+
+/** Misma resolución que el PDF rasterizado en calificar (referencia visual + OMR). */
+export const CALIFACIL_GRADE_DOCUMENT_MAX_SIDE = 1600;
+
+export type NormalizeGradeDocumentResult = {
+  canvas: HTMLCanvasElement;
+  alignment: WarpAlignmentReport | null;
+  /** true si se enderezó o reorientó respecto al original */
+  normalized: boolean;
+};
 
 export type RoiQuad = [Point, Point, Point, Point];
 
@@ -199,4 +216,139 @@ export function warpCalifacilMobileCapture(
   }
 
   return best;
+}
+
+export type DesktopUploadClass = 'pdf' | 'flatScan' | 'photoCrop' | 'warpedPhoto';
+
+function isLikelyFlatCalifacilDocument(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  opts?: { flatDocument?: boolean }
+): boolean {
+  if (opts?.flatDocument) return true;
+  if (isCalifacilWarpedLetterCanvas(canvas)) return false;
+  if (!isCalifacilExamSheetLikely(canvas, columns)) return false;
+  if (!hasCalifacilAlignStrips(canvas)) return false;
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  return aspect > 0.68 && aspect < 0.88;
+}
+
+/** Clasifica subidas desktop para enrutar normalización y escaneo OMR. */
+export function classifyDesktopUploadCanvas(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  opts?: { isServerRenderedPdfPage?: boolean; preWarped?: boolean }
+): DesktopUploadClass {
+  if (opts?.isServerRenderedPdfPage) return 'pdf';
+  if (opts?.preWarped || isCalifacilWarpedLetterCanvas(canvas) || isMobileWarpedAnswerSheetReady(canvas)) {
+    return 'warpedPhoto';
+  }
+  if (isLikelyFlatCalifacilDocument(canvas, columns)) return 'flatScan';
+  return 'photoCrop';
+}
+
+/**
+ * Endereza y escala cualquier captura al mismo formato que un PDF de hoja CaliFacil
+ * (carta, ~1600 px de lado mayor, fiduciales alineados) para lectura OMR uniforme.
+ */
+export function normalizeCalifacilGradeDocumentCanvas(
+  source: HTMLCanvasElement,
+  columns: number,
+  opts?: {
+    maxSide?: number;
+    maxErrorPx?: number;
+    flatDocument?: boolean;
+    uploadClass?: DesktopUploadClass;
+    rowCount?: number;
+  }
+): NormalizeGradeDocumentResult {
+  const maxSide = opts?.maxSide ?? CALIFACIL_GRADE_DOCUMENT_MAX_SIDE;
+  const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+
+  const finish = (
+    canvas: HTMLCanvasElement,
+    alignment: WarpAlignmentReport | null,
+    normalized: boolean
+  ): NormalizeGradeDocumentResult => {
+    let out = scaleCanvasToMaxSide(canvas, maxSide);
+    const shouldReferenceAlign = opts?.rowCount != null && opts.rowCount > 0;
+    if (shouldReferenceAlign) {
+      out = prepareReferenceGradeCanvas(out, columns, opts.rowCount!);
+    }
+    return { canvas: out, alignment, normalized };
+  };
+
+  const base = captureImageFullFrame(source, { maxSide: Math.max(maxSide, 2400) }) ?? source;
+  const uploadClass =
+    opts?.uploadClass ?? classifyDesktopUploadCanvas(base, columns);
+  const useFlatPath =
+    uploadClass === 'pdf' ||
+    uploadClass === 'flatScan' ||
+    isLikelyFlatCalifacilDocument(base, columns, {
+      flatDocument: opts?.flatDocument,
+    });
+
+  if (useFlatPath) {
+    return finish(base, null, false);
+  }
+
+  if (isMobileWarpedAnswerSheetReady(base)) {
+    const doc = prepareMobileGradeDocumentCanvas(base, null);
+    return finish(
+      doc,
+      measureWarpedFiducialAlignment(doc, maxErrorPx),
+      Math.max(base.width, base.height) > maxSide * 1.08
+    );
+  }
+
+  for (const attempt of [
+    () => warpCalifacilMobileCaptureFast(base, { maxErrorPx }),
+    () => warpCalifacilMobileCapture(base, { maxErrorPx, fallbackMaxErrorPx: maxErrorPx + 12 }),
+  ]) {
+    const result = attempt();
+    if (result.warped && isMobileWarpedAnswerSheetReady(result.warped)) {
+      const doc = prepareMobileGradeDocumentCanvas(result.warped, result.alignment);
+      return finish(doc, result.alignment, true);
+    }
+  }
+
+  if (isCalifacilExamSheetLikely(base, columns)) {
+    const corner = warpCalifacilSheetFromCornerMarkers(base);
+    if (corner && countCalifacilCornerMarkers(corner) >= 3) {
+      const alignment = measureWarpedFiducialAlignment(corner, maxErrorPx);
+      const doc = prepareMobileGradeDocumentCanvas(corner, alignment);
+      return finish(doc, alignment, true);
+    }
+    return finish(base, null, false);
+  }
+
+  const oriented = autoOrientCalifacilSheet(base, columns, {
+    useGuideCrop: false,
+    allowTiltSweep: true,
+  });
+  if (oriented && isCalifacilExamSheetLikely(oriented, columns)) {
+    return finish(oriented, null, true);
+  }
+
+  return finish(base, null, false);
+}
+
+/**
+ * Prepara cualquier captura (cámara, galería, PDF, escaneo) al mismo espacio de referencia
+ * antes de leer burbujas OMR.
+ */
+export function prepareCalifacilGradeScanCanvas(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  opts?: {
+    preWarped?: boolean;
+    warpAlignment?: WarpAlignmentReport | null;
+  }
+): HTMLCanvasElement {
+  let out = canvas;
+  if (opts?.preWarped) {
+    out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
+  }
+  return prepareReferenceGradeCanvas(out, columns, rowCount);
 }

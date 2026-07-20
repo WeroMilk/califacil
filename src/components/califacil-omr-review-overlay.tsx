@@ -19,11 +19,24 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
+function bubbleSampleToCircle(
+  bubble: { cx: number; cy: number; r: number },
+  imageW: number,
+  imageH: number
+): BubbleCircle {
+  const minDim = Math.min(imageW, imageH);
+  return {
+    cx: bubble.cx * imageW,
+    cy: bubble.cy * imageH,
+    r: Math.max(4, bubble.r * minDim),
+  };
+}
+
 function cellToBubbleCircle(
   cell: { x: number; y: number; w: number; h: number },
   imageW: number,
   imageH: number,
-  radiusScale = 0.42
+  radiusScale = 0.36
 ): BubbleCircle {
   const pxW = cell.w * imageW;
   const pxH = cell.h * imageH;
@@ -49,6 +62,7 @@ export function CalifacilOmrReviewOverlay({
   const clipId = useId();
   const W = Math.max(1, geometry.imageWidth);
   const H = Math.max(1, geometry.imageHeight);
+  const useFrozenBubbles = geometry.frozen === true;
   const clipPx = clipRect
     ? {
         x: clipRect.x * W,
@@ -88,14 +102,25 @@ export function CalifacilOmrReviewOverlay({
             expectedPick < rowCells.length;
 
           const expectedCell = hasExpected ? rowCells[expectedPick] : null;
-          const expectedCircle = expectedCell ? cellToBubbleCircle(expectedCell, W, H) : null;
+          const expectedBubble = hasExpected ? geometry.bubbles?.[row]?.[expectedPick!] : null;
+          const expectedCircle = expectedBubble
+            ? bubbleSampleToCircle(expectedBubble, W, H)
+            : !useFrozenBubbles && expectedCell
+              ? cellToBubbleCircle(expectedCell, W, H)
+              : null;
 
           const pickCell =
             pick !== null && pick >= 0 && pick < rowCells.length ? rowCells[pick] : null;
+          const pickBubble =
+            pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
           const showPickSeparately =
-            pickCell !== null && (!hasExpected || pick !== expectedPick);
+            (pickCell !== null || pickBubble) && (!hasExpected || pick !== expectedPick);
           const pickCircle = showPickSeparately
-            ? cellToBubbleCircle(pickCell, W, H)
+            ? pickBubble
+              ? bubbleSampleToCircle(pickBubble, W, H)
+              : !useFrozenBubbles && pickCell
+                ? cellToBubbleCircle(pickCell, W, H)
+                : null
             : null;
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
@@ -104,6 +129,20 @@ export function CalifacilOmrReviewOverlay({
 
           return (
             <g key={row}>
+              {geometry.bubbles?.[row]?.map((bubble, col) =>
+                bubble.r > 0 ? (
+                  <circle
+                    key={`det-${row}-${col}`}
+                    cx={bubble.cx * W}
+                    cy={bubble.cy * H}
+                    r={Math.max(3, bubble.r * Math.min(W, H))}
+                    fill="none"
+                    stroke="rgba(100,116,139,0.35)"
+                    strokeWidth={Math.max(1, strokeBase * 0.7)}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ) : null
+              )}
               {expectedCircle ? (
                 <circle
                   cx={expectedCircle.cx}

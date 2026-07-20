@@ -11,6 +11,8 @@ function pdfjsAssetUrl(...segments: string[]): string {
 export const PDF_GRADE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const PDF_OMR_RENDER_MAX_SIDE = 1600;
 export const PDF_OMR_MAX_CANVAS_PIXELS = 2_500_000;
+/** JPEG quality for OMR rasterization — must stay high (≥95) to preserve bubble edges. */
+export const PDF_OMR_JPEG_QUALITY = 98;
 
 async function loadPdfDocument(buffer: ArrayBuffer) {
   const pdfjs = await loadPdfJsServer();
@@ -66,7 +68,7 @@ export async function renderPdfPageToJpeg(
   ctx.fillRect(0, 0, width, height);
   await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport, canvas: canvas as unknown as HTMLCanvasElement }).promise;
 
-  const jpeg = canvas.toBuffer('image/jpeg', 80);
+  const jpeg = canvas.toBuffer('image/jpeg', PDF_OMR_JPEG_QUALITY);
   pdf.destroy?.();
 
   return { jpeg, width, height, numPages };

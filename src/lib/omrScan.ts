@@ -29,6 +29,18 @@ import {
   REFINE_WARP_TARGET_MAX_ERROR_PX,
   refineWarpedSheetFiducials,
 } from '@/lib/omr/refine-warp';
+import {
+  hasReferenceGradeCalibration,
+  isReferenceGradeExam,
+  mergeReferenceColumnEdges,
+  mergeReferenceRowLineYs,
+  REFERENCE_QNUM_WIDTH_RATIO,
+  referenceTableFrameNorm,
+  canvasMatchesReferenceGrade,
+  canvasNearReferenceGrade,
+  scaleReferenceColEdges,
+  scaleReferenceLineYs,
+} from '@/lib/omr/reference-grade-merge';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -191,6 +203,10 @@ export type OmrScanMetaResult = {
   controlNumberDigits: (number | null)[];
   /** Número de control completo si los 8 dígitos fueron leídos con confianza. */
   controlNumber: string | null;
+  /** Unified engine: strip fallback was used. */
+  usedFallback?: boolean;
+  /** Result produced by unified OMR engine (skip legacy geometry merge). */
+  unifiedEngine?: boolean;
 };
 
 /** Máximo error en píxeles entre fiduciales detectados y plantilla tras warp. */
@@ -214,12 +230,50 @@ export type WarpAlignmentReport = {
 /** Rectángulo normalizado 0–1 respecto al canvas escaneado (misma relación de aspecto que la foto de revisión). */
 export type OmrNormRect = { x: number; y: number; w: number; h: number };
 
+/** Per-bubble metadata when produced by unified OMR engine. */
+export type CalifacilOmrBubbleSample = {
+  cx: number;
+  cy: number;
+  r: number;
+  bounds: OmrNormRect;
+  inkFrac: number;
+  fillDark: number;
+  ringDark: number;
+  score: number;
+  confidence: number;
+};
+
 export type CalifacilOmrScanGeometry = {
   /** Dimensiones del canvas usado en la lectura (puede estar escalado respecto a la foto original). */
   imageWidth: number;
   imageHeight: number;
   /** N filas × `cols` celdas de opción (solo cuerpo de tabla, sin cabecera). */
   cells: OmrNormRect[][];
+  /** Unified engine: per-bubble centers used for read + overlay. */
+  bubbles?: CalifacilOmrBubbleSample[][];
+  frame?: OmrNormRect;
+  rowLines?: number[];
+  colEdges?: number[];
+  quality?: {
+    score: number;
+    bubbleFit: number;
+    stability: number;
+    spatialConsistency: number;
+    validationOk: boolean;
+    issues: string[];
+    convergence?: {
+      converged: boolean;
+      iterations: number;
+      meanCenterErrorPx: number;
+      scoreDelta: number;
+      skipOptimizeUsed: boolean;
+      stripFallbackUsed: boolean;
+      resolvedCount: number;
+      ambiguousCount: number;
+    };
+  };
+  frozen?: boolean;
+  source?: 'unified-engine';
 };
 
 /**
@@ -696,6 +750,130 @@ export function getObjectContainVideoLayout(
 }
 
 /**
+ * Centro vertical normalizado de la fila 1 (0–1).
+ */
+function answerSheetGeometryRow1CenterY(geometry: CalifacilOmrScanGeometry): number | null {
+  const cell = geometry.cells[0]?.[0];
+  if (!cell) return null;
+  return cell.y + cell.h * 0.5;
+}
+
+/** La tabla OMR impresa vive en el pie de la hoja carta (no en el bloque de preguntas). */
+function isFooterAnswerSheetGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): boolean {
+  const rows = Math.min(rowCount, geometry.cells.length);
+  if (rows < 2) return false;
+  const cy0 = answerSheetGeometryRow1CenterY(geometry);
+  const last = geometry.cells[rows - 1]?.[0];
+  if (cy0 === null || !last) return false;
+  const cyLast = last.y + last.h * 0.5;
+  return cy0 >= 0.55 && cy0 <= 0.74 && cyLast <= 0.94;
+}
+
+export function pickFooterAnswerSheetGeometry(
+  tiers: OmrTierCandidate[],
+  rows: number,
+  columns: number,
+  canvas: HTMLCanvasElement
+): CalifacilOmrScanGeometry {
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, canvas.width);
+  const height = Math.max(1, canvas.height);
+  const templateCy = 0.62;
+  const candidates: CalifacilOmrScanGeometry[] = [];
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const imageData =
+    getOmrCanvasImageData(canvas) ??
+    (ctx ? ctx.getImageData(0, 0, width, height).data : null);
+  if (imageData) {
+    const swept = sweepAnswerSheetTableGrid(imageData, width, height, rows, columns);
+    if (swept) {
+      const sweptGeom = buildCellsFromTableLines(
+        swept.lineYs,
+        swept.colEdges,
+        width,
+        height,
+        cols
+      );
+      if (isFooterAnswerSheetGeometry(sweptGeom, rows)) {
+        candidates.push(sweptGeom);
+      }
+    }
+
+    const pageTemplate = buildCalifacilAnswerSheetOmrTemplate(rows);
+    const templateGeom = detectTableGridWithTemplate(
+      imageData,
+      width,
+      height,
+      rows,
+      columns,
+      pageTemplate
+    );
+    if (
+      templateGeom &&
+      validateAnswerSheetGeometry(templateGeom, rows).ok &&
+      isFooterAnswerSheetGeometry(templateGeom, rows)
+    ) {
+      candidates.push(templateGeom);
+    }
+  }
+
+  const fullDetect = detectFullCanvasTableGeometry(canvas, rows, columns);
+  if (
+    fullDetect?.geometry &&
+    validateAnswerSheetGeometry(fullDetect.geometry, rows).ok &&
+    isFooterAnswerSheetGeometry(fullDetect.geometry, rows)
+  ) {
+    candidates.push(fullDetect.geometry);
+  }
+
+  for (const { meta } of tiers) {
+    const g = meta.geometry;
+    if (!g || !validateAnswerSheetGeometry(g, rows).ok) continue;
+    if (isFooterAnswerSheetGeometry(g, rows)) candidates.push(g);
+  }
+
+  if (candidates.length > 0) {
+    const unique = candidates.filter((g, i, arr) => arr.findIndex((o) => o === g) === i);
+    unique.sort((a, b) => {
+      if (imageData) {
+        const fitA = scoreAnswerSheetGeometryBubbleFit(imageData, width, height, a, rows);
+        const fitB = scoreAnswerSheetGeometryBubbleFit(imageData, width, height, b, rows);
+        if (Math.abs(fitB - fitA) > 0.04) return fitB - fitA;
+      }
+      const da = Math.abs((answerSheetGeometryRow1CenterY(a) ?? 0) - templateCy);
+      const db = Math.abs((answerSheetGeometryRow1CenterY(b) ?? 0) - templateCy);
+      return da - db;
+    });
+    return unique[0]!;
+  }
+
+  if (imageData) {
+    const swept = sweepAnswerSheetTableGrid(imageData, width, height, rows, columns);
+    if (swept) {
+      return buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+    }
+    const pageTemplate = buildCalifacilAnswerSheetOmrTemplate(rows);
+    const templateGeom = detectTableGridWithTemplate(
+      imageData,
+      width,
+      height,
+      rows,
+      columns,
+      pageTemplate
+    );
+    if (templateGeom && validateAnswerSheetGeometry(templateGeom, rows).ok) {
+      return templateGeom;
+    }
+  }
+
+  return buildAnswerSheetOmrGeometry(rows, columns, width, height);
+}
+
+/**
  * Caja que envuelve todas las celdas OMR (coords. normalizadas 0–1).
  * `pad` en fracción de imagen (p. ej. 0 = borde exacto de las celdas del overlay).
  */
@@ -733,14 +911,132 @@ function boundsFromOmrCells(
 }
 
 /**
- * Marco naranja de revisión: bounding box exacto de {@link geometry.cells}
- * (misma geometría que usa el calificador y la cuadrícula azul).
+ * Marco naranja de revisión: envuelve la tabla impresa (N.º + A–D), con margen
+ * extra a la derecha para cubrir la columna D en escaneos.
  */
 export function califacilOmrOrangeFrameRect(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
 ): OmrNormRect | null {
-  return boundsFromOmrCells(geometry, rowCount, 0);
+  const bubble = boundsFromOmrCells(geometry, rowCount, 0);
+  if (!bubble) return null;
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const t = buildCalifacilAnswerSheetOmrTemplate(rows);
+  const cols = geometry.cells[0]?.length ?? 4;
+  const cellW = bubble.w / Math.max(1, cols);
+  const cellH = bubble.h / Math.max(1, rows);
+  const padTop = bubble.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
+  const padLeft = bubble.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
+  const padRight = Math.max(bubble.w * 0.1, cellW * 0.72);
+  const padBottom = Math.max(bubble.h * 0.02, cellH * 0.35);
+  const x = Math.max(0, bubble.x - padLeft);
+  const y = Math.max(0, bubble.y - padTop);
+  return {
+    x,
+    y,
+    w: Math.min(1 - x, bubble.w + padLeft + padRight),
+    h: Math.min(1 - y, bubble.h + padTop + padBottom),
+  };
+}
+
+/**
+ * Escala filas/columnas detectadas al área de burbujas del marco naranja (A–D completas).
+ */
+export function calibrateAnswerSheetGeometryToOrangeFrame(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number,
+  columns?: number
+): CalifacilOmrScanGeometry {
+  const rows = Math.min(clampCalifacilOmrRowCount(rowCount), geometry.cells.length);
+  if (rows <= 0) return geometry;
+  const cols = Math.max(2, Math.min(5, Math.round(columns ?? geometry.cells[0]?.length ?? 4)));
+  if (
+    isReferenceGradeExam(rows, cols) &&
+    canvasMatchesReferenceGrade(geometry.imageWidth, geometry.imageHeight)
+  ) {
+    return geometry;
+  }
+
+  const frame = califacilOmrOrangeFrameRect(geometry, rows);
+  const bubble = boundsFromOmrCells(geometry, rows, 0);
+  if (!frame || !bubble || bubble.w < 1e-6 || bubble.h < 1e-6) return geometry;
+
+  const t = buildCalifacilAnswerSheetOmrTemplate(rows);
+  const dataLeft = frame.x + frame.w * t.qnumWidthRatio;
+  const dataTop = frame.y + frame.h * t.titleStripRatioOfTable;
+  const dataRight = frame.x + frame.w * (1 - 0.028);
+  const dataBottom = frame.y + frame.h * 0.992;
+  const dataW = Math.max(1e-5, dataRight - dataLeft);
+  const dataH = Math.max(1e-5, dataBottom - dataTop);
+  const sx = Math.min(1.18, dataW / bubble.w);
+  const sy = Math.min(1.12, dataH / bubble.h);
+
+  const cells: OmrNormRect[][] = [];
+  for (let r = 0; r < rows; r++) {
+    const srcRow = geometry.cells[r];
+    if (!srcRow?.length) continue;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const src = srcRow[c];
+      if (!src) continue;
+      let x = dataLeft + (src.x - bubble.x) * sx;
+      let y = dataTop + (src.y - bubble.y) * sy;
+      let w = src.w * sx;
+      let h = src.h * sy;
+      if (c === cols - 1) {
+        w = Math.max(w, dataRight - x);
+      }
+      x = Math.max(0, Math.min(1 - w, x));
+      y = Math.max(0, Math.min(1 - h, y));
+      rowRects.push({ x, y, w, h });
+    }
+    if (rowRects.length === cols) cells.push(rowRects);
+  }
+
+  return cells.length === rows ? { ...geometry, cells } : geometry;
+}
+
+/** Ensancha solo la columna D hasta el borde derecho del área de burbujas. */
+export function extendAnswerSheetLastColumnCells(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number
+): CalifacilOmrScanGeometry {
+  const rows = Math.min(clampCalifacilOmrRowCount(rowCount), geometry.cells.length);
+  const cols = geometry.cells[0]?.length ?? 0;
+  if (rows <= 0 || cols < 2) return geometry;
+  if (
+    isReferenceGradeExam(rows, cols) &&
+    canvasMatchesReferenceGrade(geometry.imageWidth, geometry.imageHeight)
+  ) {
+    return geometry;
+  }
+  const frame = califacilOmrOrangeFrameRect(geometry, rows);
+  if (!frame) return geometry;
+  const targetRight = frame.x + frame.w * (1 - 0.028);
+  const last = cols - 1;
+  const cells = geometry.cells.map((row, r) => {
+    if (r >= rows) return row;
+    return row.map((cell, c) => {
+      if (c !== last) return cell;
+      const w = Math.max(cell.w, targetRight - cell.x);
+      return { ...cell, w: Math.min(w, 1 - cell.x) };
+    });
+  });
+  return { ...geometry, cells };
+}
+
+/**
+ * Geometría calibrada para overlay (misma que usa la lectura tras el escaneo).
+ */
+export function califacilOmrOverlayGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  rowCount: number,
+  columns?: number
+): CalifacilOmrScanGeometry {
+  return extendAnswerSheetLastColumnCells(
+    calibrateAnswerSheetGeometryToOrangeFrame(geometry, rowCount, columns),
+    rowCount
+  );
 }
 
 /**
@@ -919,7 +1215,7 @@ export type { Point };
 type LineXFromY = { m: number; b: number }; // x = m*y + b
 type LineYFromX = { m: number; b: number }; // y = m*x + b
 
-function sampleDiskDarkness(
+export function sampleDiskDarkness(
   data: Uint8ClampedArray,
   width: number,
   height: number,
@@ -945,7 +1241,7 @@ function sampleDiskDarkness(
   return n > 0 ? sum / n : 0;
 }
 
-function sampleAnnulusDarkness(
+export function sampleAnnulusDarkness(
   data: Uint8ClampedArray,
   width: number,
   height: number,
@@ -1244,6 +1540,9 @@ function drawSourceToCanvas(
   if (srcW < 40 || srcH < 40) return null;
 
   const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+  if (scale >= 1 - 1e-6 && source instanceof HTMLCanvasElement) {
+    return source;
+  }
   const w = Math.max(1, Math.round(srcW * scale));
   const h = Math.max(1, Math.round(srcH * scale));
 
@@ -3347,9 +3646,10 @@ export function prepareMobileGradeDocumentCanvas(
     const trimmed = trimCanvasContentBorders(deskewed) ?? deskewed;
     return cropWarpedAnswerSheetToPrintBounds(trimmed) ?? trimmed;
   }
+  const skipPrintCrop = !precise;
   return (
-    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: false }) ??
-    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ??
+    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop }) ??
+    prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop }) ??
     warped
   );
 }
@@ -3590,7 +3890,7 @@ function buildAnswerSheetOmrGeometryFromTemplate(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
-  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.5;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
   const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
   const cellW = bubbleAreaW / cols;
@@ -3635,10 +3935,9 @@ function detectTableGridWithTemplate(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
-  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.5;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
   const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
-  const cellW = bubbleAreaW / cols;
 
   const uniformColEdges = buildUniformBubbleColumnEdges(
     bubbleAreaLeft,
@@ -3656,7 +3955,7 @@ function detectTableGridWithTemplate(
     dataHeight,
     rows
   );
-  let colEdges = inferColumnEdgesFromVerticalLines(
+  let colEdges = resolveBubbleColumnEdges(
     imageData,
     width,
     height,
@@ -3664,52 +3963,37 @@ function detectTableGridWithTemplate(
     bubbleAreaW,
     cols,
     dataTop,
-    rowH
+    rowH,
+    uniformColEdges,
+    lineYs
   );
 
   if (lineYs && lineYs.length === rows + 1) {
-    let rowAligned = true;
-    let avgDev = 0;
-    for (let i = 0; i < rows + 1; i++) {
-      const expected = dataTop + i * rowH;
-      const dev = Math.abs(lineYs[i]! - expected);
-      avgDev += dev;
-      if (dev > rowH * 0.92) rowAligned = false;
-    }
-    avgDev /= rows + 1;
-    const uniformRows = lineYsHaveUniformSpacing(lineYs);
-    if (!rowAligned && !uniformRows) {
+    const cy0 = (lineYs[0]! + lineYs[1]!) * 0.5 / height;
+    if (cy0 < 0.55 || cy0 > 0.74) {
       lineYs = null;
-    } else if (rowAligned) {
-      const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
-      lineYs = lineYs.map((y, i) => {
-        const expected = dataTop + i * rowH;
-        return Math.round(y * detectedWeight + expected * (1 - detectedWeight));
-      });
     }
   } else {
     lineYs = null;
   }
 
-  if (colEdges && colEdges.length === cols + 1) {
-    let maxEdgeDev = 0;
-    for (let i = 0; i <= cols; i++) {
-      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(colEdges[i]! - uniformColEdges[i]!));
-    }
-    const span = colEdges[cols]! - colEdges[0]!;
-    if (span < bubbleAreaW * 0.62 || span > bubbleAreaW * 1.38 || maxEdgeDev > cellW * 0.62) {
-      colEdges = null;
-    } else {
-      colEdges = colEdges.map((x, i) => Math.round(x * 0.72 + uniformColEdges[i]! * 0.28));
-    }
-  } else {
-    colEdges = null;
-  }
-
   if (!lineYs) return null;
 
-  const columnEdges = colEdges ?? uniformColEdges;
+  const columnEdges = colEdges;
   return buildCellsFromTableLines(lineYs, columnEdges, width, height, cols);
+}
+
+function applyReferenceAnchoredTableGeometry(
+  lineYs: number[],
+  colEdges: number[],
+  width: number,
+  height: number,
+  rows: number,
+  cols: number
+): CalifacilOmrScanGeometry {
+  const mergedYs = mergeReferenceRowLineYs(lineYs, height, rows);
+  const mergedCols = mergeReferenceColumnEdges(colEdges, width, cols);
+  return buildCellsFromTableLines(mergedYs, mergedCols, width, height, cols);
 }
 
 /** Detecta la rejilla impresa en el ROI de cámara (líneas horizontales/verticales de la tabla). */
@@ -3796,30 +4080,90 @@ function meanDiskLuminance(
   return n > 0 ? sum / n : 255;
 }
 
-/** Busca el centro más oscuro (burbuja impresa) dentro de la celda detectada. */
-function refineBubbleCenterInCell(
+/** Centroide de tinta del alumno dentro de la celda (null si no hay marca clara). */
+function findInkCentroidInCell(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   cell: OmrNormRect
+): Point | null {
+  const x0 = Math.max(0, Math.floor(cell.x * width));
+  const y0 = Math.max(0, Math.floor(cell.y * height));
+  const x1 = Math.min(width - 1, Math.ceil((cell.x + cell.w) * width));
+  const y1 = Math.min(height - 1, Math.ceil((cell.y + cell.h) * height));
+  if (x1 <= x0 + 2 || y1 <= y0 + 2) return null;
+
+  const { hist, total } = buildRowGrayHistogram(data, width, height, x0, x1, y0, y1, 1);
+  const otsuT = otsuThreshold256(hist, Math.max(1, total));
+  const threshold = Math.min(otsuT, 165);
+
+  const cx0 = (cell.x + cell.w * 0.5) * width;
+  const cy0 = (cell.y + cell.h * 0.5) * height;
+  const maxR = Math.min(cell.w * width, cell.h * height) * 0.42;
+
+  let sumX = 0;
+  let sumY = 0;
+  let darkCount = 0;
+  let sampleCount = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (Math.hypot(x - cx0, y - cy0) > maxR) continue;
+      sampleCount++;
+      const i = (y * width + x) * 4;
+      if (pixelGray255(data, i) >= threshold) continue;
+      sumX += x;
+      sumY += y;
+      darkCount++;
+    }
+  }
+  if (darkCount < 4 || sampleCount < 8) return null;
+  const inkFrac = darkCount / sampleCount;
+  if (inkFrac < 0.08) return null;
+  return { x: sumX / darkCount, y: sumY / darkCount };
+}
+
+/** Busca el centro más oscuro (burbuja impresa) dentro de la celda detectada. */
+export function refineBubbleCenterInCell(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cell: OmrNormRect,
+  opts?: { preferInk?: boolean }
 ): Point {
+  if (opts?.preferInk !== false) {
+    const inkCenter = findInkCentroidInCell(data, width, height, cell);
+    if (inkCenter) {
+      const cx0 = (cell.x + cell.w * 0.5) * width;
+      const cy0 = (cell.y + cell.h * 0.5) * height;
+      const cellMin = Math.min(cell.w * width, cell.h * height);
+      const maxInkDist = cellMin * 0.38;
+      if (Math.hypot(inkCenter.x - cx0, inkCenter.y - cy0) <= maxInkDist) {
+        return inkCenter;
+      }
+    }
+  }
+
   const cx0 = (cell.x + cell.w * 0.5) * width;
   const cy0 = (cell.y + cell.h * 0.5) * height;
   const cellW = cell.w * width;
   const cellH = cell.h * height;
-  const searchR = Math.max(2, Math.round(Math.min(cellW, cellH) * 0.44));
+  const searchR = Math.max(2, Math.round(Math.min(cellW, cellH) * 0.78));
   const diskR = Math.max(1, Math.round(Math.min(cellW, cellH) * 0.24));
-  const step = Math.max(1, Math.round(searchR / 5));
+  const innerR = Math.max(1, Math.round(diskR * 0.42));
+  const step = Math.max(1, Math.round(searchR / 4));
   let bestX = cx0;
   let bestY = cy0;
-  let bestLum = 255;
+  let bestScore = Number.NEGATIVE_INFINITY;
   for (let dy = -searchR; dy <= searchR; dy += step) {
     for (let dx = -searchR; dx <= searchR; dx += step) {
       const px = Math.round(cx0 + dx);
       const py = Math.round(cy0 + dy);
-      const lum = meanDiskLuminance(data, width, height, px, py, diskR);
-      if (lum < bestLum) {
-        bestLum = lum;
+      const ringLum = meanDiskLuminance(data, width, height, px, py, diskR);
+      const innerLum = meanDiskLuminance(data, width, height, px, py, innerR);
+      const ringDark = 255 - ringLum;
+      const score = ringDark * 1.05 + innerLum * 0.25 - Math.hypot(dx, dy) * 0.07;
+      if (score > bestScore) {
+        bestScore = score;
         bestX = px;
         bestY = py;
       }
@@ -3828,8 +4172,83 @@ function refineBubbleCenterInCell(
   return { x: bestX, y: bestY };
 }
 
+/** 0–1: qué tan bien las celdas coinciden con picos de burbuja impresos (para elegir geometría). */
+export function scoreAnswerSheetGeometryBubbleFit(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  geometry: CalifacilOmrScanGeometry,
+  rows: number
+): number {
+  let score = 0;
+  let count = 0;
+  for (let r = 0; r < rows; r++) {
+    const cell = geometry.cells[r]?.[0];
+    if (!cell) continue;
+    const cx0 = (cell.x + cell.w * 0.5) * width;
+    const cy0 = (cell.y + cell.h * 0.5) * height;
+    const center = refineBubbleCenterInCell(data, width, height, cell, { preferInk: false });
+    const cellW = cell.w * width;
+    const cellH = cell.h * height;
+    const maxDisp = Math.min(cellW, cellH) * 0.45;
+    const disp = Math.hypot(center.x - cx0, center.y - cy0);
+    if (disp <= maxDisp) score += 1;
+    else score += Math.max(0, 1 - (disp - maxDisp) / Math.max(1, maxDisp));
+    count++;
+  }
+  return count > 0 ? score / count : 0;
+}
+
+function shiftAnswerSheetGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  dx: number,
+  dy: number
+): CalifacilOmrScanGeometry {
+  const cells = geometry.cells.map((row) =>
+    row.map((cell) => ({
+      x: Math.max(0, Math.min(1 - cell.w, cell.x + dx)),
+      y: Math.max(0, Math.min(1 - cell.h, cell.y + dy)),
+      w: cell.w,
+      h: cell.h,
+    }))
+  );
+  return { ...geometry, cells };
+}
+
+/** Busca un desplazamiento global que maximice coincidencia con burbujas impresas. */
+function optimizeAnswerSheetGeometryBubbleFit(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry,
+  rows: number
+): CalifacilOmrScanGeometry {
+  const imageData = getOmrCanvasImageData(canvas);
+  if (!imageData) return geometry;
+  const W = canvas.width;
+  const H = canvas.height;
+  let best = geometry;
+  let bestFit = scoreAnswerSheetGeometryBubbleFit(imageData, W, H, geometry, rows);
+  const cellW = geometry.cells[0]?.[0]?.w ?? 0.05;
+  const cellH = geometry.cells[0]?.[0]?.h ?? 0.007;
+  const dxStep = Math.max(0.002, cellW * 0.14);
+  const dyStep = Math.max(0.001, cellH * 0.42);
+  for (let dyN = -5; dyN <= 5; dyN++) {
+    const dy = dyN * dyStep;
+    for (let dxN = -5; dxN <= 5; dxN++) {
+      const dx = dxN * dxStep;
+      if (dxN === 0 && dyN === 0) continue;
+      const shifted = shiftAnswerSheetGeometry(geometry, dx, dy);
+      const fit = scoreAnswerSheetGeometryBubbleFit(imageData, W, H, shifted, rows);
+      if (fit > bestFit + 0.006) {
+        bestFit = fit;
+        best = shifted;
+      }
+    }
+  }
+  return best;
+}
+
 /** Muestra tinta en una burbuja: centro refinado + disco interior y anillo exterior. */
-function sampleBubbleMarkAtCell(
+export function sampleBubbleMarkAtCell(
   data: Uint8ClampedArray,
   width: number,
   height: number,
@@ -3841,7 +4260,7 @@ function sampleBubbleMarkAtCell(
   const H = height;
   const cellW = Math.max(1, cell.w * W);
   const cellH = Math.max(1, cell.h * H);
-  const center = refineBubbleCenterInCell(data, W, H, cell);
+  const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: true });
   const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.34);
   const diskRInk = Math.max(2, Math.round(radiusPx * 0.55));
   const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
@@ -3875,29 +4294,364 @@ function sampleBubbleMarkAtCell(
 }
 
 /** Desplaza cada celda para centrarla en la burbuja impresa más oscura. */
+const omrCanvasImageCache = new WeakMap<
+  HTMLCanvasElement,
+  { w: number; h: number; data: Uint8ClampedArray }
+>();
+
+export function getOmrCanvasImageData(canvas: HTMLCanvasElement): Uint8ClampedArray | null {
+  const cached = omrCanvasImageCache.get(canvas);
+  if (cached && cached.w === canvas.width && cached.h === canvas.height) {
+    return cached.data;
+  }
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  omrCanvasImageCache.set(canvas, { w: canvas.width, h: canvas.height, data });
+  return data;
+}
+
+export type RefineBubbleGeometryOpts = {
+  /** Si true, ancla celdas al centroide de tinta del alumno (inestable al cambiar marcas). */
+  preferInk?: boolean;
+  /** Desplazamiento máximo permitido respecto a la celda original (fracción de w/h). */
+  maxShiftRatio?: number;
+};
+
 export function refineAnswerSheetGeometryToBubblePeaks(
   canvas: HTMLCanvasElement,
-  geometry: CalifacilOmrScanGeometry
+  geometry: CalifacilOmrScanGeometry,
+  imageData?: Uint8ClampedArray | null,
+  opts?: RefineBubbleGeometryOpts
 ): CalifacilOmrScanGeometry {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return geometry;
-  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData ?? getOmrCanvasImageData(canvas);
+  if (!data) return geometry;
+  const preferInk = opts?.preferInk !== false;
+  const maxShiftRatio = opts?.maxShiftRatio;
   const W = Math.max(1, geometry.imageWidth);
   const H = Math.max(1, geometry.imageHeight);
   const cells = geometry.cells.map((row) =>
     row.map((cell) => {
-      const center = refineBubbleCenterInCell(data, W, H, cell);
+      const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk });
       const nx = center.x / W - cell.w * 0.5;
       const ny = center.y / H - cell.h * 0.5;
+      let x = nx;
+      let y = ny;
+      if (maxShiftRatio != null) {
+        const maxDx = cell.w * maxShiftRatio;
+        const maxDy = cell.h * maxShiftRatio;
+        x = Math.max(cell.x - maxDx, Math.min(cell.x + maxDx, nx));
+        y = Math.max(cell.y - maxDy, Math.min(cell.y + maxDy, ny));
+      }
       return {
-        x: Math.max(0, Math.min(1 - cell.w, nx)),
-        y: Math.max(0, Math.min(1 - cell.h, ny)),
+        x: Math.max(0, Math.min(1 - cell.w, x)),
+        y: Math.max(0, Math.min(1 - cell.h, y)),
         w: cell.w,
         h: cell.h,
       };
     })
   );
   return { ...geometry, cells };
+}
+
+function omrGeometryMatchesPicks(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry,
+  picks: (number | null)[],
+  rows: number,
+  columns: number
+): boolean {
+  const probe = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    geometryCellsForBubbleSampling(geometry),
+    FRAME_GRID_SCAN_THRESHOLDS,
+    rows,
+    columns
+  );
+  let matches = 0;
+  for (let i = 0; i < rows; i++) {
+    if (picks[i] === probe.picks[i]) matches++;
+  }
+  return matches >= Math.ceil(rows * 0.88);
+}
+
+/**
+ * Cuando la rejilla de celdas no reproduce los picks (p. ej. barrido legacy vs overlay),
+ * genera centros de burbuja por fila para que el overlay coincida con la lectura.
+ */
+export function attachAnswerSheetReviewBubbleOverlay(
+  canvas: HTMLCanvasElement,
+  meta: OmrScanMetaResult,
+  columns: number,
+  rowCount: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  if (!meta.geometry) return meta;
+  const geom = syncCalifacilOmrGeometryImageSize(
+    meta.geometry,
+    canvas.width,
+    canvas.height
+  );
+  const bubbleFit = geom.quality?.bubbleFit ?? 1;
+  if (
+    geom.frozen === true &&
+    bubbleFit >= 0.55 &&
+    geom.bubbles?.length &&
+    omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns)
+  ) {
+    return { ...meta, geometry: geom };
+  }
+  if (omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns) && bubbleFit >= 0.55) {
+    return { ...meta, geometry: geom };
+  }
+
+  const data = getOmrCanvasImageData(canvas);
+  if (!data) return { ...meta, geometry: geom };
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const picksAligned = omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns);
+  let bubbleBase = geom;
+  if (
+    !picksAligned &&
+    isReferenceGradeExam(rows, columns) &&
+    canvasNearReferenceGrade(canvas.width, canvas.height) &&
+    !isFooterAnswerSheetGeometry(geom, rows)
+  ) {
+    const registered = buildRegisteredAnswerSheetGeometry(canvas, rows, columns);
+    bubbleBase = refineAnswerSheetGeometryToBubblePeaks(canvas, registered, data, {
+      preferInk: false,
+    });
+  }
+  const outputGeom = picksAligned
+    ? geom
+    : syncCalifacilOmrGeometryImageSize(bubbleBase, W, H);
+  const bubbles: CalifacilOmrBubbleSample[][] = [];
+
+  for (let r = 0; r < rows; r++) {
+    const rowCells = outputGeom.cells[r];
+    const rowBubbles: CalifacilOmrBubbleSample[] = [];
+    if (!rowCells?.length) {
+      bubbles.push(rowBubbles);
+      continue;
+    }
+    const pickCol = meta.picks[r] ?? null;
+    for (let c = 0; c < cols; c++) {
+      const cell = rowCells[c];
+      if (!cell) continue;
+      const preferInk = pickCol !== null && c === pickCol;
+      const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk });
+      const cellW = Math.max(1, cell.w * W);
+      const cellH = Math.max(1, cell.h * H);
+      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.34);
+      rowBubbles.push({
+        cx: center.x / W,
+        cy: center.y / H,
+        r: rPx / Math.min(W, H),
+        bounds: cell,
+        inkFrac: 0,
+        fillDark: 0,
+        ringDark: 0,
+        score: 0,
+        confidence: 0,
+      });
+    }
+    bubbles.push(rowBubbles);
+  }
+
+  return {
+    ...meta,
+    geometry: {
+      ...outputGeom,
+      bubbles,
+    },
+  };
+}
+
+/** Centra celdas en burbujas impresas y relee picks con la geometría ajustada. */
+function applyOmrGeometryBubbleSnap(
+  canvas: HTMLCanvasElement,
+  meta: OmrScanMetaResult,
+  columns: number,
+  rowCount: number,
+  thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS
+): OmrScanMetaResult {
+  if (!meta.geometry) return meta;
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const refined = refineAnswerSheetGeometryToBubblePeaks(canvas, meta.geometry);
+  const reread = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    refined,
+    thresholds,
+    rowCount,
+    columns
+  );
+  return {
+    ...meta,
+    picks: reread.picks,
+    rows: reread.rows,
+    maxSameColumnCount: reread.maxSameColumnCount,
+    geometry: refined,
+  };
+}
+
+/**
+ * Post-procesa geometría para lectura y overlay: refinamiento, calibración condicional,
+ * extensión de columna D y releída de picks.
+ * @deprecated Legacy path — strip-vs-template reread decouples picks from geometry. Unified engine skips this.
+ */
+function finalizeAnswerSheetGeometryForGrade(
+  canvas: HTMLCanvasElement,
+  meta: OmrScanMetaResult,
+  columns: number,
+  rowCount: number,
+  thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS
+): OmrScanMetaResult {
+  if (!meta.geometry) return meta;
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const skipStripReread =
+    isReferenceGradeExam(rows, columns) &&
+    canvasMatchesReferenceGrade(canvas.width, canvas.height);
+  const imageData = getOmrCanvasImageData(canvas);
+  const W = Math.max(1, canvas.width);
+  const H = Math.max(1, canvas.height);
+
+  const refineOpts: RefineBubbleGeometryOpts = { preferInk: false };
+  const originalGeometry = meta.geometry;
+  let geometry = meta.geometry;
+
+  if (!skipStripReread) {
+    geometry = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, imageData, refineOpts);
+    if (imageData) {
+      const fitBefore = scoreAnswerSheetGeometryBubbleFit(imageData, W, H, geometry, rows);
+      const calibrated = calibrateAnswerSheetGeometryToOrangeFrame(geometry, rows, columns);
+      const fitAfter = scoreAnswerSheetGeometryBubbleFit(imageData, W, H, calibrated, rows);
+      if (fitAfter > fitBefore + 0.02) {
+        geometry = calibrated;
+        geometry = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, imageData, refineOpts);
+      }
+    }
+  }
+
+  const beforeScore = scoreOmrMetaPicks(meta, rows);
+  const beforeResolved = meta.picks.filter((p) => p !== null).length;
+
+  geometry = extendAnswerSheetLastColumnCells(geometry, rows);
+
+  if (skipStripReread) {
+    const reread = readAnswerSheetPicksFromTemplateGeometry(
+      canvas,
+      geometryCellsForBubbleSampling(geometry),
+      thresholds,
+      rows,
+      columns
+    );
+    return {
+      ...meta,
+      picks: reread.picks,
+      rows: reread.rows,
+      maxSameColumnCount: reread.maxSameColumnCount,
+      geometry,
+    };
+  }
+
+  const stripRead = scanCalifacilOmrSheetWithMeta(canvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    qnumSweep: 'full',
+    columnShiftSweep: 'full',
+    rowCount: rows,
+  });
+  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    geometryCellsForBubbleSampling(geometry),
+    thresholds,
+    rows,
+    columns
+  );
+
+  const stripResolved = stripRead.picks.filter((p) => p !== null).length;
+  const templateResolved = templateRead.picks.filter((p) => p !== null).length;
+  const stripSameCol = stripRead.maxSameColumnCount ?? 0;
+  const templateSameCol = templateRead.maxSameColumnCount ?? 0;
+  const useStrip =
+    stripResolved >= templateResolved &&
+    stripSameCol <= Math.max(templateSameCol, Math.ceil(rows * 0.38));
+  const reread = useStrip ? stripRead : templateRead;
+  const rereadScore = scoreOmrMetaPicks(
+    { ...meta, picks: reread.picks, rows: reread.rows, maxSameColumnCount: reread.maxSameColumnCount },
+    rows
+  );
+  const rereadResolved = reread.picks.filter((p) => p !== null).length;
+  const rereadSameCol = reread.maxSameColumnCount ?? 0;
+  const useReread =
+    rereadScore > beforeScore + 12 &&
+    rereadResolved >= beforeResolved - 1 &&
+    rereadSameCol <= Math.ceil(rows * 0.42);
+
+  // Overlay must use the same geometry that produced the winning picks (strip sweep vs refined grid).
+  if (!useReread && originalGeometry) {
+    geometry = extendAnswerSheetLastColumnCells(originalGeometry, rows);
+  } else if (
+    stripRead.geometry &&
+    imageData &&
+    scoreAnswerSheetGeometryBubbleFit(
+      imageData,
+      canvas.width,
+      canvas.height,
+      stripRead.geometry,
+      rows
+    ) >
+      scoreAnswerSheetGeometryBubbleFit(
+        imageData,
+        canvas.width,
+        canvas.height,
+        geometry,
+        rows
+      ) +
+        0.03
+  ) {
+    geometry = extendAnswerSheetLastColumnCells(stripRead.geometry, rows);
+  }
+
+  return {
+    ...meta,
+    picks: useReread ? reread.picks : meta.picks,
+    rows: useReread ? reread.rows : meta.rows,
+    maxSameColumnCount: useReread ? reread.maxSameColumnCount : meta.maxSameColumnCount,
+    geometry,
+  };
+}
+
+function pickBestOmrScanCandidate(
+  candidates: OmrScanMetaResult[],
+  rowCount: number
+): OmrScanMetaResult {
+  let best = candidates[0]!;
+  let bestScore = scoreOmrMetaPicks(best, rowCount);
+  for (const candidate of candidates.slice(1)) {
+    const score = scoreOmrMetaPicks(candidate, rowCount);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function isOmrAutoGradeGoodEnough(meta: OmrScanMetaResult, rows: number): boolean {
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
+  const resolved = meta.picks.filter((p) => p !== null).length;
+  const minAutoRead = Math.max(1, Math.ceil(rows * 0.9));
+  const minRecovery = Math.max(1, Math.ceil(rows * 0.45));
+  if (resolved < minRecovery || !meta.geometry) return false;
+  if (!validateAnswerSheetGeometry(meta.geometry, rows).ok) return false;
+  if (resolved < minAutoRead) return false;
+  const same = meta.maxSameColumnCount ?? 0;
+  if (same >= Math.ceil(rows * 0.75)) return false;
+  const ambiguous = meta.rows.slice(0, rows).filter((r) => r.ambiguous).length;
+  if (ambiguous > Math.ceil(rows * 0.35)) return false;
+  return scoreOmrMetaPicks(meta, rows) >= rows * 70;
 }
 
 function shiftControlNumberGeometry(
@@ -3976,7 +4730,7 @@ export function mapAnswerSheetBubblesToViewport(
       const cell = rowCells[col];
       if (!cell) continue;
       const center = imageData
-        ? refineBubbleCenterInCell(imageData, roiW, roiH, cell)
+        ? refineBubbleCenterInCell(imageData, roiW, roiH, cell, { preferInk: true })
         : { x: (cell.x + cell.w * 0.5) * roiW, y: (cell.y + cell.h * 0.5) * roiH };
       const vp = mapRoiCanvasPointToViewport(center.x, center.y, roiCapture, letterbox);
       const vpEdge = mapRoiCanvasPointToViewport(
@@ -4784,6 +5538,67 @@ function findVerticalLinePeaks(
 /**
  * Infiere bordes x entre columnas A… usando líneas verticales impresas (cols+1 valores).
  */
+function resolveBubbleColumnEdges(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bubbleAreaLeft: number,
+  bubbleAreaW: number,
+  cols: number,
+  dataTop: number,
+  rowH: number,
+  uniformColEdges: number[],
+  lineYs?: number[] | null
+): number[] {
+  const cellW = bubbleAreaW / Math.max(1, cols);
+  let colEdges = inferColumnEdgesFromVerticalLines(
+    data,
+    width,
+    height,
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    dataTop,
+    rowH,
+    lineYs
+  );
+  if (!colEdges || colEdges.length !== cols + 1) {
+    colEdges = inferColumnEdgesGlobalFromVerticalLines(
+      data,
+      width,
+      height,
+      cols,
+      dataTop,
+      rowH,
+      lineYs
+    );
+  }
+  if (colEdges && colEdges.length === cols + 1) {
+    let maxEdgeDev = 0;
+    for (let i = 0; i <= cols; i++) {
+      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(colEdges[i]! - uniformColEdges[i]!));
+    }
+    const span = colEdges[cols]! - colEdges[0]!;
+    if (
+      span >= bubbleAreaW * 0.58 &&
+      span <= bubbleAreaW * 1.58 &&
+      maxEdgeDev <= cellW * 0.78
+    ) {
+      const detectedWeight = maxEdgeDev <= cellW * 0.55 ? 0.92 : 0.82;
+      const uniformWeight = 1 - detectedWeight;
+      return padBubbleColumnEdgesRight(
+        colEdges.map((x, i) =>
+          Math.round(x * detectedWeight + uniformColEdges[i]! * uniformWeight)
+        ),
+        cols,
+        width,
+        bubbleAreaW
+      );
+    }
+  }
+  return padBubbleColumnEdgesRight(uniformColEdges, cols, width, bubbleAreaW);
+}
+
 function inferColumnEdgesFromVerticalLines(
   data: Uint8ClampedArray,
   width: number,
@@ -4792,13 +5607,22 @@ function inferColumnEdgesFromVerticalLines(
   bubbleAreaW: number,
   cols: number,
   dataTop: number,
-  rowH: number
+  rowH: number,
+  lineYs?: number[] | null
 ): number[] | null {
   const cellGuess = bubbleAreaW / Math.max(1, cols);
-  const y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
-  const y1 = Math.min(height - 1, Math.ceil(dataTop + 8.8 * rowH));
+  let y0: number;
+  let y1: number;
+  if (lineYs && lineYs.length >= 3) {
+    const sampleEnd = Math.min(lineYs.length - 1, Math.max(3, Math.ceil(lineYs.length * 0.55)));
+    y0 = Math.max(1, Math.floor(lineYs[1]! + rowH * 0.1));
+    y1 = Math.min(height - 1, Math.ceil(lineYs[sampleEnd]! - rowH * 0.1));
+  } else {
+    y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
+    y1 = Math.min(height - 1, Math.ceil(dataTop + Math.max(8.8, rowH > 0 ? (height - dataTop) / rowH * 0.55 : 8.8) * rowH));
+  }
   const xLo = Math.max(1, Math.floor(bubbleAreaLeft - cellGuess * 0.2));
-  const xHi = Math.min(width - 2, Math.ceil(bubbleAreaLeft + bubbleAreaW + cellGuess * 0.25));
+  const xHi = Math.min(width - 2, Math.ceil(bubbleAreaLeft + bubbleAreaW + cellGuess * 0.45));
   if (y1 <= y0 + 6 || xHi <= xLo + 24) return null;
 
   const proj = buildVerticalEdgeProjection(data, width, height, xLo, xHi, y0, y1);
@@ -4846,10 +5670,19 @@ function inferColumnEdgesGlobalFromVerticalLines(
   height: number,
   cols: number,
   dataTop: number,
-  rowH: number
+  rowH: number,
+  lineYs?: number[] | null
 ): number[] | null {
-  const y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
-  const y1 = Math.min(height - 1, Math.ceil(dataTop + 8.8 * rowH));
+  let y0: number;
+  let y1: number;
+  if (lineYs && lineYs.length >= 3) {
+    const sampleEnd = Math.min(lineYs.length - 1, Math.max(3, Math.ceil(lineYs.length * 0.55)));
+    y0 = Math.max(1, Math.floor(lineYs[1]! + rowH * 0.1));
+    y1 = Math.min(height - 1, Math.ceil(lineYs[sampleEnd]! - rowH * 0.1));
+  } else {
+    y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
+    y1 = Math.min(height - 1, Math.ceil(dataTop + Math.max(8.8, rowH > 0 ? (height - dataTop) / rowH * 0.55 : 8.8) * rowH));
+  }
   const xLo = 1;
   const xHi = Math.max(2, width - 2);
   if (y1 <= y0 + 6 || xHi <= xLo + 24) return null;
@@ -4938,6 +5771,129 @@ function pickUniformTableLines(
   return best;
 }
 
+/**
+ * Elige N+1 líneas con tolerancia de espaciado no uniforme (CV hasta 0.48),
+ * penalizando desvío respecto a dataTop/dataBottom.
+ */
+function pickFlexibleTableLines(
+  peaks: number[],
+  rowCount: number,
+  dataTop: number,
+  dataHeight: number
+): number[] | null {
+  const lineCount = rowCount + 1;
+  if (peaks.length < lineCount) return null;
+  peaks = [...peaks].sort((a, b) => a - b);
+  const expectedBottom = dataTop + dataHeight;
+  const expectedGap = dataHeight / rowCount;
+  let best: number[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  const n = peaks.length;
+  for (let s = 0; s <= n - lineCount; s++) {
+    const window = peaks.slice(s, s + lineCount);
+    const gaps: number[] = [];
+    for (let i = 0; i < rowCount; i++) gaps.push(window[i + 1]! - window[i]!);
+    const mean = gaps.reduce((a, b) => a + b, 0) / rowCount;
+    if (mean < expectedGap * 0.35 || mean > expectedGap * 2.5) continue;
+    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / rowCount;
+    const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
+    if (cv > 0.48) continue;
+    const topDist = Math.abs(window[0]! - dataTop);
+    const bottomDist = Math.abs(window[lineCount - 1]! - expectedBottom);
+    const spacingPenalty = Math.abs(mean - expectedGap) / (expectedGap + 1e-6);
+    const score = var_ + spacingPenalty * expectedGap * 0.3 + (topDist + bottomDist) * 0.45;
+    if (score < bestScore) {
+      bestScore = score;
+      best = window;
+    }
+  }
+  return best;
+}
+
+/** Ancla fila 1 y fila N a picos cerca de dataTop/dataBottom; interpola o usa ventana flexible. */
+function pickAnchoredTableLines(
+  peaks: number[],
+  rowCount: number,
+  dataTop: number,
+  dataHeight: number,
+  proj?: Float64Array
+): number[] | null {
+  const lineCount = rowCount + 1;
+  const dataBottom = dataTop + dataHeight;
+  const yMin = dataTop - dataHeight * 0.08;
+  const yMax = dataBottom + dataHeight * 0.08;
+  const filtered = [...peaks].sort((a, b) => a - b).filter((y) => y >= yMin && y <= yMax);
+  if (filtered.length < 2) return null;
+
+  const flexible = pickFlexibleTableLines(filtered, rowCount, dataTop, dataHeight);
+  if (flexible) return flexible;
+
+  let topPeak = filtered[0]!;
+  let topScore = Number.NEGATIVE_INFINITY;
+  for (const y of filtered) {
+    if (y > dataTop + dataHeight * 0.28) break;
+    const dist = Math.abs(y - dataTop);
+    const strength = proj ? proj[y]! : 1;
+    const score = strength * 2 - dist * 0.18;
+    if (score > topScore) {
+      topScore = score;
+      topPeak = y;
+    }
+  }
+
+  let bottomPeak = filtered[filtered.length - 1]!;
+  let bottomScore = Number.NEGATIVE_INFINITY;
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const y = filtered[i]!;
+    if (y < dataBottom - dataHeight * 0.28) break;
+    const dist = Math.abs(y - dataBottom);
+    const strength = proj ? proj[y]! : 1;
+    const score = strength * 2 - dist * 0.18;
+    if (score > bottomScore) {
+      bottomScore = score;
+      bottomPeak = y;
+    }
+  }
+
+  if (bottomPeak <= topPeak + rowCount * 3) return null;
+
+  const lines: number[] = [];
+  for (let i = 0; i < lineCount; i++) {
+    const t = i / rowCount;
+    lines.push(Math.round(topPeak * (1 - t) + bottomPeak * t));
+  }
+  return lines;
+}
+
+function pickBestTableLines(
+  peaks: number[],
+  rowCount: number,
+  expectedGap: number,
+  dataTop: number,
+  dataHeight: number,
+  proj?: Float64Array
+): number[] | null {
+  const expectedBottom = dataTop + dataHeight;
+  const scoreLines = (lines: number[] | null): number => {
+    if (!lines || lines.length !== rowCount + 1) return Number.NEGATIVE_INFINITY;
+    const topDist = Math.abs(lines[0]! - dataTop);
+    const bottomDist = Math.abs(lines[rowCount]! - expectedBottom);
+    const span = lines[rowCount]! - lines[0]!;
+    const spanPenalty = Math.abs(span - dataHeight) * 0.35;
+    return -(topDist + bottomDist + spanPenalty);
+  };
+
+  const candidates = [
+    pickAnchoredTableLines(peaks, rowCount, dataTop, dataHeight, proj),
+    pickFlexibleTableLines(peaks, rowCount, dataTop, dataHeight),
+    pickUniformTableLines(peaks, rowCount, expectedGap, dataTop, dataHeight),
+  ].filter((lines): lines is number[] => lines != null);
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => scoreLines(b) - scoreLines(a));
+  return candidates[0]!;
+}
+
 function lineYsHaveUniformSpacing(lineYs: number[], tolerance = 0.2): boolean {
   if (lineYs.length < 3) return false;
   const gaps: number[] = [];
@@ -4965,11 +5921,15 @@ function sweepAnswerSheetTableGrid(
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const profiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 0.38, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.42, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     {
       bottomBandRatio: CALIFACIL_OMR_SCAN.bottomBandRatio,
       titleStripRatioOfBand: CALIFACIL_OMR_SCAN.titleStripRatioOfBand,
       qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio,
     },
+    { bottomBandRatio: 0.48, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 0.5, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.52, titleStripRatioOfBand: 0.2, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.58, titleStripRatioOfBand: 0.17, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.65, titleStripRatioOfBand: 0.14, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
@@ -4978,6 +5938,9 @@ function sweepAnswerSheetTableGrid(
     { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
   ];
   const shifts = [0, -6, 6, -8, 8, -12, 12, -18, 18, -24, 24];
+  const pageTemplate = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const tableLeftPx = width * pageTemplate.tableLeftRatio;
+  const tableWidthPx = width * pageTemplate.tableWidthRatio;
 
   let best: SweptAnswerSheetGrid | null = null;
   let bestScore = -1;
@@ -4987,11 +5950,18 @@ function sweepAnswerSheetTableGrid(
     const bandTop = height - bandH;
     const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
     const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
-    const qNumW = width * profile.qnumWidthRatio;
+    const qNumW = tableWidthPx * profile.qnumWidthRatio;
     for (const colShift of shifts) {
-      const bubbleAreaLeft = Math.max(2, Math.min(width * 0.48, Math.round(qNumW + colShift)));
-      const rightMargin = Math.round(width * (CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO + 0.035));
-      const bubbleAreaW = Math.max(24, width - bubbleAreaLeft - rightMargin);
+      const bubbleAreaLeft = Math.max(
+        2,
+        Math.min(width * 0.58, Math.round(tableLeftPx + qNumW + colShift))
+      );
+      const bubbleAreaW = bubbleAreaWidthFromTable(
+        bubbleAreaLeft,
+        tableLeftPx,
+        tableWidthPx,
+        width
+      );
       const lineYs = refineOmrRowBoundariesFromTableLines(
         data,
         width,
@@ -5002,9 +5972,53 @@ function sweepAnswerSheetTableGrid(
         rows
       );
       if (!lineYs || lineYs.length !== rows + 1) continue;
-      const colEdges = buildUniformBubbleColumnEdges(bubbleAreaLeft, bubbleAreaW, cols, width);
       const span = lineYs[rows]! - lineYs[0]!;
-      const score = span + (lineYsHaveUniformSpacing(lineYs) ? 120 : 0);
+      const rowH = span > 0 ? span / rows : dataHeight / rows;
+      const uniformColEdges = buildUniformBubbleColumnEdges(bubbleAreaLeft, bubbleAreaW, cols, width);
+      const colEdges = resolveBubbleColumnEdges(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        bubbleAreaW,
+        cols,
+        dataTop,
+        rowH,
+        uniformColEdges,
+        lineYs
+      );
+      const row1CenterY = (lineYs[0]! + lineYs[1]!) * 0.5 / height;
+      const row30CenterY = (lineYs[rows - 1]! + lineYs[rows]!) * 0.5 / height;
+      const footerBonus =
+        row1CenterY >= 0.62 && row1CenterY <= 0.7
+          ? 1400
+          : row1CenterY >= 0.58
+            ? 700
+            : row1CenterY >= 0.5
+              ? 200
+              : row1CenterY < 0.48
+                ? -2200
+                : -600;
+      const colSpan = colEdges[cols]! - colEdges[0]!;
+      const colFit =
+        colSpan >= bubbleAreaW * 0.55 && colSpan <= bubbleAreaW * 1.45 ? 40 : -80;
+      const row30Penalty = row30CenterY > 0.92 ? -300 : 0;
+      const expectedRow30CenterY = (dataTop + (dataHeight * (rows - 0.5)) / rows) / height;
+      const row30DriftPenalty =
+        row30CenterY < expectedRow30CenterY - 0.04
+          ? (expectedRow30CenterY - row30CenterY) * 2500
+          : 0;
+      const candidateGeom = buildCellsFromTableLines(lineYs, colEdges, width, height, cols);
+      const bubbleFit =
+        scoreAnswerSheetGeometryBubbleFit(data, width, height, candidateGeom, rows) * 400;
+      const score =
+        span +
+        (lineYsHaveUniformSpacing(lineYs) ? 120 : 0) +
+        footerBonus +
+        colFit +
+        row30Penalty +
+        bubbleFit -
+        row30DriftPenalty;
       if (score > bestScore) {
         bestScore = score;
         best = { lineYs, colEdges };
@@ -5014,7 +6028,7 @@ function sweepAnswerSheetTableGrid(
   return best;
 }
 
-function buildCellsFromTableLines(
+export function buildCellsFromTableLines(
   lineYs: number[],
   columnEdges: number[],
   width: number,
@@ -5068,7 +6082,7 @@ function refineOmrRowBoundariesFromTableLines(
 
   const minDist = Math.max(2, rowHGuess * 0.38);
   const peaks = findHorizontalLinePeaks(proj, yStart, yEnd, minDist, 0.14);
-  const lines = pickUniformTableLines(peaks, rowCount, rowHGuess, dataTop, dataHeight);
+  const lines = pickBestTableLines(peaks, rowCount, rowHGuess, dataTop, dataHeight, proj);
   if (!lines) return null;
 
   for (let i = 0; i < rowCount; i++) {
@@ -5291,7 +6305,7 @@ export function buildAnswerSheetOmrGeometry(
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
   const qNumW = tableW * template.qnumWidthRatio;
-  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.5;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
   const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
   const cellW = bubbleAreaW / cols;
@@ -5319,6 +6333,39 @@ export function buildAnswerSheetOmrGeometry(
 
 /** Franja negra derecha del recuadro impreso (no forma parte del área de burbujas). */
 const CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO = 0.1;
+/** Padding extra al borde derecho de la columna D (fracción del ancho de celda). */
+const BUBBLE_COLUMN_RIGHT_PAD_RATIO = 0.58;
+
+function bubbleAreaRightPx(
+  tableLeftPx: number,
+  tableWidthPx: number,
+  imageWidth: number
+): number {
+  const tableRightPx = tableLeftPx + tableWidthPx;
+  const stripPx = tableWidthPx * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.4;
+  return Math.min(imageWidth - 1, Math.round(tableRightPx - stripPx));
+}
+
+function bubbleAreaWidthFromTable(
+  bubbleAreaLeft: number,
+  tableLeftPx: number,
+  tableWidthPx: number,
+  imageWidth: number
+): number {
+  return Math.max(24, bubbleAreaRightPx(tableLeftPx, tableWidthPx, imageWidth) - bubbleAreaLeft);
+}
+
+function padBubbleColumnEdgesRight(
+  edges: number[],
+  cols: number,
+  width: number,
+  bubbleAreaW: number
+): number[] {
+  const out = edges.slice();
+  const pad = Math.max(3, Math.round((bubbleAreaW / Math.max(1, cols)) * BUBBLE_COLUMN_RIGHT_PAD_RATIO));
+  out[cols] = Math.min(width - 1, out[cols]! + pad);
+  return out;
+}
 
 function buildUniformBubbleColumnEdges(
   bubbleAreaLeft: number,
@@ -5676,7 +6723,7 @@ export function buildAnswerSheetOmrGeometryInNormRect(
 
   const fullFallback =
     canvas && frame.w >= 0.82 && frame.h >= 0.75
-      ? sweepFullCanvasTableGeometry(canvas, rowCount, columns)
+      ? detectFullCanvasTableGeometry(canvas, rowCount, columns)
       : null;
   if (fullFallback) {
     return fullFallback.geometry;
@@ -5712,16 +6759,27 @@ const CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y = 0.34;
 /**
  * Amplía cada celda para muestrear burbujas con margen extra (especialmente en altura).
  */
-function geometryCellsForBubbleSampling(
+export function geometryCellsForBubbleSampling(
   geometry: CalifacilOmrScanGeometry,
   expandX = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_X,
   expandY = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y
 ): CalifacilOmrScanGeometry {
   const cells = geometry.cells.map((row) =>
-    row.map((cell) => {
-      const x = Math.max(0, cell.x - cell.w * (expandX / 2));
+    row.map((cell, colIdx) => {
+      if (colIdx === 0) {
+        const shrink = 0.12;
+        const inset = cell.w * shrink;
+        const x = Math.max(0, cell.x + inset);
+        const y = Math.max(0, cell.y - cell.h * (expandY / 2));
+        const w = Math.min(1 - x, cell.w * (1 - shrink));
+        const h = Math.min(1 - y, cell.h * (1 + expandY));
+        return { x, y, w, h };
+      }
+      const leftExpand = expandX / 2;
+      const rightExpand = expandX / 2;
+      const x = Math.max(0, cell.x - cell.w * leftExpand);
       const y = Math.max(0, cell.y - cell.h * (expandY / 2));
-      const w = Math.min(1 - x, cell.w * (1 + expandX));
+      const w = Math.min(1 - x, cell.w * (1 + leftExpand + rightExpand));
       const h = Math.min(1 - y, cell.h * (1 + expandY));
       return { x, y, w, h };
     })
@@ -5839,43 +6897,53 @@ function tableFrameFromBubbleGeometry(
   geometry: CalifacilOmrScanGeometry,
   rowCount: number
 ): OmrNormRect | null {
-  const bubble = boundsFromOmrCells(geometry, rowCount, 0);
-  if (!bubble) return null;
-  const t = buildCalifacilAnswerSheetOmrTemplate(rowCount);
-  const padTop = bubble.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
-  const padLeft = bubble.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
-  const x = Math.max(0, bubble.x - padLeft);
-  const y = Math.max(0, bubble.y - padTop);
-  return {
-    x,
-    y,
-    w: Math.min(1 - x, bubble.w + padLeft + bubble.w * 0.025),
-    h: Math.min(1 - y, bubble.h + padTop + bubble.h * 0.015),
-  };
+  return califacilOmrOrangeFrameRect(geometry, rowCount);
+}
+
+function usesFixedReferenceGradeGeometry(
+  canvas: HTMLCanvasElement,
+  rows: number,
+  columns: number
+): boolean {
+  return (
+    isReferenceGradeExam(rows, columns) &&
+    hasReferenceGradeCalibration() &&
+    canvasMatchesReferenceGrade(canvas.width, canvas.height)
+  );
 }
 
 function omrMetaFromGeometry(
   canvas: HTMLCanvasElement,
   geometry: CalifacilOmrScanGeometry,
   rowCount: number,
-  columns: number
+  columns: number,
+  opts?: { skipControl?: boolean; skipRefine?: boolean }
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
-  const readGeometry = geometryCellsForBubbleSampling(geometry);
-  const templateRead = readAnswerSheetPicksFromTemplateGeometry(
+  const imageData = getOmrCanvasImageData(canvas);
+  const fixedReferenceGrid = usesFixedReferenceGradeGeometry(canvas, rows, columns);
+  const readGeometry = fixedReferenceGrid
+    ? refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, imageData)
+    : opts?.skipRefine
+      ? geometry
+      : refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, imageData);
+  const refined = readGeometry;
+  const read = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
-    readGeometry,
+    geometryCellsForBubbleSampling(refined),
     FRAME_GRID_SCAN_THRESHOLDS,
     rows,
     columns
   );
-  const controlRead = readAnswerSheetControlNumberFromCanvas(canvas, rows);
+  const controlRead = opts?.skipControl
+    ? { digits: [] as (number | null)[], controlNumber: null as string | null }
+    : readAnswerSheetControlNumberFromCanvas(canvas, rows);
   return {
-    picks: templateRead.picks,
-    rows: templateRead.rows,
+    picks: read.picks,
+    rows: read.rows,
     needsVisionAssist: false,
-    maxSameColumnCount: templateRead.maxSameColumnCount,
-    geometry: readGeometry,
+    maxSameColumnCount: read.maxSameColumnCount,
+    geometry: refined,
     reviewSourceCanvas: canvas,
     controlNumberDigits: controlRead.digits,
     controlNumber: controlRead.controlNumber,
@@ -5883,7 +6951,7 @@ function omrMetaFromGeometry(
 }
 
 /** Detecta la tabla en toda la imagen (capturas recortadas al marco guía). */
-function sweepFullCanvasTableGeometry(
+export function detectFullCanvasTableGeometry(
   canvas: HTMLCanvasElement,
   rowCount: number,
   columns: number
@@ -5894,7 +6962,7 @@ function sweepFullCanvasTableGeometry(
   if (!ctx) return null;
   const { width, height } = canvas;
   if (width < 40 || height < 40) return null;
-  const data = ctx.getImageData(0, 0, width, height).data;
+  const data = getOmrCanvasImageData(canvas) ?? ctx.getImageData(0, 0, width, height).data;
   const swept = sweepAnswerSheetTableGrid(data, width, height, rowCount, columns);
   if (!swept || swept.lineYs.length !== rows + 1) return null;
   const geometry = buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
@@ -5915,18 +6983,36 @@ function sweepFullCanvasTableGeometry(
 export function scanWarpedWithBestTableFrame(
   warped: HTMLCanvasElement,
   columns: number,
-  rowCount: number
+  rowCount: number,
+  opts?: { fast?: boolean; medium?: boolean }
 ): { meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect } {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const templateFrame = califacilOmrTableFrameNormRect(rows);
-  const candidates: OmrNormRect[] = [
-    templateFrame,
-    { x: 0.03, y: 0.04, w: 0.94, h: 0.92 },
-    { x: 0.05, y: 0.06, w: 0.9, h: 0.88 },
-    { x: 0.02, y: 0.1, w: 0.96, h: 0.86 },
-  ];
-  for (const dy of [-0.03, -0.02, -0.015, 0.015, 0.02, 0.03]) {
-    for (const dx of [-0.025, -0.015, 0.015, 0.025]) {
+  const candidates: OmrNormRect[] = [templateFrame];
+  if (isReferenceGradeExam(rows, columns) && hasReferenceGradeCalibration()) {
+    if (canvasMatchesReferenceGrade(warped.width, warped.height)) {
+      candidates.unshift(referenceTableFrameNorm());
+    }
+  }
+  let templateProbe: OmrScanMetaResult | null = null;
+
+  if (opts?.fast) {
+    templateProbe = scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame, {
+      skipControl: true,
+    });
+    if (!omrScanHasMinReads(templateProbe, rows, 0.45)) {
+      const fullSweep = detectFullCanvasTableGeometry(warped, rows, columns);
+      if (fullSweep) candidates.push(fullSweep.tableFrame);
+    }
+  } else if (opts?.medium) {
+    for (const [dx, dy] of [
+      [-0.02, -0.015],
+      [0.02, 0.015],
+      [-0.015, 0],
+      [0.015, 0],
+      [0, -0.012],
+      [0, 0.012],
+    ] as const) {
       candidates.push({
         x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
         y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
@@ -5934,57 +7020,98 @@ export function scanWarpedWithBestTableFrame(
         h: templateFrame.h,
       });
     }
-  }
-  for (const dy of [-0.012, -0.006, 0.006, 0.012]) {
-    for (const dx of [-0.01, -0.005, 0.005, 0.01]) {
+    const fullSweep = detectFullCanvasTableGeometry(warped, rows, columns);
+    if (fullSweep) candidates.push(fullSweep.tableFrame);
+  } else {
+    candidates.push(
+      { x: 0.03, y: 0.04, w: 0.94, h: 0.92 },
+      { x: 0.05, y: 0.06, w: 0.9, h: 0.88 },
+      { x: 0.02, y: 0.1, w: 0.96, h: 0.86 }
+    );
+    for (const dy of [-0.03, -0.02, -0.015, 0.015, 0.02, 0.03]) {
+      for (const dx of [-0.025, -0.015, 0.015, 0.025]) {
+        candidates.push({
+          x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
+          y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
+          w: templateFrame.w,
+          h: templateFrame.h,
+        });
+      }
+    }
+    for (const dy of [-0.012, -0.006, 0.006, 0.012]) {
+      for (const dx of [-0.01, -0.005, 0.005, 0.01]) {
+        candidates.push({
+          x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
+          y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
+          w: templateFrame.w,
+          h: templateFrame.h,
+        });
+      }
+    }
+
+    const fullSweep = detectFullCanvasTableGeometry(warped, rows, columns);
+    if (fullSweep) {
+      candidates.push(fullSweep.tableFrame);
+    }
+
+    const hybrid = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
+    const bubbleBbox = califacilOmrOrangeFrameRect(hybrid, rows);
+    const tableBbox = califacilGeometryTableBounds(hybrid, rows);
+    if (bubbleBbox) candidates.push(bubbleBbox);
+    if (tableBbox) candidates.push(tableBbox);
+
+    if (bubbleBbox) {
+      const t = buildCalifacilAnswerSheetOmrTemplate(rows);
+      const padTop = bubbleBbox.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
+      const padLeft = bubbleBbox.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
+      const x = Math.max(0, bubbleBbox.x - padLeft);
+      const y = Math.max(0, bubbleBbox.y - padTop);
       candidates.push({
-        x: Math.max(0, Math.min(0.92, templateFrame.x + dx)),
-        y: Math.max(0, Math.min(0.92, templateFrame.y + dy)),
-        w: templateFrame.w,
-        h: templateFrame.h,
+        x,
+        y,
+        w: Math.min(1 - x, bubbleBbox.w + padLeft + bubbleBbox.w * 0.025),
+        h: Math.min(1 - y, bubbleBbox.h + padTop + bubbleBbox.h * 0.015),
       });
     }
   }
 
   let bestFrame = templateFrame;
   let bestScore = Number.NEGATIVE_INFINITY;
-
-  const fullSweep = sweepFullCanvasTableGeometry(warped, rows, columns);
-  if (fullSweep) {
-    candidates.push(fullSweep.tableFrame);
-  }
-
-  const hybrid = buildRegisteredAnswerSheetGeometry(warped, rows, columns);
-
-  const bubbleBbox = califacilOmrOrangeFrameRect(hybrid, rows);
-  const tableBbox = califacilGeometryTableBounds(hybrid, rows);
-  if (bubbleBbox) candidates.push(bubbleBbox);
-  if (tableBbox) candidates.push(tableBbox);
-
-  if (bubbleBbox) {
-    const t = buildCalifacilAnswerSheetOmrTemplate(rows);
-    const padTop = bubbleBbox.h * (t.titleStripRatioOfTable / Math.max(0.2, 1 - t.titleStripRatioOfTable));
-    const padLeft = bubbleBbox.w * (t.qnumWidthRatio / Math.max(0.2, 1 - t.qnumWidthRatio));
-    const x = Math.max(0, bubbleBbox.x - padLeft);
-    const y = Math.max(0, bubbleBbox.y - padTop);
-    candidates.push({
-      x,
-      y,
-      w: Math.min(1 - x, bubbleBbox.w + padLeft + bubbleBbox.w * 0.025),
-      h: Math.min(1 - y, bubbleBbox.h + padTop + bubbleBbox.h * 0.015),
-    });
-  }
+  let bestMeta: OmrScanMetaResult | null = null;
 
   for (const frame of candidates) {
-    const meta = scanWarpedWithNormTableFrame(warped, columns, rows, frame);
+    const meta =
+      templateProbe && frame === templateFrame
+        ? templateProbe
+        : scanWarpedWithNormTableFrame(warped, columns, rows, frame, { skipControl: true });
     const score = scoreOmrMetaPicks(meta, rows);
     if (score > bestScore) {
       bestScore = score;
       bestFrame = frame;
+      bestMeta = meta;
+    }
+    if (omrScanHasMinReads(meta, rows, 0.9)) {
+      bestFrame = frame;
+      bestMeta = meta;
+      break;
     }
   }
 
-  const meta = scanWarpedWithNormTableFrame(warped, columns, rows, bestFrame);
+  if (!bestMeta) {
+    bestMeta = scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame, { skipControl: true });
+    bestFrame = templateFrame;
+  }
+
+  if (bestMeta.controlNumber || bestMeta.controlNumberDigits.some((d) => d !== null)) {
+    return { meta: bestMeta, orangeFrameNorm: bestFrame };
+  }
+
+  const ctrl = readAnswerSheetControlNumberFromCanvas(warped, rows);
+  const meta: OmrScanMetaResult = {
+    ...bestMeta,
+    controlNumber: ctrl.controlNumber,
+    controlNumberDigits: ctrl.digits,
+  };
   return { meta, orangeFrameNorm: bestFrame };
 }
 
@@ -5995,7 +7122,8 @@ export function scanWarpedWithNormTableFrame(
   warped: HTMLCanvasElement,
   columns: number,
   rowCount: number,
-  tableFrame: OmrNormRect
+  tableFrame: OmrNormRect,
+  opts?: { skipControl?: boolean }
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const emptyRows = (): OmrScanRowDetail[] =>
@@ -6020,8 +7148,7 @@ export function scanWarpedWithNormTableFrame(
     warped.height,
     warped
   );
-  const refined = refineAnswerSheetGeometryToBubblePeaks(warped, geometry);
-  return omrMetaFromGeometry(warped, refined, rows, columns);
+  return omrMetaFromGeometry(warped, geometry, rows, columns, { skipControl: opts?.skipControl });
 }
 
 /**
@@ -6050,47 +7177,51 @@ export function scanWarpedGradeDocument(
     return empty;
   }
 
-  const candidates: OmrScanMetaResult[] = [
-    scanWarpedWithBestTableFrame(docCanvas, columns, rows).meta,
-    scanWarpedMobileCaptureSheet(docCanvas, columns, rows),
-  ];
-
-  let best = candidates[0]!;
-  let bestScore = scoreOmrMetaPicks(best, rows);
-  for (const candidate of candidates.slice(1)) {
-    const score = scoreOmrMetaPicks(candidate, rows);
-    if (score > bestScore) {
-      best = candidate;
-      bestScore = score;
-    }
-  }
-
-  const geometry = best.geometry
-    ? syncCalifacilOmrGeometryImageSize(best.geometry, docCanvas.width, docCanvas.height)
-    : null;
-  return sanitizeAnswerSheetOmrMeta(
-    {
-      ...best,
-      geometry,
-      reviewSourceCanvas: docCanvas,
-    },
-    rows
-  );
+  const scanCanvas = omrGradeScanCanvas(docCanvas);
+  const scanned = runWarpedGradeScanTiers(scanCanvas, columns, rows);
+  return finishGradeScanResult(docCanvas, scanned, columns, rows, MOBILE_WARPED_SCAN_THRESHOLDS);
 }
 
-/**
- * Cuadrícula híbrida: plantilla PDF + líneas internas detectadas tras warp refinado.
- */
+export async function scanWarpedGradeDocumentAsync(
+  docCanvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): Promise<OmrScanMetaResult> {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  if (typeof document === 'undefined' || docCanvas.width < 40 || docCanvas.height < 40) {
+    return scanWarpedGradeDocument(docCanvas, columns, rowCount);
+  }
+  const scanCanvas = omrGradeScanCanvas(docCanvas);
+  const scanned = await runWarpedGradeScanTiersAsync(scanCanvas, columns, rows);
+  return finishGradeScanResult(docCanvas, scanned, columns, rows, MOBILE_WARPED_SCAN_THRESHOLDS);
+}
+
 export function buildRegisteredAnswerSheetGeometry(
   canvas: HTMLCanvasElement,
   rowCount: number,
-  columns: number
+  columns: number,
+  opts?: { skipReferenceAnchor?: boolean }
 ): CalifacilOmrScanGeometry {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const width = Math.max(1, canvas.width);
   const height = Math.max(1, canvas.height);
   const template = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+  const useReferenceAnchor =
+    !opts?.skipReferenceAnchor &&
+    isReferenceGradeExam(rows, cols) &&
+    hasReferenceGradeCalibration() &&
+    canvasMatchesReferenceGrade(width, height);
+
+  if (useReferenceAnchor) {
+    return buildCellsFromTableLines(
+      scaleReferenceLineYs(height),
+      scaleReferenceColEdges(width),
+      width,
+      height,
+      cols
+    );
+  }
 
   const tableLeft = width * template.tableLeftRatio;
   const tableTop = height * template.tableTopRatio;
@@ -6099,8 +7230,8 @@ export function buildRegisteredAnswerSheetGeometry(
   const dataTop = tableTop + tableH * template.titleStripRatioOfTable;
   const dataHeight = tableH * (1 - template.titleStripRatioOfTable);
   const rowH = dataHeight / rows;
-  const qNumW = tableW * template.qnumWidthRatio;
-  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO;
+  const qNumW = tableW * (useReferenceAnchor ? REFERENCE_QNUM_WIDTH_RATIO : template.qnumWidthRatio);
+  const rightStripW = tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.5;
   const bubbleAreaLeft = Math.max(2, Math.round(tableLeft + qNumW));
   const bubbleAreaW = Math.max(18, tableW - qNumW - rightStripW);
 
@@ -6115,7 +7246,7 @@ export function buildRegisteredAnswerSheetGeometry(
   let lineYs: number[] | null = null;
   let imageData: Uint8ClampedArray | null = null;
   if (ctx) {
-    imageData = ctx.getImageData(0, 0, width, height).data;
+    imageData = getOmrCanvasImageData(canvas) ?? ctx.getImageData(0, 0, width, height).data;
     lineYs = refineOmrRowBoundariesFromTableLines(
       imageData,
       width,
@@ -6128,24 +7259,26 @@ export function buildRegisteredAnswerSheetGeometry(
   }
 
   if (lineYs && lineYs.length === rows + 1) {
-    let rowAligned = true;
-    let avgDev = 0;
-    for (let i = 0; i < rows + 1; i++) {
-      const expected = dataTop + i * rowH;
-      const dev = Math.abs(lineYs[i]! - expected);
-      avgDev += dev;
-      if (dev > rowH * 0.92) rowAligned = false;
-    }
-    avgDev /= rows + 1;
-    const uniformRows = lineYsHaveUniformSpacing(lineYs);
-    if (!rowAligned && !uniformRows) {
-      lineYs = null;
-    } else if (rowAligned) {
-      const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
-      lineYs = lineYs.map((y, i) => {
+    if (useReferenceAnchor) {
+      let rowAligned = true;
+      let avgDev = 0;
+      for (let i = 0; i < rows + 1; i++) {
         const expected = dataTop + i * rowH;
-        return Math.round(y * detectedWeight + expected * (1 - detectedWeight));
-      });
+        const dev = Math.abs(lineYs[i]! - expected);
+        avgDev += dev;
+        if (dev > rowH * 0.92) rowAligned = false;
+      }
+      avgDev /= rows + 1;
+      const uniformRows = lineYsHaveUniformSpacing(lineYs);
+      if (!rowAligned && !uniformRows) {
+        lineYs = null;
+      } else if (rowAligned) {
+        const detectedWeight = avgDev < rowH * 0.22 ? 0.82 : 0.65;
+        lineYs = lineYs.map((y, i) => {
+          const expected = dataTop + i * rowH;
+          return Math.round(y * detectedWeight + expected * (1 - detectedWeight));
+        });
+      }
     }
   } else {
     lineYs = null;
@@ -6154,17 +7287,65 @@ export function buildRegisteredAnswerSheetGeometry(
   if (!lineYs && imageData) {
     const swept = sweepAnswerSheetTableGrid(imageData, width, height, rowCount, columns);
     if (swept) {
+      if (useReferenceAnchor) {
+        return applyReferenceAnchoredTableGeometry(
+          swept.lineYs,
+          swept.colEdges,
+          width,
+          height,
+          rows,
+          cols
+        );
+      }
       return buildCellsFromTableLines(swept.lineYs, swept.colEdges, width, height, cols);
+    }
+    const fullSweep = detectFullCanvasTableGeometry(canvas, rowCount, columns);
+    if (fullSweep) {
+      if (useReferenceAnchor) {
+        const det = fullSweep.geometry;
+        const detLineYs: number[] = [];
+        for (let r = 0; r <= rows; r++) {
+          if (r === 0) detLineYs.push(Math.round(det.cells[0]![0]!.y * height));
+          else if (r === rows) {
+            const last = det.cells[rows - 1]![0]!;
+            detLineYs.push(Math.round((last.y + last.h) * height));
+          } else detLineYs.push(Math.round(det.cells[r]![0]!.y * height));
+        }
+        const detColEdges: number[] = [Math.round(det.cells[0]![0]!.x * width)];
+        for (let c = 0; c < cols; c++) {
+          const cell = det.cells[0]![c]!;
+          detColEdges.push(Math.round((cell.x + cell.w) * width));
+        }
+        return applyReferenceAnchoredTableGeometry(
+          detLineYs,
+          detColEdges,
+          width,
+          height,
+          rows,
+          cols
+        );
+      }
+      return fullSweep.geometry;
     }
   }
 
   if (!lineYs) {
+    if (useReferenceAnchor) {
+      return applyReferenceAnchoredTableGeometry(
+        scaleReferenceLineYs(height),
+        scaleReferenceColEdges(width),
+        width,
+        height,
+        rows,
+        cols
+      );
+    }
     return buildAnswerSheetOmrGeometry(rowCount, columns, width, height);
   }
 
   let columnEdges = uniformColEdges;
   if (imageData) {
-    const detectedCols = inferColumnEdgesFromVerticalLines(
+    columnEdges = resolveBubbleColumnEdges(
       imageData,
       width,
       height,
@@ -6172,25 +7353,15 @@ export function buildRegisteredAnswerSheetGeometry(
       bubbleAreaW,
       cols,
       dataTop,
-      rowH
+      rowH,
+      uniformColEdges,
+      lineYs
     );
-    if (detectedCols && detectedCols.length === cols + 1) {
-      const span = detectedCols[cols]! - detectedCols[0]!;
-      let maxEdgeDev = 0;
-      const cellW = bubbleAreaW / cols;
-      for (let i = 0; i <= cols; i++) {
-        maxEdgeDev = Math.max(maxEdgeDev, Math.abs(detectedCols[i]! - uniformColEdges[i]!));
-      }
-      if (
-        span >= bubbleAreaW * 0.58 &&
-        span <= bubbleAreaW * 1.42 &&
-        maxEdgeDev <= cellW * 0.78
-      ) {
-        columnEdges = detectedCols.map((x, i) =>
-          Math.round(x * 0.8 + uniformColEdges[i]! * 0.2)
-        );
-      }
-    }
+  }
+
+  if (useReferenceAnchor) {
+    lineYs = mergeReferenceRowLineYs(lineYs, height, rows);
+    columnEdges = mergeReferenceColumnEdges(columnEdges, width, cols);
   }
 
   const cells: OmrNormRect[][] = [];
@@ -6542,6 +7713,337 @@ function sampleAnswerSheetRowAtCy(
   return { fills, scores, inkFracs };
 }
 
+function bestColumnByGap(values: number[], cols: number): { best: number; gap: number; val: number } {
+  let best = 0;
+  for (let c = 1; c < cols; c++) {
+    if ((values[c] ?? 0) > (values[best] ?? 0)) best = c;
+  }
+  let second = best === 0 ? 1 : 0;
+  for (let c = 0; c < cols; c++) {
+    if (c === best) continue;
+    if ((values[c] ?? 0) > (values[second] ?? 0)) second = c;
+  }
+  return { best, gap: (values[best] ?? 0) - (values[second] ?? 0), val: values[best] ?? 0 };
+}
+
+function rowAnswerSheetReadConfidence(row: OmrScanRowDetail): number {
+  if (row.pick === null || !row.inkFractions?.length) return 0;
+  const { gap, val } = bestColumnByGap(row.inkFractions, row.inkFractions.length);
+  const pickInk = row.inkFractions[row.pick] ?? 0;
+  return pickInk + gap + val * 0.25;
+}
+
+/** Rellena filas sin lectura usando otros tiers; no sobreescribe picks ya resueltos. */
+function mergeOmrScanMetaFillGaps(
+  primary: OmrScanMetaResult,
+  candidates: OmrScanMetaResult[],
+  rows: number
+): OmrScanMetaResult {
+  return mergeOmrScanMetaByRow(
+    [{ meta: primary, tierPriority: 400 }, ...candidates.map((meta, i) => ({ meta, tierPriority: 300 - i * 50 }))],
+    rows
+  );
+}
+
+type OmrTierCandidate = { meta: OmrScanMetaResult; tierPriority: number };
+
+/** Por fila: mayor confianza; en empate gana híbrido > sweep > medium > fast > template. */
+/** @deprecated Row merge mixes picks from distinct geometries. Use unified OMR engine. */
+function mergeOmrScanMetaByRow(tiers: OmrTierCandidate[], rows: number): OmrScanMetaResult {
+  const minTierResolved = Math.max(1, Math.ceil(rows * 0.45));
+  const valid = tiers.filter(
+    (t) => t.meta.picks.filter((p) => p !== null).length >= minTierResolved
+  );
+  if (!valid.length) return tiers[0]?.meta ?? tiers[tiers.length - 1]!.meta;
+
+  const ordered = [...valid].sort((a, b) => b.tierPriority - a.tierPriority);
+  const hybridTier = ordered.find((t) => t.tierPriority >= 400);
+
+  const footerCandidates = ordered
+    .map((t) => t.meta.geometry)
+    .filter((g): g is CalifacilOmrScanGeometry => {
+      if (!g) return false;
+      return validateAnswerSheetGeometry(g, rows).ok && isFooterAnswerSheetGeometry(g, rows);
+    });
+  const geometryTierMeta =
+    footerCandidates.length > 0
+      ? ordered.find((t) => t.meta.geometry === footerCandidates[0])
+      : null;
+
+  const rowCandidate = (
+    meta: OmrScanMetaResult,
+    i: number
+  ): { pick: number; row: OmrScanRowDetail; conf: number } | null => {
+    const pick = meta.picks[i] ?? null;
+    const row = meta.rows[i];
+    if (pick === null || !row || row.ambiguous) return null;
+    const conf = rowAnswerSheetReadConfidence({ ...row, pick });
+    if (conf < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction) return null;
+    return { pick, row: { ...row, pick }, conf };
+  };
+
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  const rowMetas: OmrScanRowDetail[] = [];
+
+  for (let i = 0; i < rows; i++) {
+    let bestPick: number | null = null;
+    let bestRow: OmrScanRowDetail | null = null;
+    let bestConf = -1;
+    let bestTier = -1;
+
+    for (const { meta, tierPriority } of valid) {
+      const read = rowCandidate(meta, i);
+      if (!read) continue;
+      const clearlyBetter = read.conf > bestConf + 0.003;
+      const tieBreak =
+        Math.abs(read.conf - bestConf) <= 0.003 && tierPriority > bestTier;
+      if (clearlyBetter || bestPick === null || tieBreak) {
+        bestConf = read.conf;
+        bestTier = tierPriority;
+        bestPick = read.pick;
+        bestRow = read.row;
+      }
+    }
+
+    picks[i] = bestPick;
+    rowMetas[i] =
+      bestRow ??
+      ({
+        pick: null,
+        ambiguous: true,
+        inkFractions: [],
+      } as OmrScanRowDetail);
+  }
+
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of picks) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  const baseMeta = geometryTierMeta?.meta ?? hybridTier?.meta ?? ordered[0]!.meta;
+  return {
+    ...baseMeta,
+    picks,
+    rows: rowMetas,
+    geometry: geometryTierMeta?.meta.geometry ?? null,
+    needsVisionAssist: rowMetas.some((r) => r.ambiguous),
+    maxSameColumnCount,
+  };
+}
+
+/** @deprecated Use unified OMR engine via NEXT_PUBLIC_OMR_UNIFIED_ENGINE=1. Tier merge mixes picks from distinct geometries. */
+function finalizeDesktopTierMerge(
+  scanCanvas: HTMLCanvasElement,
+  tiers: OmrTierCandidate[],
+  columns: number,
+  rows: number,
+  opts?: { /** @deprecated Use unified OMR engine. */ preferMediumReads?: boolean }
+): OmrScanMetaResult {
+  const merged = mergeOmrScanMetaByRow(tiers, rows);
+  const preferFooterGeometry = !(
+    isReferenceGradeExam(rows, columns) &&
+    canvasMatchesReferenceGrade(scanCanvas.width, scanCanvas.height)
+  );
+  let hybridGeom = merged.geometry;
+  if (preferFooterGeometry) {
+    hybridGeom =
+      merged.geometry && isFooterAnswerSheetGeometry(merged.geometry, rows)
+        ? merged.geometry
+        : pickFooterAnswerSheetGeometry(tiers, rows, columns, scanCanvas);
+  } else {
+    const cols = Math.max(2, Math.min(5, Math.round(columns)));
+    hybridGeom = buildCellsFromTableLines(
+      scaleReferenceLineYs(scanCanvas.height),
+      scaleReferenceColEdges(scanCanvas.width),
+      scanCanvas.width,
+      scanCanvas.height,
+      cols
+    );
+  }
+  const mediumTier = tiers.find((t) => t.tierPriority === 300);
+  const mediumRead = mediumTier?.meta;
+  const fullTier = tiers.find((t) => t.tierPriority === 350);
+  const fullRead = fullTier?.meta;
+
+  if (!hybridGeom || !validateAnswerSheetGeometry(hybridGeom, rows).ok) {
+    if (mediumRead && opts?.preferMediumReads) {
+      return applyColumnASafeguard(scanCanvas, mediumRead, columns, rows);
+    }
+    return applyColumnASafeguard(scanCanvas, merged, columns, rows);
+  }
+
+  const hybridRead = omrMetaFromGeometry(scanCanvas, hybridGeom, rows, columns);
+  const baseRead =
+    opts?.preferMediumReads && mediumRead
+      ? mediumRead
+      : hybridRead;
+  const picks = baseRead.picks.slice(0, rows);
+  const rowMetas = baseRead.rows.slice(0, rows).map((r) => ({ ...r }));
+
+  const rowConf = (meta: OmrScanMetaResult, i: number): number => {
+    const pick = meta.picks[i] ?? null;
+    const row = meta.rows[i];
+    if (pick === null || !row) return -1;
+    return rowAnswerSheetReadConfidence({ ...row, pick });
+  };
+
+  for (let i = 0; i < rows; i++) {
+    const basePick = picks[i] ?? null;
+    const baseConf = rowConf(baseRead, i);
+    const hybridPick = hybridRead.picks[i] ?? null;
+    const hybridConf = rowConf(hybridRead, i);
+    const mergedPick = merged.picks[i] ?? null;
+    const mergedConf = rowConf(merged, i);
+    const mergedRow = merged.rows[i];
+
+    if (basePick === null || rowMetas[i]?.ambiguous) {
+      const candidates = [
+        { pick: hybridPick, conf: hybridConf, row: hybridRead.rows[i] },
+        { pick: mergedPick, conf: mergedConf, row: mergedRow },
+      ];
+      if (mediumRead) {
+        candidates.push({
+          pick: mediumRead.picks[i] ?? null,
+          conf: rowConf(mediumRead, i),
+          row: mediumRead.rows[i],
+        });
+      }
+      if (fullRead) {
+        candidates.push({
+          pick: fullRead.picks[i] ?? null,
+          conf: rowConf(fullRead, i),
+          row: fullRead.rows[i],
+        });
+      }
+      candidates.sort((a, b) => b.conf - a.conf);
+      const best = candidates.find((c) => c.pick !== null && c.row);
+      if (best?.pick !== null && best?.pick !== undefined && best.row) {
+        picks[i] = best.pick;
+        rowMetas[i] = { ...best.row, pick: best.pick };
+      }
+      continue;
+    }
+
+    if (!opts?.preferMediumReads && hybridConf > baseConf + 0.003 && hybridPick !== null) {
+      picks[i] = hybridPick;
+      rowMetas[i] = { ...hybridRead.rows[i]!, pick: hybridPick };
+    } else if (mergedConf > baseConf + 0.004 && mergedPick !== null && mergedRow) {
+      picks[i] = mergedPick;
+      rowMetas[i] = { ...mergedRow, pick: mergedPick };
+    } else if (
+      fullRead &&
+      rowConf(fullRead, i) > baseConf + 0.006 &&
+      fullRead.picks[i] !== null &&
+      fullRead.rows[i]
+    ) {
+      picks[i] = fullRead.picks[i]!;
+      rowMetas[i] = { ...fullRead.rows[i]!, pick: fullRead.picks[i]! };
+    }
+  }
+
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of picks) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  const resultGeometry =
+    hybridRead.geometry && validateAnswerSheetGeometry(hybridRead.geometry, rows).ok
+      ? hybridRead.geometry
+      : hybridGeom;
+
+  const result: OmrScanMetaResult = {
+    ...merged,
+    picks,
+    rows: rowMetas,
+    geometry: resultGeometry,
+    maxSameColumnCount,
+    needsVisionAssist: rowMetas.some((r) => r.ambiguous),
+  };
+  return applyColumnASafeguard(scanCanvas, result, columns, rows);
+}
+
+function applyColumnASafeguard(
+  scanCanvas: HTMLCanvasElement,
+  meta: OmrScanMetaResult,
+  columns: number,
+  rows: number
+): OmrScanMetaResult {
+  const colA = meta.picks.filter((p) => p === 0).length;
+  if (colA < 8) return meta;
+
+  const rescan = scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    qnumSweep: 'full',
+    columnShiftSweep: 'full',
+    rowCount: rows,
+  });
+  const rescanA = rescan.picks.filter((p) => p === 0).length;
+  if (rescanA >= colA) return meta;
+
+  const picks = meta.picks.slice(0, rows);
+  const rowMetas = meta.rows.slice(0, rows).map((r) => ({ ...r }));
+  for (let i = 0; i < rows; i++) {
+    if (picks[i] !== 0) continue;
+    const alt = rescan.picks[i] ?? null;
+    const altRow = rescan.rows[i];
+    if (alt !== null && alt !== 0 && altRow && !altRow.ambiguous) {
+      picks[i] = alt;
+      rowMetas[i] = { ...altRow, pick: alt };
+    }
+  }
+
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of picks) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  return {
+    ...meta,
+    picks,
+    rows: rowMetas,
+    maxSameColumnCount,
+    needsVisionAssist: rowMetas.some((r) => r.ambiguous),
+  };
+}
+
+function rejectQuestionNumberFalsePositive(
+  pick: number | null,
+  inkFracs: number[],
+  fills: number[],
+  cols: number
+): number | null {
+  if (pick !== 0 || cols < 2) return pick;
+  const fillA = fills[0] ?? 0;
+  if (fillA >= 0.16) return pick;
+  const fillLeader = bestColumnByGap(fills, cols);
+  if (fillLeader.best === 0) return pick;
+  const fillBest = fills[fillLeader.best] ?? 0;
+  if (
+    fillLeader.gap >= 0.03 &&
+    fillBest >= 0.1 &&
+    fillBest >= fillA + 0.025 &&
+    (inkFracs[0] ?? 0) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.15
+  ) {
+    return fillLeader.best;
+  }
+  if (fillA < 0.14 && fillBest >= fillA + 0.03 && fillLeader.gap >= 0.025) {
+    return fillLeader.best;
+  }
+  return pick;
+}
+
 function pickAnswerSheetRowAbsolute(params: {
   inkFracs: number[];
   fills: number[];
@@ -6589,7 +8091,7 @@ function pickAnswerSheetRowAbsolute(params: {
 
   if (inkOk && scoreOk && inkBest === scoreBest) {
     return {
-      pick: inkBest,
+      pick: rejectQuestionNumberFalsePositive(inkBest, inkFracs, fills, cols),
       ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
       confidence: inkVal + scoreGap,
     };
@@ -6603,7 +8105,16 @@ function pickAnswerSheetRowAbsolute(params: {
     maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
     (inkOk || scoreOk) &&
     inkBest !== scoreBest;
-  return { pick: null, ambiguous, confidence: 0 };
+  if (ambiguous) {
+    return { pick: null, ambiguous: true, confidence: 0 };
+  }
+
+  const pick = scoreOk ? scoreBest : inkOk ? inkBest : null;
+  return {
+    pick: pick === null ? null : rejectQuestionNumberFalsePositive(pick, inkFracs, fills, cols),
+    ambiguous: !scoreOk || !inkOk || inkBest !== scoreBest,
+    confidence: scoreOk ? scoreVal + scoreGap : inkVal + inkGap,
+  };
 }
 
 /**
@@ -6638,7 +8149,11 @@ export function readAnswerSheetPicksFromTemplateGeometry(
     };
   }
 
-  const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { data, width, height } = (() => {
+    const cached = getOmrCanvasImageData(canvas);
+    if (cached) return { data: cached, width: canvas.width, height: canvas.height };
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  })();
   const W = Math.max(1, geometry.imageWidth);
   const H = Math.max(1, geometry.imageHeight);
 
@@ -6695,15 +8210,72 @@ export function readAnswerSheetPicksFromTemplateGeometry(
     }
 
     const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
-    out[row] = abs.pick;
+    let finalAbs = abs;
+    let finalInkFracs = inkFracs;
+
+    if (abs.pick === null || abs.ambiguous) {
+      const cy = (rowY0 + rowY1) * 0.5;
+      const radiusPx = Math.max(3, Math.round((rowY1 - rowY0) * 0.22));
+      const diskRInk = Math.max(2, Math.round(radiusPx * 0.55));
+      const columnEdges: number[] = [];
+      for (let c = 0; c <= cols; c++) {
+        if (c === 0) {
+          const cell = rowCells[0];
+          columnEdges.push(cell ? cell.x * W : rowX0);
+        } else if (c === cols) {
+          const cell = rowCells[cols - 1];
+          columnEdges.push(cell ? (cell.x + cell.w) * W : rowX1);
+        } else {
+          const left = rowCells[c - 1];
+          const right = rowCells[c];
+          columnEdges.push(
+            left && right
+              ? ((left.x + left.w) * W + right.x * W) * 0.5
+              : rowX0 + ((rowX1 - rowX0) * c) / cols
+          );
+        }
+      }
+      for (const dy of [4, 3, 2, -2, -3, -4, 5, -5, 6, -6, 8, -8]) {
+        const retryCy = Math.max(
+          rowY0 + 2,
+          Math.min(rowY1 - 2, Math.round(cy + dy))
+        );
+        if (retryCy === Math.round(cy)) continue;
+        const retry = sampleAnswerSheetRowAtCy(
+          data,
+          width,
+          height,
+          columnEdges,
+          cols,
+          retryCy,
+          radiusPx,
+          diskRInk,
+          otsuT,
+          thresholds
+        );
+        const retryAbs = pickAnswerSheetRowAbsolute({
+          inkFracs: retry.inkFracs,
+          fills: retry.fills,
+          scores: retry.scores,
+          cols,
+        });
+        if (retryAbs.pick !== null && (!finalAbs.pick || retryAbs.confidence > finalAbs.confidence)) {
+          finalAbs = retryAbs;
+          finalInkFracs = retry.inkFracs;
+          if (!retryAbs.ambiguous) break;
+        }
+      }
+    }
+
+    out[row] = finalAbs.pick;
     rowMetas.push({
-      pick: abs.pick,
-      ambiguous: abs.ambiguous,
-      inkFractions: [...inkFracs],
+      pick: finalAbs.pick,
+      ambiguous: finalAbs.ambiguous,
+      inkFractions: [...finalInkFracs],
     });
-    if (abs.pick !== null) {
+    if (finalAbs.pick !== null) {
       resolvedCount++;
-      confidenceSum += abs.confidence;
+      confidenceSum += finalAbs.confidence;
     }
   }
 
@@ -6775,11 +8347,7 @@ export function sanitizeAnswerSheetOmrMeta(
   const picks = meta.picks.slice(0, rows);
   const rowMetas = meta.rows.slice(0, rows).map((row, i) => {
     const maxInk = rowMaxInkFraction(row);
-    if (maxInk < blankInk || picks[i] === null) {
-      picks[i] = null;
-      return { ...row, pick: null, ambiguous: false };
-    }
-    if (maxInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction * 0.9) {
+    if (picks[i] === null || maxInk < blankInk) {
       picks[i] = null;
       return { ...row, pick: null, ambiguous: false };
     }
@@ -6859,8 +8427,13 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     Math.min(maxRight, Math.round((fixedTemplate ? tableLeft : 0) + qNumW + columnShiftPx))
   );
   const bubbleAreaW = fixedTemplate
-    ? Math.max(18, tableW - qNumW - tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO)
-    : width - bubbleAreaLeft - Math.round(width * (CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO + 0.035));
+    ? Math.max(18, tableW - qNumW - tableW * CALIFACIL_BUBBLE_RIGHT_STRIP_RATIO * 0.5)
+    : (() => {
+        const pageTemplate = buildCalifacilAnswerSheetOmrTemplate(rowCount);
+        const tableLeftPx = width * pageTemplate.tableLeftRatio;
+        const tableWidthPx = width * pageTemplate.tableWidthRatio;
+        return bubbleAreaWidthFromTable(bubbleAreaLeft, tableLeftPx, tableWidthPx, width);
+      })();
   const cellW = bubbleAreaW / cols;
 
   const uniformColEdges: number[] = [];
@@ -7755,6 +9328,381 @@ export const CALIFACIL_DESKTOP_GRADE_SCAN_OPTS = {
   answerSheetTemplateOnly: false,
 };
 
+const OMR_GRADE_SCAN_MAX_SIDE = 1280;
+const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
+
+async function yieldOmrScanThread(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+}
+
+function omrGradeScanCanvas(
+  canvas: HTMLCanvasElement,
+  maxSide = OMR_GRADE_SCAN_MAX_SIDE
+): HTMLCanvasElement {
+  return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
+}
+
+function finishGradeScanResult(
+  displayCanvas: HTMLCanvasElement,
+  scanned: OmrScanMetaResult,
+  columns: number,
+  rows: number,
+  thresholds: ScanThresholds = FRAME_GRID_SCAN_THRESHOLDS
+): OmrScanMetaResult {
+  let result = scanned;
+
+  if (result.unifiedEngine) {
+    const geometry = result.geometry
+      ? syncCalifacilOmrGeometryImageSize(
+          result.geometry,
+          displayCanvas.width,
+          displayCanvas.height
+        )
+      : null;
+    const withOverlay = attachAnswerSheetReviewBubbleOverlay(
+      displayCanvas,
+      { ...result, geometry },
+      columns,
+      rows
+    );
+    return sanitizeAnswerSheetOmrMeta(
+      {
+        ...withOverlay,
+        reviewSourceCanvas: displayCanvas,
+      },
+      rows
+    );
+  }
+
+  if (
+    !result.controlNumber &&
+    result.controlNumberDigits.every((d) => d === null)
+  ) {
+    const ctrl = readAnswerSheetControlNumberFromCanvas(displayCanvas, rows);
+    if (ctrl.controlNumber || ctrl.digits.some((d) => d !== null)) {
+      result = {
+        ...result,
+        controlNumber: ctrl.controlNumber,
+        controlNumberDigits: ctrl.digits,
+      };
+    }
+  }
+  if (result.geometry) {
+    const preferFooterGeometry = !(
+      isReferenceGradeExam(rows, columns) &&
+      canvasMatchesReferenceGrade(displayCanvas.width, displayCanvas.height)
+    );
+    if (preferFooterGeometry && !isFooterAnswerSheetGeometry(result.geometry, rows)) {
+      const footerGeom = pickFooterAnswerSheetGeometry([], rows, columns, displayCanvas);
+      const footerRead = omrMetaFromGeometry(displayCanvas, footerGeom, rows, columns);
+      result = {
+        ...result,
+        picks: footerRead.picks,
+        rows: footerRead.rows,
+        maxSameColumnCount: footerRead.maxSameColumnCount,
+        geometry: footerRead.geometry ?? footerGeom,
+      };
+    }
+    result = finalizeAnswerSheetGeometryForGrade(
+      displayCanvas,
+      result,
+      columns,
+      rows,
+      thresholds
+    );
+  }
+  const geometry = result.geometry
+    ? syncCalifacilOmrGeometryImageSize(
+        result.geometry,
+        displayCanvas.width,
+        displayCanvas.height
+      )
+    : null;
+  const withOverlay = attachAnswerSheetReviewBubbleOverlay(
+    displayCanvas,
+    { ...result, geometry },
+    columns,
+    rows
+  );
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      ...withOverlay,
+      reviewSourceCanvas: displayCanvas,
+    },
+    rows
+  );
+}
+
+function pickBetterOmrScan(
+  best: OmrScanMetaResult,
+  bestScore: number,
+  candidate: OmrScanMetaResult,
+  rows: number
+): { best: OmrScanMetaResult; bestScore: number } {
+  const bestResolved = best.picks.filter((p) => p !== null).length;
+  const candidateResolved = candidate.picks.filter((p) => p !== null).length;
+  const score = scoreOmrMetaPicks(candidate, rows);
+
+  const sameColPenalty = (meta: OmrScanMetaResult) => {
+    const same = meta.maxSameColumnCount ?? 0;
+    const colA = meta.picks.filter((p) => p === 0).length;
+    let penalty = 0;
+    if (same >= Math.ceil(rows * 0.45)) penalty += rows * 40;
+    if (colA >= Math.ceil(rows * 0.35)) penalty += rows * 25;
+    return penalty;
+  };
+
+  const adjBest = bestScore - sameColPenalty(best);
+  const adjCand = score - sameColPenalty(candidate);
+
+  if (adjCand > adjBest) return { best: candidate, bestScore: score };
+  if (adjCand < adjBest) return { best, bestScore };
+
+  if (candidateResolved > bestResolved) {
+    return { best: candidate, bestScore: score };
+  }
+  if (candidateResolved < bestResolved) {
+    return { best, bestScore };
+  }
+  if (score > bestScore) return { best: candidate, bestScore: score };
+  return { best, bestScore };
+}
+
+function omrScanHasMinReads(meta: OmrScanMetaResult, rows: number, ratio = 0.9): boolean {
+  const resolved = meta.picks.filter((p) => p !== null).length;
+  return resolved >= Math.max(1, Math.ceil(rows * ratio));
+}
+
+function omrScanReadyToReturn(meta: OmrScanMetaResult, rows: number): boolean {
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
+  const resolved = meta.picks.filter((p) => p !== null).length;
+  if (resolved < rows) return false;
+  if (!meta.geometry || !validateAnswerSheetGeometry(meta.geometry, rows).ok) return false;
+  const colA = meta.picks.filter((p) => p === 0).length;
+  if (colA >= Math.ceil(rows * 0.34)) return false;
+  if ((meta.maxSameColumnCount ?? 0) >= Math.ceil(rows * 0.42)) return false;
+  return !meta.rows.slice(0, rows).some((r) => r.ambiguous);
+}
+
+function omrScanNeedsTier2(meta: OmrScanMetaResult, rows: number): boolean {
+  if (isOmrAutoGradeGoodEnough(meta, rows)) return false;
+  return !omrScanHasMinReads(meta, rows, 0.9);
+}
+
+function omrScanNeedsTier3(meta: OmrScanMetaResult, rows: number): boolean {
+  if (isOmrAutoGradeGoodEnough(meta, rows)) return false;
+  return !omrScanHasMinReads(meta, rows, 0.9);
+}
+
+async function runDesktopGradeScanTiersAsync(
+  scanCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): Promise<OmrScanMetaResult> {
+  getOmrCanvasImageData(scanCanvas);
+  const tiers: OmrTierCandidate[] = [];
+
+  await yieldOmrScanThread();
+  tiers.push({
+    meta: scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+      answerSheetTemplateOnly: true,
+      rowCount: rows,
+    }),
+    tierPriority: 100,
+  });
+
+  await yieldOmrScanThread();
+  tiers.push({
+    meta: scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { fast: true }).meta,
+    tierPriority: 200,
+  });
+
+  await yieldOmrScanThread();
+  tiers.push({
+    meta: scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { medium: true }).meta,
+    tierPriority: 300,
+  });
+
+  await yieldOmrScanThread();
+  tiers.push({
+    meta: scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+      qnumSweep: 'full',
+      columnShiftSweep: 'full',
+      rowCount: rows,
+    }),
+    tierPriority: 350,
+  });
+
+  await yieldOmrScanThread();
+  const hybrid = buildRegisteredAnswerSheetGeometry(scanCanvas, rows, columns);
+  if (validateAnswerSheetGeometry(hybrid, rows).ok) {
+    tiers.push({
+      meta: omrMetaFromGeometry(scanCanvas, hybrid, rows, columns),
+      tierPriority: 400,
+    });
+  }
+
+  return finalizeDesktopTierMerge(scanCanvas, tiers, columns, rows, {
+    preferMediumReads: true,
+  });
+}
+
+async function runWarpedGradeScanTiersAsync(
+  scanCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): Promise<OmrScanMetaResult> {
+  getOmrCanvasImageData(scanCanvas);
+  await yieldOmrScanThread();
+  let best = scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { fast: true }).meta;
+  let bestScore = scoreOmrMetaPicks(best, rows);
+  if (omrScanReadyToReturn(best, rows)) return best;
+
+  if (omrScanNeedsTier2(best, rows)) {
+    await yieldOmrScanThread();
+    const tier2 = scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { medium: true }).meta;
+    ({ best, bestScore } = pickBetterOmrScan(best, bestScore, tier2, rows));
+    if (omrScanReadyToReturn(best, rows)) return best;
+  }
+
+  if (omrScanNeedsTier3(best, rows)) {
+    await yieldOmrScanThread();
+    const hybrid = buildRegisteredAnswerSheetGeometry(scanCanvas, rows, columns);
+    if (validateAnswerSheetGeometry(hybrid, rows).ok) {
+      const tier3 = omrMetaFromGeometry(scanCanvas, hybrid, rows, columns);
+      ({ best, bestScore } = pickBetterOmrScan(best, bestScore, tier3, rows));
+    }
+  }
+
+  return best;
+}
+
+function runWarpedGradeScanTiers(
+  scanCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): OmrScanMetaResult {
+  getOmrCanvasImageData(scanCanvas);
+  let best = scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { fast: true }).meta;
+  let bestScore = scoreOmrMetaPicks(best, rows);
+  if (omrScanReadyToReturn(best, rows)) return best;
+
+  if (omrScanNeedsTier2(best, rows)) {
+    const tier2 = scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { medium: true }).meta;
+    ({ best, bestScore } = pickBetterOmrScan(best, bestScore, tier2, rows));
+    if (omrScanReadyToReturn(best, rows)) return best;
+  }
+
+  if (omrScanNeedsTier3(best, rows)) {
+    const hybrid = buildRegisteredAnswerSheetGeometry(scanCanvas, rows, columns);
+    if (validateAnswerSheetGeometry(hybrid, rows).ok) {
+      const tier3 = omrMetaFromGeometry(scanCanvas, hybrid, rows, columns);
+      ({ best, bestScore } = pickBetterOmrScan(best, bestScore, tier3, rows));
+    }
+  }
+
+  return best;
+}
+
+function runDesktopGradeScanTiers(
+  scanCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): OmrScanMetaResult {
+  getOmrCanvasImageData(scanCanvas);
+  const tiers: OmrTierCandidate[] = [];
+
+  tiers.push({
+    meta: scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+      answerSheetTemplateOnly: true,
+      rowCount: rows,
+    }),
+    tierPriority: 100,
+  });
+
+  tiers.push({
+    meta: scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { fast: true }).meta,
+    tierPriority: 200,
+  });
+
+  tiers.push({
+    meta: scanWarpedWithBestTableFrame(scanCanvas, columns, rows, { medium: true }).meta,
+    tierPriority: 300,
+  });
+
+  tiers.push({
+    meta: scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+      qnumSweep: 'full',
+      columnShiftSweep: 'full',
+      rowCount: rows,
+    }),
+    tierPriority: 350,
+  });
+
+  const hybrid = buildRegisteredAnswerSheetGeometry(scanCanvas, rows, columns);
+  if (validateAnswerSheetGeometry(hybrid, rows).ok) {
+    tiers.push({
+      meta: omrMetaFromGeometry(scanCanvas, hybrid, rows, columns),
+      tierPriority: 400,
+    });
+  }
+
+  return finalizeDesktopTierMerge(scanCanvas, tiers, columns, rows, {
+    preferMediumReads: true,
+  });
+}
+
+/**
+ * Escaneo plano cercano a referencia (p. ej. 1236×1600): sin homografía, plantilla + picos.
+ */
+export function scanCalifacilNearReferenceFlatDocument(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
+    return sanitizeAnswerSheetOmrMeta(
+      {
+        picks: Array(rows).fill(null),
+        rows: Array.from({ length: rows }, () => ({
+          pick: null,
+          ambiguous: false,
+          inkFractions: [],
+        })),
+        needsVisionAssist: false,
+        maxSameColumnCount: 0,
+        geometry: null,
+        reviewSourceCanvas: canvas,
+        controlNumberDigits: [],
+        controlNumber: null,
+      },
+      rows
+    );
+  }
+  const geometry = buildRegisteredAnswerSheetGeometry(canvas, rows, columns);
+  const scanned = omrMetaFromGeometry(canvas, geometry, rows, columns);
+  const isExactRef =
+    isReferenceGradeExam(rows, columns) &&
+    hasReferenceGradeCalibration() &&
+    canvasMatchesReferenceGrade(canvas.width, canvas.height);
+  if (isExactRef) {
+    const geom = scanned.geometry
+      ? extendAnswerSheetLastColumnCells(scanned.geometry, rows)
+      : null;
+    return sanitizeAnswerSheetOmrMeta(
+      { ...scanned, geometry: geom, reviewSourceCanvas: canvas },
+      rows
+    );
+  }
+  return finishGradeScanResult(canvas, scanned, columns, rows);
+}
+
 /**
  * Misma lectura que desktop al subir imagen/PDF: barrido fullSheet + plantilla fija.
  * Usar en hoja ya enderezada (PDF rasterizado, warp móvil, archivo subido).
@@ -7767,66 +9715,49 @@ export function scanCalifacilDesktopGradeDocument(
   rowCount?: number
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
-  const finish = (scanned: OmrScanMetaResult) => {
-    const geometry = scanned.geometry
-      ? syncCalifacilOmrGeometryImageSize(scanned.geometry, canvas.width, canvas.height)
-      : null;
+  if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
     return sanitizeAnswerSheetOmrMeta(
       {
-        ...scanned,
-        geometry,
+        picks: Array(rows).fill(null),
+        rows: Array.from({ length: rows }, () => ({
+          pick: null,
+          ambiguous: false,
+          inkFractions: [],
+        })),
+        needsVisionAssist: false,
+        maxSameColumnCount: 0,
+        geometry: null,
         reviewSourceCanvas: canvas,
+        controlNumberDigits: [],
+        controlNumber: null,
       },
       rows
     );
-  };
-
-  const countResolved = (meta: OmrScanMetaResult) => meta.picks.filter((p) => p !== null).length;
-  const minAutoRead = Math.max(1, Math.ceil(rows * 0.9));
-  const minRecovery = Math.max(1, Math.ceil(rows * 0.45));
-  const isGoodEnough = (meta: OmrScanMetaResult) => {
-    if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
-    const resolved = countResolved(meta);
-    if (resolved < minRecovery) return false;
-    if (!meta.geometry) return false;
-    if (!validateAnswerSheetGeometry(meta.geometry, rows).ok) return false;
-    if (resolved < minAutoRead) return false;
-    const same = meta.maxSameColumnCount ?? 0;
-    if (same >= Math.ceil(rows * 0.75)) return false;
-    const ambiguous = meta.rows.slice(0, rows).filter((r) => r.ambiguous).length;
-    if (ambiguous > Math.ceil(rows * 0.35)) return false;
-    return scoreOmrMetaPicks(meta, rows) >= rows * 70;
-  };
-
-  const fast = scanCalifacilOmrSheetWithMeta(canvas, columns, {
-    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
-    answerSheetTemplateOnly: true,
-    rowCount: rows,
-  });
-  if (isGoodEnough(fast)) return finish(fast);
-
-  const medium = scanCalifacilOmrSheetWithMeta(canvas, columns, {
-    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
-    nativeDocumentFast: true,
-    rowCount: rows,
-  });
-  if (isGoodEnough(medium)) return finish(medium);
-
-  const full = scanCalifacilOmrSheetWithMeta(canvas, columns, {
-    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
-    rowCount: rows,
-  });
-
-  let best = full;
-  let bestScore = scoreOmrMetaPicks(full, rows);
-  for (const candidate of [medium, fast]) {
-    const score = scoreOmrMetaPicks(candidate, rows);
-    if (score > bestScore) {
-      best = candidate;
-      bestScore = score;
-    }
   }
-  return finish(best);
+  const scanCanvas = omrGradeScanCanvas(canvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
+  if (
+    isReferenceGradeExam(rows, columns) &&
+    hasReferenceGradeCalibration() &&
+    canvasMatchesReferenceGrade(scanCanvas.width, scanCanvas.height)
+  ) {
+    return scanCalifacilNearReferenceFlatDocument(scanCanvas, columns, rows);
+  }
+  const scanned = runDesktopGradeScanTiers(scanCanvas, columns, rows);
+  return finishGradeScanResult(canvas, scanned, columns, rows);
+}
+
+export async function scanCalifacilDesktopGradeDocumentAsync(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): Promise<OmrScanMetaResult> {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
+    return scanCalifacilDesktopGradeDocument(canvas, columns, rowCount);
+  }
+  const scanCanvas = omrGradeScanCanvas(canvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
+  const scanned = await runDesktopGradeScanTiersAsync(scanCanvas, columns, rows);
+  return finishGradeScanResult(canvas, scanned, columns, rows);
 }
 
 /**
@@ -7971,11 +9902,37 @@ export function scanWarpedMobileCaptureSheetFast(
   };
 }
 
+/** Escala el canvas para que el lado mayor sea `maxSide` (sube o baja resolución). */
+export function scaleCanvasToMaxSide(
+  source: HTMLCanvasElement,
+  maxSide: number
+): HTMLCanvasElement {
+  if (source.width < 40 || source.height < 40 || maxSide < 40) return source;
+  const scale = maxSide / Math.max(source.width, source.height, 1);
+  if (Math.abs(scale - 1) < 0.02) return source;
+  const w = Math.max(1, Math.round(source.width * scale));
+  const h = Math.max(1, Math.round(source.height * scale));
+  if (typeof document === 'undefined') return source;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return source;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, w, h);
+  return canvas;
+}
+
 /** Reduce un canvas para lectura OMR móvil sin bloquear el hilo principal tanto tiempo. */
 export function downscaleCanvasForOmrScan(
   source: HTMLCanvasElement,
   maxSide = 1280
 ): HTMLCanvasElement {
+  const maxDim = Math.max(source.width, source.height, 1);
+  if (maxDim <= maxSide) return source;
   return drawSourceToCanvas(source, maxSide) ?? source;
 }
 
@@ -8234,22 +10191,25 @@ export function scanCalifacilOmrSheetWithMeta(
         reviewCanvas.height
       );
     }
-    const templateRead = readAnswerSheetPicksFromTemplateGeometry(
-      reviewCanvas,
-      geometry,
-      thresholds,
-      rowCount,
-      columns
-    );
-    best = {
-      ...best,
-      picks: templateRead.picks,
-      rows: templateRead.rows,
-      resolvedCount: templateRead.resolvedCount,
-      confidenceSum: templateRead.confidenceSum,
-      maxSameColumnCount: templateRead.maxSameColumnCount,
-      geometry,
-    };
+    if (geometry) {
+      const refined = refineAnswerSheetGeometryToBubblePeaks(reviewCanvas, geometry);
+      const reread = readAnswerSheetPicksFromTemplateGeometry(
+        reviewCanvas,
+        refined,
+        thresholds,
+        rowCount,
+        columns
+      );
+      best = {
+        ...best,
+        picks: reread.picks,
+        rows: reread.rows,
+        resolvedCount: reread.resolvedCount,
+        confidenceSum: reread.confidenceSum,
+        maxSameColumnCount: reread.maxSameColumnCount,
+        geometry: refined,
+      };
+    }
   }
 
   const controlRead = readAnswerSheetControlNumberFromCanvas(reviewCanvas, rowCount, thresholds);

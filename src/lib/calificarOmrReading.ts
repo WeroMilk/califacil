@@ -6,18 +6,25 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
-  scanCalifacilDesktopGradeDocument,
-  scanCalifacilOmrSheetWithMeta,
-  scanWarpedMobileCaptureSheet,
-  syncCalifacilOmrGeometryImageSize,
+  prepareCalifacilScanInput,
+  scanWarpedMobileCaptureSheetFast,
   type OmrScanMetaResult,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
+import {
+  scanDesktopGradeUnifiedOrLegacyAsync,
+  scanLiveOmrUnifiedOrLegacy,
+  scanWarpedGradeUnifiedOrLegacyAsync,
+} from '@/lib/omr/unified-grade-scan';
+import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import type { Question } from '@/types';
 
 export const CALIFACIL_MIN_AUTO_READ_RATIO = 0.9;
 export const CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+
+/** Clasificación explícita de subida en desktop para enrutar el escaneo OMR. */
+export type DesktopUploadKind = 'pdf' | 'flatDocument' | 'flatScan' | 'photoCrop' | 'warpedPhoto';
 
 export type CalifacilOmrReadingInput = {
   source: HTMLImageElement | HTMLCanvasElement;
@@ -31,6 +38,10 @@ export type CalifacilOmrReadingInput = {
   isMobileCamera: boolean;
   isMobile: boolean;
   fallbackFile?: File;
+  /** Solo desktop: PDF, imagen plana o foto enderezada con warp. */
+  uploadKind?: DesktopUploadKind;
+  /** PDF y documentos planos no usan visión asistida. */
+  disableVisionAssist?: boolean;
   skipReviewUi?: boolean;
   sheetStrict: boolean;
   preserveCapturedFrame: boolean;
@@ -58,6 +69,47 @@ export type CalifacilOmrReadingResult = {
   insufficientForReview: boolean;
   updatedLiveLocks: Record<string, string>;
 };
+
+function collectDesktopVisionRowIndices(
+  meta: OmrScanMetaResult,
+  chunkLen: number
+): number[] {
+  const indices: number[] = [];
+  const colA = meta.picks.filter((p) => p === 0).length;
+  const suspiciousA = colA >= 6;
+  const sameCol = (meta.maxSameColumnCount ?? 0) >= 8;
+
+  for (let i = 0; i < chunkLen; i++) {
+    const row = meta.rows[i];
+    const pick = meta.picks[i] ?? null;
+    if (!row || pick === null || row.ambiguous) {
+      indices.push(i);
+      continue;
+    }
+    if (suspiciousA && pick === 0) indices.push(i);
+  }
+
+  if (sameCol && !indices.length) {
+    for (let i = 0; i < chunkLen; i++) indices.push(i);
+  }
+
+  const resolved = meta.picks.filter((p) => p !== null).length;
+  if (resolved < chunkLen) {
+    for (let i = 0; i < chunkLen; i++) {
+      if (meta.picks[i] === null && !indices.includes(i)) indices.push(i);
+    }
+  }
+
+  return Array.from(new Set(indices)).sort((a, b) => a - b);
+}
+
+function desktopUploadSkipsVision(uploadKind?: DesktopUploadKind): boolean {
+  return (
+    uploadKind === 'pdf' ||
+    uploadKind === 'flatDocument' ||
+    uploadKind === 'flatScan'
+  );
+}
 
 async function fetchVisionOmr(payload: {
   examId: string;
@@ -131,6 +183,8 @@ export async function runCalifacilOmrReadingPipeline(
     isMobileCamera,
     isMobile,
     fallbackFile,
+    uploadKind,
+    disableVisionAssist,
     sheetStrict,
     preserveCapturedFrame,
   } = input;
@@ -138,33 +192,43 @@ export async function runCalifacilOmrReadingPipeline(
   const useFixedTemplate =
     preWarped && isMobileCamera ? true : isMobileCamera ? sheetStrict : Boolean(fallbackFile);
 
-  let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
+  const useDocumentScan =
+    uploadKind === 'pdf' ||
+    uploadKind === 'flatDocument' ||
+    uploadKind === 'flatScan' ||
+    (isMobile && Boolean(fallbackFile) && !isMobileCamera);
+  const useWarpedScan =
+    uploadKind === 'warpedPhoto' ||
+    uploadKind === 'photoCrop' ||
+    (isMobile && preWarped && !fallbackFile);
+
+  const resolveScanCanvas = (
+    input: HTMLImageElement | HTMLCanvasElement
+  ): HTMLCanvasElement | null => {
+    if (input instanceof HTMLCanvasElement) return input;
+    return prepareCalifacilScanInput(input, { useGuideCrop: false });
+  };
+
+  const prepareGradeCanvas = (canvas: HTMLCanvasElement): HTMLCanvasElement =>
+    prepareCalifacilGradeScanCanvas(canvas, omrCols, omrRowCount, {
+      preWarped: preWarped || useWarpedScan,
+      warpAlignment: input.warpAlignment ?? null,
+    });
+
+  let scanCanvas = resolveScanCanvas(oriented);
+  if (scanCanvas) {
+    scanCanvas = prepareGradeCanvas(scanCanvas);
+  }
+  let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
-  if (oriented instanceof HTMLCanvasElement && (Boolean(fallbackFile) || preWarped)) {
-    meta = scanCalifacilDesktopGradeDocument(oriented, omrCols, omrRowCount);
-    if (preWarped) {
-      const resolved = meta.picks.filter((p) => p !== null).length;
-      const minRecovery = Math.max(1, Math.ceil(omrRowCount * 0.45));
-      if (resolved < minRecovery) {
-        const recovery = scanWarpedMobileCaptureSheet(oriented, omrCols, omrRowCount);
-        const recoveryResolved = recovery.picks.filter((p) => p !== null).length;
-        if (recoveryResolved > resolved) {
-          meta = recovery;
-          if (meta.geometry && meta.reviewSourceCanvas) {
-            meta = {
-              ...meta,
-              geometry: syncCalifacilOmrGeometryImageSize(
-                meta.geometry,
-                meta.reviewSourceCanvas.width,
-                meta.reviewSourceCanvas.height
-              ),
-            };
-          }
-        }
-      }
-    }
+  if (useWarpedScan && scanCanvas) {
+    meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
+  } else if (useDocumentScan && scanCanvas) {
+    meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
+  } else if (scanCanvas && isMobile) {
+    meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
   } else {
-    meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
+    meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
       skipGuideCrop: true,
       geometryMode:
         isMobileCamera
@@ -201,34 +265,82 @@ export async function runCalifacilOmrReadingPipeline(
         allowTiltSweep: true,
       }) ?? oriented;
 
-    const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoverySource, omrCols, {
-      skipGuideCrop: true,
-      geometryMode: isMobileCamera
-        ? 'auto'
-        : fallbackFile
-          ? 'fullSheet'
-          : isMobile
-            ? 'fullSheet'
-            : 'auto',
-      preserveInputCanvas: false,
-      fixedTemplateAnchor: useFixedTemplate,
-      rowCount: omrRowCount,
-    });
-    const recoveryRaw = [...recoveryMeta.picks];
-    const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);
+    const recoveryCanvas = resolveScanCanvas(recoverySource);
+    if (recoveryCanvas) {
+      const preparedRecovery = prepareGradeCanvas(recoveryCanvas);
+      const recoveryMeta = await scanWarpedGradeUnifiedOrLegacyAsync(
+        preparedRecovery,
+        omrCols,
+        omrRowCount
+      );
+      const recoveryRaw = [...recoveryMeta.picks];
+      const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);
 
-    if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
-      meta = recoveryMeta;
-      raw = recoveryRaw;
-      mapped = recoveryMapped;
-      activeScanSource = recoverySource;
-      mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
-      if (mostlyBlank) {
-        raw = raw.map(() => null);
-        mapped = mapRawToDraftDetailed(raw, chunk);
+      if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
+        meta = recoveryMeta;
+        raw = recoveryRaw;
+        mapped = recoveryMapped;
+        activeScanSource = preparedRecovery;
+        mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
+        if (mostlyBlank) {
+          raw = raw.map(() => null);
+          mapped = mapRawToDraftDetailed(raw, chunk);
+        }
       }
     }
   }
+
+  const shouldRunDesktopRecovery =
+    !isMobile &&
+    !isMobileCamera &&
+    !mostlyBlank &&
+    mapped.resolvedCount < minResolved &&
+    scanCanvas &&
+    mapped.resolvedCount < Math.max(1, Math.ceil(omrRowCount * 0.45)) &&
+    uploadKind !== 'pdf' &&
+    uploadKind !== 'flatDocument' &&
+    uploadKind !== 'flatScan';
+
+  if (shouldRunDesktopRecovery) {
+    let recoveryMeta: OmrScanMetaResult | null = null;
+    const desktopScanCanvas = scanCanvas;
+    if (uploadKind === 'warpedPhoto') {
+      if (desktopScanCanvas) {
+        recoveryMeta = scanWarpedMobileCaptureSheetFast(desktopScanCanvas, omrCols, omrRowCount);
+      }
+    } else {
+      const recoverySource =
+        autoOrientCalifacilSheet(source, omrCols, {
+          useGuideCrop: false,
+          allowTiltSweep: true,
+        }) ?? oriented;
+      const recoveryCanvas = resolveScanCanvas(recoverySource);
+      if (recoveryCanvas) {
+        recoveryMeta = await scanDesktopGradeUnifiedOrLegacyAsync(
+          recoveryCanvas,
+          omrCols,
+          omrRowCount
+        );
+        activeScanSource = recoveryCanvas;
+      }
+    }
+    if (recoveryMeta) {
+      const recoveryRaw = [...recoveryMeta.picks];
+      const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);
+      if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
+        meta = recoveryMeta;
+        raw = recoveryRaw;
+        mapped = recoveryMapped;
+        mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
+        if (mostlyBlank) {
+          raw = raw.map(() => null);
+          mapped = mapRawToDraftDetailed(raw, chunk);
+        }
+      }
+    }
+  }
+
+  const visionDisabled = Boolean(disableVisionAssist);
 
   const ambiguousIdx = meta.rows
     .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
@@ -245,10 +357,46 @@ export async function runCalifacilOmrReadingPipeline(
 
   if (
     !mostlyBlank &&
+    !isMobileCamera &&
+    !isMobile &&
+    examId &&
+    !visionDisabled &&
+    !desktopUploadSkipsVision(uploadKind)
+  ) {
+    const desktopVisionRows = collectDesktopVisionRowIndices(meta, chunk.length);
+    if (desktopVisionRows.length > 0) {
+      const rowsPayload = desktopVisionRows.map((i) => ({
+        questionId: chunk[i]!.id,
+        globalNumber: chunkQuestionOffset + i + 1,
+        options: chunk[i]!.options ?? [],
+      }));
+      try {
+        const imageBase64 = califacilImageToJpegDataUrl(visionImageSource);
+        const res = await fetchVisionOmr({
+          examId,
+          imageBase64,
+          rows: rowsPayload,
+          omrColumnCount: omrCols,
+          focusNumbers: rowsPayload.map((r) => r.globalNumber),
+        });
+        const payload = (await res.json().catch(() => ({}))) as {
+          selections?: Record<string, string>;
+        };
+        if (res.ok) {
+          await applyVisionSelections(raw, chunk, desktopVisionRows, payload.selections);
+        }
+      } catch {
+        /* mantener lectura local */
+      }
+    }
+  }
+
+  if (
+    !mostlyBlank &&
     CALIFACIL_VISION_POLICY.onAmbiguousRows &&
     ambiguousIdx.length > 0 &&
     examId &&
-    !fallbackFile
+    !visionDisabled
   ) {
     const rowsPayload = ambiguousIdx.map((i) => ({
       questionId: chunk[i]!.id,
@@ -282,7 +430,7 @@ export async function runCalifacilOmrReadingPipeline(
     chunk.length >= 8 &&
     meta.maxSameColumnCount >= 8 &&
     !allSameCol &&
-    !fallbackFile
+    !visionDisabled
   ) {
     const rowsPayload = chunk.map((q, i) => ({
       questionId: q.id,
@@ -317,7 +465,7 @@ export async function runCalifacilOmrReadingPipeline(
     allSameCol &&
     examId &&
     !ambiguousIdx.length &&
-    !fallbackFile
+    !visionDisabled
   ) {
     const rowsPayload = chunk.map((q, i) => ({
       questionId: q.id,
@@ -351,7 +499,7 @@ export async function runCalifacilOmrReadingPipeline(
     CALIFACIL_VISION_POLICY.onFinalizeEveryRow &&
     examId &&
     chunk.length > 0 &&
-    !fallbackFile
+    !visionDisabled
   ) {
     const rowsPayload = chunk.map((q, i) => ({
       questionId: q.id,
@@ -407,8 +555,21 @@ export async function runCalifacilOmrReadingPipeline(
     if (v) updatedLiveLocks[q.id] = v;
   }
 
+  const detectedBubbleCount =
+    meta.geometry?.bubbles?.flat().filter((b) => b.r > 0).length ?? 0;
+  const hasStrongGeometry =
+    detectedBubbleCount >= omrRowCount * omrCols * 0.85;
+  const geometryConverged = meta.geometry?.quality?.convergence?.converged === true;
+  const partialDesktopOk =
+    !isMobileCamera &&
+    !isMobile &&
+    (mergedResolved >= Math.max(1, Math.ceil(chunk.length * 0.9)) ||
+      (hasStrongGeometry &&
+        geometryConverged &&
+        mergedResolved >= Math.max(1, Math.ceil(chunk.length * 0.5))));
+
   const insufficientForReview =
-    !mostlyBlank && mergedResolved < minResolved && !isMobileCamera;
+    !mostlyBlank && mergedResolved < minResolved && !isMobileCamera && !partialDesktopOk;
 
   return {
     meta,

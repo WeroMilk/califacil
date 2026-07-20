@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
 import { examPublicSupabase } from '@/lib/supabase';
+import { sortExamQuestions } from '@/lib/examQuestions';
 import {
   rpcCompleteStudentExamAttempt,
   rpcGetStudentExamAttempt,
@@ -266,7 +267,7 @@ export default function StudentExamPage() {
         .order('created_at', { ascending: true });
 
       if (questionsError) throw questionsError;
-      setQuestions(questionsData || []);
+      setQuestions(sortExamQuestions(questionsData || []));
 
       const { data: assignmentData } = await examPublicSupabase
         .from('exam_group_assignments')

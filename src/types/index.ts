@@ -51,6 +51,7 @@ export interface Question {
   correct_answer: string | null;
   illustration: string | null;
   points: number;
+  sort_order?: number;
   created_at: string;
 }
 
