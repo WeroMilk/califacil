@@ -633,16 +633,29 @@ export function buildCalifacilOmrReadingOverride(
   liveLockedAnswers: Record<string, string>,
   warpAlignment: WarpAlignmentReport | null = null
 ): CalifacilOmrReadingResult {
-  let raw = [...meta.picks];
+  const sanitized = isAnswerSheetOmrMostlyBlank(meta, chunk.length)
+    ? {
+        ...meta,
+        picks: Array(chunk.length).fill(null) as (number | null)[],
+        rows: meta.rows.slice(0, chunk.length).map((r) => ({
+          ...r,
+          pick: null,
+          ambiguous: false,
+        })),
+        maxSameColumnCount: 0,
+        needsVisionAssist: false,
+      }
+    : meta;
+  let raw = [...sanitized.picks];
   let mapped = mapRawToDraftDetailed(raw, chunk);
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
-  let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
+  const mostlyBlank = isAnswerSheetOmrMostlyBlank(sanitized, chunk.length);
   if (mostlyBlank) {
     raw = raw.map(() => null);
     mapped = mapRawToDraftDetailed(raw, chunk);
   }
 
-  const ambiguousIdx = meta.rows
+  const ambiguousIdx = sanitized.rows
     .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
     .filter((i) => i >= 0);
 
@@ -671,7 +684,7 @@ export function buildCalifacilOmrReadingOverride(
   }
 
   return {
-    meta,
+    meta: sanitized,
     raw,
     mapped,
     mergedDraft,

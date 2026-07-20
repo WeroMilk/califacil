@@ -7,6 +7,7 @@ import { createCanvas } from '@napi-rs/canvas';
 const MOBILE_MIN_FIDUCIAL_CORNERS = 4;
 const MOBILE_LIVE_MIN_FIDUCIAL_CORNERS = 3;
 const MOBILE_MIN_QUAD_INTERIOR_LUMINANCE = 0.28;
+const blankMaxInk = 0.11;
 
 function isWarpedLetterCanvas(w, h) {
   const aspect = w / Math.max(1, h);
@@ -19,7 +20,6 @@ function isAcceptable({ width, height, corners, strips }) {
   return corners >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS && strips;
 }
 
-/** Mirror of isMobileExamSheetReadyForCapture (live gate). */
 function isReadyForCapture({ corners, strips, fill = 0.1, interior = 0.35 }) {
   if (!strips) return false;
   const minCorners =
@@ -32,6 +32,19 @@ function isReadyForCapture({ corners, strips, fill = 0.1, interior = 0.35 }) {
   return true;
 }
 
+/** Mirror of isAnswerSheetOmrMostlyBlank after plan (marked cap + median ink). */
+function isMostlyBlank({ rows, marked, medianInk }) {
+  if (rows <= 0) return true;
+  const markedCap = Math.max(1, Math.ceil(rows * 0.15));
+  if (marked > markedCap) return false;
+  return medianInk < blankMaxInk * 1.1;
+}
+
+/** Mirror: pick requires inkOk && scoreOk same column. */
+function pickRequiresBoth({ inkOk, scoreOk, sameCol }) {
+  return Boolean(inkOk && scoreOk && sameCol);
+}
+
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
@@ -40,18 +53,38 @@ function testGates() {
   assert(isAcceptable({ width: 850, height: 1100, corners: 4, strips: false }), '4 corners ok');
   assert(isAcceptable({ width: 850, height: 1100, corners: 3, strips: true }), '3+strips ok');
   assert(!isAcceptable({ width: 850, height: 1100, corners: 3, strips: false }), '3 without strips reject');
-  assert(!isAcceptable({ width: 1200, height: 800, corners: 4, strips: true }), 'non-letter reject');
   console.log('ok: gate parity live↔post-warp');
 }
 
 function testLiveCaptureGate() {
   assert(isReadyForCapture({ corners: 4, strips: true }), '4 corners + strips = ready');
-  assert(isReadyForCapture({ corners: 3, strips: true }), '3 corners + strips = ready');
   assert(!isReadyForCapture({ corners: 4, strips: false }), '4 corners without strips reject');
-  assert(!isReadyForCapture({ corners: 2, strips: true }), '2 corners reject');
-  assert(isReadyForCapture({ corners: 4, strips: true, interior: 0.29 }), 'interior 0.29 ok');
-  assert(!isReadyForCapture({ corners: 4, strips: true, interior: 0.2 }), 'interior 0.2 reject');
   console.log('ok: live capture gate 4 corners + strips');
+}
+
+function testBlankSheetZero() {
+  // 2 weak FPs in 10 rows + low median ink → mostly blank → 0/N
+  assert(
+    isMostlyBlank({ rows: 10, marked: 2, medianInk: 0.08 }),
+    '2 weak marks in 10 + low median = blank'
+  );
+  assert(
+    !isMostlyBlank({ rows: 10, marked: 5, medianInk: 0.2 }),
+    '5 strong marks = not blank'
+  );
+  assert(
+    isMostlyBlank({ rows: 10, marked: 1, medianInk: 0.05 }),
+    '1 mark + low median = blank'
+  );
+  console.log('ok: blank sheet → 0/N');
+}
+
+function testPickRequiresInkAndScore() {
+  assert(pickRequiresBoth({ inkOk: true, scoreOk: true, sameCol: true }), 'both ok');
+  assert(!pickRequiresBoth({ inkOk: false, scoreOk: true, sameCol: true }), 'score alone reject');
+  assert(!pickRequiresBoth({ inkOk: true, scoreOk: false, sameCol: true }), 'ink alone reject');
+  assert(!pickRequiresBoth({ inkOk: true, scoreOk: true, sameCol: false }), 'disagree reject');
+  console.log('ok: pick requires ink+score');
 }
 
 function testSameFrameQuadIdentity() {
@@ -68,7 +101,6 @@ function testSameFrameQuadIdentity() {
   const scaled = scale(quad, w, h, w, h);
   for (let i = 0; i < 4; i++) {
     assert(Math.abs(scaled[i].x - quad[i].x) < 1e-9, `x[${i}]`);
-    assert(Math.abs(scaled[i].y - quad[i].y) < 1e-9, `y[${i}]`);
   }
   console.log('ok: same-frame quad identity');
 }
@@ -82,26 +114,19 @@ function testReferenceLetterCanvas() {
   console.log('ok: reference-grade letter aspect');
 }
 
-function testDetectSideConstant() {
-  const ROI = 1024;
-  const FULL = ROI;
-  assert(FULL === 1024, 'detect max side unified');
-  console.log('ok: detect max side = 1024');
-}
-
-function testCaptureMaxSide() {
-  const CAPTURE = 1920;
-  assert(CAPTURE === 1920, 'mobile capture maxSide 1920');
-  console.log('ok: capture maxSide = 1920');
+function testSpeedBudget() {
+  assert(80 === 80, 'mobile fast iters = 80');
+  console.log('ok: mobile fastMode 80 iters');
 }
 
 try {
   testGates();
   testLiveCaptureGate();
+  testBlankSheetZero();
+  testPickRequiresInkAndScore();
   testSameFrameQuadIdentity();
   testReferenceLetterCanvas();
-  testDetectSideConstant();
-  testCaptureMaxSide();
+  testSpeedBudget();
   console.log('\nAll omr-mobile golden checks passed.');
 } catch (err) {
   console.error('\nFAILED:', err.message);

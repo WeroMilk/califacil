@@ -96,12 +96,12 @@ export const CALIFACIL_OMR_SCAN = {
 
 /** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
-  minInkFraction: 0.24,
+  minInkFraction: 0.28,
   minInkGap: 0.075,
   minFillDarkness: 0.12,
   minScoreAbsolute: 0.032,
-  minScoreGap: 0.018,
-  blankMaxInk: 0.095,
+  minScoreGap: 0.035,
+  blankMaxInk: 0.11,
 } as const;
 
 /**
@@ -4276,7 +4276,7 @@ export function sampleBubbleMarkAtCell(
   const H = height;
   const cellW = Math.max(1, cell.w * W);
   const cellH = Math.max(1, cell.h * H);
-  const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: true });
+  const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
   const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.34);
   const diskRInk = Math.max(2, Math.round(radiusPx * 0.55));
   const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
@@ -4409,6 +4409,15 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.height
   );
   const bubbleFit = geom.quality?.bubbleFit ?? 1;
+  // Geometría frozen con burbujas OK: no regenerar (evita desfase overlay).
+  if (
+    geom.frozen === true &&
+    geom.bubbles?.length &&
+    geom.bubbles.length >= rows &&
+    bubbleFit >= 0.45
+  ) {
+    return { ...meta, geometry: geom };
+  }
   if (
     geom.frozen === true &&
     bubbleFit >= 0.55 &&
@@ -4452,12 +4461,11 @@ export function attachAnswerSheetReviewBubbleOverlay(
       bubbles.push(rowBubbles);
       continue;
     }
-    const pickCol = meta.picks[r] ?? null;
     for (let c = 0; c < cols; c++) {
       const cell = rowCells[c];
       if (!cell) continue;
-      const preferInk = pickCol !== null && c === pickCol;
-      const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk });
+      // Anclar a anillos impresos (nunca preferInk en review).
+      const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
       const rPx = Math.max(3, Math.min(cellW, cellH) * 0.34);
@@ -8113,24 +8121,16 @@ function pickAnswerSheetRowAbsolute(params: {
     };
   }
 
-  if (!inkOk && !scoreOk) {
-    return { pick: null, ambiguous: false, confidence: 0 };
+  // Exigir tinta + score: un solo canal (p. ej. score por moiré/contorno) no basta.
+  if (!inkOk || !scoreOk || inkBest !== scoreBest) {
+    const ambiguous =
+      maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
+      inkOk !== scoreOk &&
+      inkBest !== scoreBest;
+    return { pick: null, ambiguous, confidence: 0 };
   }
 
-  const ambiguous =
-    maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
-    (inkOk || scoreOk) &&
-    inkBest !== scoreBest;
-  if (ambiguous) {
-    return { pick: null, ambiguous: true, confidence: 0 };
-  }
-
-  const pick = scoreOk ? scoreBest : inkOk ? inkBest : null;
-  return {
-    pick: pick === null ? null : rejectQuestionNumberFalsePositive(pick, inkFracs, fills, cols),
-    ambiguous: !scoreOk || !inkOk || inkBest !== scoreBest,
-    confidence: scoreOk ? scoreVal + scoreGap : inkVal + inkGap,
-  };
+  return { pick: null, ambiguous: false, confidence: 0 };
 }
 
 /**
@@ -8335,7 +8335,18 @@ export function isAnswerSheetOmrMostlyBlank(
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
   if (rows <= 0) return true;
   const marked = countAnswerSheetMarkedRows(meta, rows);
-  return marked < Math.max(1, Math.ceil(rows * 0.05));
+  const markedCap = Math.max(1, Math.ceil(rows * 0.15));
+  if (marked > markedCap) return false;
+
+  // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.
+  const inks: number[] = [];
+  for (let i = 0; i < rows; i++) {
+    const row = meta.rows[i];
+    inks.push(row ? rowMaxInkFraction(row) : 0);
+  }
+  inks.sort((a, b) => a - b);
+  const mid = inks[Math.floor(inks.length / 2)] ?? 0;
+  return mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.1;
 }
 
 /** Anula lecturas falsas en hojas en blanco o con pocas marcas reales. */

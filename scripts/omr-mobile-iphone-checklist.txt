@@ -1,13 +1,10 @@
 /**
- * Checklist manual iPhone — Calificar móvil instantáneo
- * ----------------------------------------------------
- * 1. Abrir Calificar → Permitir cámara.
- * 2. Encuadrar hoja: 4 esquinas negras + franjas laterales.
- * 3. Debe auto-disparar en ~1 s con status «Listo — capturando…».
- * 4. En < ~3 s: popup con % y bolitas naranja/verde/rojo.
- * 5. Botones: «Calificar de nuevo» (reabre cámara) y «Calificar otro examen» (home).
- * 6. No debe pedir ajuste manual de esquinas en happy path.
- * 7. Rechazo solo si hoja ilegible (oscuridad/blur extremo).
+ * Checklist iPhone — OMR rápido y preciso
+ * ---------------------------------------
+ * 1. Hoja papel EN BLANCO → popup 0/N (no 2/10 por ruido).
+ * 2. Hoja con marcas reales → overlay sobre burbujas impresas.
+ * 3. Post-foto < ~2 s (sin 2ª pasada en hojas vacías).
+ * 4. CTAs: Calificar de nuevo / Calificar otro examen.
  *
  * Automatizado: npm run test:omr-mobile
  */
