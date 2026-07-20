@@ -19,6 +19,8 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
+const RADIUS_SCALE = 0.38;
+
 function bubbleSampleToCircle(
   bubble: { cx: number; cy: number; r: number },
   imageW: number,
@@ -28,7 +30,7 @@ function bubbleSampleToCircle(
   return {
     cx: bubble.cx * imageW,
     cy: bubble.cy * imageH,
-    r: Math.max(4, bubble.r * minDim),
+    r: Math.max(5, bubble.r * minDim),
   };
 }
 
@@ -36,25 +38,25 @@ function cellToBubbleCircle(
   cell: { x: number; y: number; w: number; h: number },
   imageW: number,
   imageH: number,
-  radiusScale = 0.36
+  radiusScale = RADIUS_SCALE
 ): BubbleCircle {
   const pxW = cell.w * imageW;
   const pxH = cell.h * imageH;
   return {
     cx: (cell.x + cell.w * 0.5) * imageW,
     cy: (cell.y + cell.h * 0.5) * imageH,
-    r: Math.max(4, Math.min(pxW, pxH) * radiusScale),
+    r: Math.max(5, Math.min(pxW, pxH) * radiusScale),
   };
 }
 
 /**
- * Superpone círculos de burbuja: naranja = clave esperada (30 por hoja), verde/rojo = lectura.
+ * Superpone bolitas sólidas: naranja = clave, verde = acierto, rojo = error.
  */
 export function CalifacilOmrReviewOverlay({
   geometry,
   picks,
   expectedPicks,
-  expectedOpacity = 0.55,
+  expectedOpacity = 0.92,
   rowCount,
   clipRect = null,
 }: Props) {
@@ -72,7 +74,8 @@ export function CalifacilOmrReviewOverlay({
       }
     : null;
 
-  const strokeBase = Math.max(1.5, W * 0.004);
+  const strokeBase = Math.max(1.8, W * 0.0045);
+  const whiteStroke = Math.max(1.6, strokeBase * 0.9);
 
   return (
     <svg
@@ -113,15 +116,12 @@ export function CalifacilOmrReviewOverlay({
             pick !== null && pick >= 0 && pick < rowCells.length ? rowCells[pick] : null;
           const pickBubble =
             pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
-          const showPickSeparately =
-            (pickCell !== null || pickBubble) && (!hasExpected || pick !== expectedPick);
-          const pickCircle = showPickSeparately
-            ? pickBubble
+          const pickCircle =
+            pickBubble
               ? bubbleSampleToCircle(pickBubble, W, H)
               : !useFrozenBubbles && pickCell
                 ? cellToBubbleCircle(pickCell, W, H)
-                : null
-            : null;
+                : null;
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
           const isWrong = hasExpected && pick !== null && pick !== expectedPick;
@@ -129,50 +129,51 @@ export function CalifacilOmrReviewOverlay({
 
           return (
             <g key={row}>
-              {geometry.bubbles?.[row]?.map((bubble, col) =>
-                bubble.r > 0 ? (
-                  <circle
-                    key={`det-${row}-${col}`}
-                    cx={bubble.cx * W}
-                    cy={bubble.cy * H}
-                    r={Math.max(3, bubble.r * Math.min(W, H))}
-                    fill="none"
-                    stroke="rgba(100,116,139,0.35)"
-                    strokeWidth={Math.max(1, strokeBase * 0.7)}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                ) : null
-              )}
-              {expectedCircle ? (
+              {/* Clave: naranja; si acertó, verde sólido en su lugar. */}
+              {expectedCircle && !isCorrect ? (
                 <circle
                   cx={expectedCircle.cx}
                   cy={expectedCircle.cy}
                   r={expectedCircle.r}
                   fill={`rgba(234,88,12,${Math.max(0, Math.min(1, expectedOpacity))})`}
-                  stroke={
-                    isCorrect
-                      ? 'rgba(22,163,74,0.95)'
-                      : isUnread
-                        ? 'rgba(220,38,38,0.85)'
-                        : 'rgba(234,88,12,0.9)'
-                  }
-                  strokeWidth={
-                    isCorrect || isUnread
-                      ? Math.max(2.5, strokeBase * 1.4)
-                      : Math.max(1.5, strokeBase)
-                  }
-                  strokeDasharray={isUnread ? '6 4' : undefined}
+                  stroke="rgba(255,255,255,0.95)"
+                  strokeWidth={whiteStroke}
+                  strokeDasharray={isUnread ? `${strokeBase * 2.5} ${strokeBase * 1.6}` : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {pickCircle ? (
+              {expectedCircle && isCorrect && pickCircle ? (
                 <circle
                   cx={pickCircle.cx}
                   cy={pickCircle.cy}
                   r={pickCircle.r}
-                  fill="none"
-                  stroke={hasExpected && isWrong ? 'rgba(220,38,38,0.95)' : 'rgba(22,163,74,0.95)'}
-                  strokeWidth={Math.max(2.5, strokeBase * 1.5)}
+                  fill="rgba(22,163,74,0.95)"
+                  stroke="rgba(255,255,255,0.95)"
+                  strokeWidth={whiteStroke}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null}
+              {/* Error: rojo sólido en la columna leída (clave naranja ya dibujada). */}
+              {isWrong && pickCircle ? (
+                <circle
+                  cx={pickCircle.cx}
+                  cy={pickCircle.cy}
+                  r={pickCircle.r}
+                  fill="rgba(220,38,38,0.95)"
+                  stroke="rgba(255,255,255,0.95)"
+                  strokeWidth={whiteStroke}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null}
+              {/* Sin clave esperada: mostrar lectura verde si hay pick. */}
+              {!hasExpected && pickCircle ? (
+                <circle
+                  cx={pickCircle.cx}
+                  cy={pickCircle.cy}
+                  r={pickCircle.r}
+                  fill="rgba(22,163,74,0.9)"
+                  stroke="rgba(255,255,255,0.95)"
+                  strokeWidth={whiteStroke}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}

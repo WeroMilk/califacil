@@ -4408,27 +4408,6 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.width,
     canvas.height
   );
-  const bubbleFit = geom.quality?.bubbleFit ?? 1;
-  // Geometría frozen con burbujas OK: no regenerar (evita desfase overlay).
-  if (
-    geom.frozen === true &&
-    geom.bubbles?.length &&
-    geom.bubbles.length >= rows &&
-    bubbleFit >= 0.45
-  ) {
-    return { ...meta, geometry: geom };
-  }
-  if (
-    geom.frozen === true &&
-    bubbleFit >= 0.55 &&
-    geom.bubbles?.length &&
-    omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns)
-  ) {
-    return { ...meta, geometry: geom };
-  }
-  if (omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns) && bubbleFit >= 0.55) {
-    return { ...meta, geometry: geom };
-  }
 
   const data = getOmrCanvasImageData(canvas);
   if (!data) return { ...meta, geometry: geom };
@@ -4436,6 +4415,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
   const W = canvas.width;
   const H = canvas.height;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  // Solo regeneramos centros visuales (bubbles). Picks/cells se conservan.
   const picksAligned = omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns);
   let bubbleBase = geom;
   if (
@@ -4468,7 +4448,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
       const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
-      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.34);
+      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
       rowBubbles.push({
         cx: center.x / W,
         cy: center.y / H,

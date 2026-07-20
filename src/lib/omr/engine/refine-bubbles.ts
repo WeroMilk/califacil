@@ -4,6 +4,7 @@ import {
   geometryCellsForBubbleSamplingForEngine,
   sampleBubbleMarkAtCellForEngine,
   refineAnswerSheetGeometryToBubblePeaks,
+  refineBubbleCenterInCellForEngine,
   UNIFIED_FRAME_SCAN_THRESHOLDS,
 } from '@/lib/omr/engine/omr-bridge';
 import { buildCellsFromNormLines } from '@/lib/omr/engine/geometry-lines';
@@ -79,7 +80,9 @@ export function refineAllBubbles(input: RefineBubblesInput): BubbleSample[][] {
 
   let geometry = input.geometry;
   if (mode === 'align') {
-    geometry = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, data);
+    geometry = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, data, {
+      preferInk: false,
+    });
   }
 
   const cells =
@@ -139,10 +142,15 @@ export function refineAllBubbles(input: RefineBubblesInput): BubbleSample[][] {
         otsuT,
         UNIFIED_FRAME_SCAN_THRESHOLDS
       );
-      const cx = (cell.x + cell.w * 0.5);
-      const cy = (cell.y + cell.h * 0.5);
+      // Centros de overlay: anillo impreso (no centro crudo de celda expandida).
+      const ringCenter =
+        mode === 'align'
+          ? refineBubbleCenterInCellForEngine(data, W, H, cell, { preferInk: false })
+          : null;
+      const cx = ringCenter ? ringCenter.x / W : cell.x + cell.w * 0.5;
+      const cy = ringCenter ? ringCenter.y / H : cell.y + cell.h * 0.5;
       const minDim = Math.min(cell.w * W, cell.h * H);
-      const radiusNorm = Math.max(0.002, (minDim * 0.34) / Math.min(W, H));
+      const radiusNorm = Math.max(0.002, (minDim * 0.38) / Math.min(W, H));
       const contrast = sample.fillDark - sample.ringDark;
       rowBubbles.push({
         cx,

@@ -130,8 +130,9 @@ export function MobileZipGradeScanCompleteModal({
           {showOverlayPreview && sheet ? (
             <div className="mt-4 overflow-hidden rounded-lg border border-orange-100 bg-orange-50/40 p-1">
               <div
-                className="relative mx-auto w-full overflow-hidden rounded-md bg-white"
+                className="relative mx-auto overflow-hidden rounded-md bg-white"
                 style={{
+                  width: `min(100%, calc(14rem * ${overlayW} / ${overlayH}))`,
                   aspectRatio: `${overlayW} / ${overlayH}`,
                   maxHeight: 'min(38vh, 14rem)',
                 }}
@@ -332,8 +333,9 @@ export function MobileZipGradeReviewScreen({
           <div className="flex justify-center p-3">
             <div className="flex w-full max-w-lg justify-center overflow-hidden rounded-lg border bg-white p-1 shadow-sm">
               <div
-                className="relative w-full overflow-hidden bg-white"
+                className="relative overflow-hidden bg-white"
                 style={{
+                  width: `min(100%, calc(28rem * ${W} / ${H}))`,
                   aspectRatio: `${W} / ${H}`,
                   maxHeight: 'min(70vh, 28rem)',
                 }}
