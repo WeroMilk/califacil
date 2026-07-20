@@ -72,15 +72,15 @@ export default function DashboardPage() {
   const recentExams = [...exams].slice(0, RECENTS_MAX);
 
   return (
-    <div className="flex min-h-full flex-1 flex-col gap-3 pb-1 sm:gap-4">
-      <div className="shrink-0">
+    <div className="flex flex-col gap-3 pb-2 sm:min-h-full sm:flex-1 sm:gap-4 sm:pb-1">
+      <div className="shrink-0 pt-0.5">
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Dashboard</h1>
         <p className="mt-1 text-sm text-gray-600 sm:text-base">
           Bienvenido de vuelta, {user?.email?.split('@')[0]}
         </p>
       </div>
 
-      <div className="grid shrink-0 grid-cols-2 gap-1.5 sm:gap-2 lg:grid-cols-4 lg:gap-3">
+      <div className="grid shrink-0 grid-cols-2 gap-2 sm:gap-2 lg:grid-cols-4 lg:gap-3">
         <Link href="/exams?status=all" className="block">
         <Card className="shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
@@ -191,7 +191,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="hidden min-h-0 flex-1 flex-col overflow-hidden sm:flex">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="mb-2 flex shrink-0 items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-900 sm:text-base">Recientes</h2>
           <Link href="/exams">

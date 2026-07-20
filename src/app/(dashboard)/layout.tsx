@@ -158,8 +158,8 @@ export default function DashboardLayout({
           className="z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden"
         >
           <div
-            className="flex items-center justify-between gap-2 px-3 py-2"
-            style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+            className="flex items-center justify-between gap-2 px-3 pb-2"
+            style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)' }}
           >
             <span className="inline-flex min-w-0 max-w-[min(100%,18rem)] items-center sm:max-w-[20rem]">
               <button
@@ -202,7 +202,9 @@ export default function DashboardLayout({
             isCalificarRoute
               ? 'px-0 pt-0 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:px-6 lg:pt-4 lg:pb-4'
               : 'px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3',
-            dashboardHome ? 'flex flex-col overflow-hidden' : 'app-scroll overflow-y-auto'
+            dashboardHome
+              ? 'flex flex-col max-sm:overflow-y-auto max-sm:app-scroll sm:overflow-hidden'
+              : 'app-scroll overflow-y-auto'
           )}
         >
           {children}

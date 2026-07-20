@@ -7,7 +7,10 @@ export default function LandingPage() {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-x-hidden bg-transparent sm:overflow-y-auto app-scroll">
       <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-1.5 px-2 py-1 max-sm:min-h-[3.35rem] sm:min-h-[4rem] sm:gap-3 sm:px-6 sm:py-2 lg:min-h-[5rem] lg:px-10">
+        <div
+          className="mx-auto flex max-w-7xl items-center justify-between gap-1.5 px-2 pb-1.5 max-sm:min-h-[3.35rem] sm:min-h-[4rem] sm:gap-3 sm:px-6 sm:pb-2 sm:pt-2 lg:min-h-[5rem] lg:px-10"
+          style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+        >
           <BrandWordmark
             priority
             className="min-w-0 shrink lg:origin-left lg:scale-[1.12]"
@@ -34,7 +37,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden max-sm:overflow-y-auto">
-        <section className="mx-auto flex min-h-full w-full max-w-7xl flex-1 flex-col justify-evenly gap-5 px-3 py-5 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] sm:gap-7 sm:px-6 sm:py-7 md:gap-8 md:py-8 lg:justify-between lg:px-10 lg:py-10">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-between gap-4 px-3 py-4 sm:min-h-full sm:gap-7 sm:px-6 sm:py-7 md:gap-8 md:py-8 lg:px-10 lg:py-10">
           <div className="flex flex-col gap-4 sm:gap-6 md:gap-7 lg:gap-8">
             {/* 1–3: hero de texto */}
             <div className="mx-auto w-full max-w-[min(100%,35rem)] shrink-0 text-center sm:max-w-3xl lg:max-w-4xl">
@@ -115,7 +118,7 @@ export default function LandingPage() {
         </section>
       </main>
 
-      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-2 pt-1 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-3 sm:pt-2.5 sm:pb-8 lg:px-10">
+      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-2 pt-1.5 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-3 sm:pt-2.5 sm:pb-8 lg:px-10">
         <div className="flex justify-center">
           <BrandWordmark
             href={false}
