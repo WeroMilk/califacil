@@ -9329,7 +9329,7 @@ export const CALIFACIL_DESKTOP_GRADE_SCAN_OPTS = {
   answerSheetTemplateOnly: false,
 };
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1100;
+const OMR_GRADE_SCAN_MAX_SIDE = 960;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 async function yieldOmrScanThread(): Promise<void> {

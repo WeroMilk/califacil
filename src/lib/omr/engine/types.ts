@@ -51,6 +51,8 @@ export type UnifiedPipelineOptions = {
   /** Fewer iterations for live camera (same architecture). */
   fastMode?: boolean;
   maxOptimizeIterations?: number;
+  /** Early stop when score stagnates (mobile ultrágil). */
+  stagnantLimit?: number;
   /** When true, never skip optimizeGeometry (document / reference-grade scans). */
   requireFullOptimize?: boolean;
 };

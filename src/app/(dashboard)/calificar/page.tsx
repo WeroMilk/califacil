@@ -268,7 +268,7 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 1100;
+const MOBILE_CAPTURE_MAX_SIDE = 960;
 /** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
@@ -901,6 +901,7 @@ export default function CalificarPage() {
       const docCanvas = prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
         preWarped: true,
         warpAlignment,
+        skipReferenceAlign: true,
       });
       const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =

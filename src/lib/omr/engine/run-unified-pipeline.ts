@@ -273,6 +273,7 @@ export function runUnifiedOmrPipeline(
   const optimized = optimizeGeometry(canvas, initial, rows, cols, {
     fastMode,
     maxIterations: opts?.maxOptimizeIterations ?? (fastMode ? 80 : 320),
+    stagnantLimit: opts?.stagnantLimit ?? (fastMode ? 10 : 24),
     lockGridLines:
       preferDesktopTierRecovery(rows, cols) &&
       canvasNearReferenceGrade(canvas.width, canvas.height) &&

@@ -370,11 +370,16 @@ export function prepareCalifacilGradeScanCanvas(
   opts?: {
     preWarped?: boolean;
     warpAlignment?: WarpAlignmentReport | null;
+    /** Móvil ultrágil: no warp a 1230×1600 (se descarta al bajar maxSide). */
+    skipReferenceAlign?: boolean;
   }
 ): HTMLCanvasElement {
   let out = canvas;
   if (opts?.preWarped) {
     out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
+  }
+  if (opts?.skipReferenceAlign) {
+    return out;
   }
   return prepareReferenceGradeCanvas(out, columns, rowCount);
 }

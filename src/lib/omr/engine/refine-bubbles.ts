@@ -150,7 +150,7 @@ export function refineAllBubbles(input: RefineBubblesInput): BubbleSample[][] {
       const cx = ringCenter ? ringCenter.x / W : cell.x + cell.w * 0.5;
       const cy = ringCenter ? ringCenter.y / H : cell.y + cell.h * 0.5;
       const minDim = Math.min(cell.w * W, cell.h * H);
-      const radiusNorm = Math.max(0.002, (minDim * 0.38) / Math.min(W, H));
+      const radiusNorm = Math.max(0.002, (minDim * 0.42) / Math.min(W, H));
       const contrast = sample.fillDark - sample.ringDark;
       rowBubbles.push({
         cx,

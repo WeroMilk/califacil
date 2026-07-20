@@ -17,7 +17,7 @@ import {
   unifiedResultToMeta,
 } from '@/lib/omr/engine';
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1100;
+const OMR_GRADE_SCAN_MAX_SIDE = 960;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -125,11 +125,11 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 40;
+const MOBILE_FAST_OPTIMIZE_ITERS = 20;
 
 /**
- * Perfil móvil ultrarrápido: una sola pasada fastMode (40 iters). Nunca escalate —
- * los gates de hoja en blanco / umbrales endurecidos cubren falsos positivos.
+ * Perfil móvil ultrágil: una sola pasada fastMode (20 iters). Nunca escalate.
+ * Sin warp de referencia (skip en prepare); skipBubbleReattach conserva centros del engine.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
@@ -144,6 +144,7 @@ export async function scanWarpedGradeMobileAsync(
   const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+    stagnantLimit: 10,
   });
   let meta = finalizeUnifiedDisplayMeta(
     displayCanvas,

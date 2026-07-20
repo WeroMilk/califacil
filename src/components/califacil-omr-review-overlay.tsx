@@ -19,7 +19,7 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
-const RADIUS_SCALE = 0.4;
+const RADIUS_SCALE = 0.42;
 
 function bubbleSampleToCircle(
   bubble: { cx: number; cy: number; r: number },
@@ -85,8 +85,8 @@ export function CalifacilOmrReviewOverlay({
       }
     : null;
 
-  const strokeBase = Math.max(1.8, W * 0.0045);
-  const whiteStroke = Math.max(1.8, strokeBase);
+  const strokeBase = Math.max(2, W * 0.005);
+  const whiteStroke = Math.max(2.2, strokeBase * 1.1);
 
   return (
     <svg
