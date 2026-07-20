@@ -3468,8 +3468,23 @@ export default function CalificarPage() {
         setFlashOn(false);
       }
 
-      setLiveStatus('Calificando…');
-      if (video) pauseLiveVideoForScan(video);
+      // Actualizar freeze al documento enderezado (sigue visible; no pantalla negra).
+      const warpedPreview = canvasPreviewDataUrl(warped, 900, 0.62);
+      flushSync(() => {
+        if (warpedPreview) setMobileScanPreviewUrl(warpedPreview);
+        setLiveStatus('Calificando…');
+      });
+      await yieldForSpinnerPaint();
+
+      // Pausar video solo después de tener freeze en pantalla (tracks pueden seguir;
+      // el layer de preview tapa la cámara).
+      if (video) {
+        try {
+          video.pause();
+        } catch {
+          /* ignore */
+        }
+      }
 
       let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
       let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
@@ -3596,7 +3611,6 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      setLiveStatus('Calificando…');
       playAutoCaptureClickSound();
       // Frame actual directo: sin grabVideoFrame (ahorra CPU/GPU en iPhone).
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
@@ -3606,6 +3620,17 @@ export default function CalificarPage() {
         setLiveStatus('Error de escaneo. Pulsa Capturar de nuevo.');
         return;
       }
+
+      // Freeze inmediato: evita pantalla negra mientras califica.
+      const freezeUrl = canvasPreviewDataUrl(fullCanvas, 900, 0.62);
+      flushSync(() => {
+        if (freezeUrl) setMobileScanPreviewUrl(freezeUrl);
+        setMobileScanPreviewGeometry(null);
+        setMobileScanPreviewPicks([]);
+        setMobileScanPreviewOrangeFrame(null);
+        setLiveStatus('Calificando…');
+      });
+      await yieldForSpinnerPaint();
 
       // Un solo frame: detectar quad sobre el canvas capturado (nunca smoothed del live).
       const frameQuad =
@@ -3827,7 +3852,6 @@ export default function CalificarPage() {
       mobileCaptureBusyRef.current = true;
       flushSync(() => {
         setScanBusy(true);
-        setMobileScanPreviewUrl(null);
         setLiveStatus('Calificando…');
       });
       setLiveFilterMenuOpen(false);
@@ -3845,7 +3869,7 @@ export default function CalificarPage() {
         }
       })();
     },
-    [processMobileSheetCapture]
+    [processMobileSheetCapture, mobileScanPreviewSetters]
   );
 
   triggerMobileSheetCaptureRef.current = triggerMobileSheetCapture;

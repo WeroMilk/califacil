@@ -262,15 +262,15 @@ export function ExamScannerScreen({
 
           {scanBusy && !showingScan ? (
             <div
-              className="pointer-events-none fixed inset-0 z-[100005] flex items-center justify-center bg-black/40"
+              className="pointer-events-none fixed inset-0 z-[100005] flex items-center justify-center bg-orange-50/90"
               aria-live="polite"
             >
-              <div className="rounded-2xl bg-black/60 px-5 py-4 text-center shadow-xl backdrop-blur-sm">
+              <div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl">
                 <Loader2
-                  className="mx-auto h-9 w-9 animate-spin text-orange-300 motion-reduce:animate-none [animation-duration:650ms]"
+                  className="mx-auto h-9 w-9 animate-spin text-orange-600 motion-reduce:animate-none [animation-duration:650ms]"
                   aria-hidden
                 />
-                <p className="mt-2 text-sm font-medium text-white/90">Escaneando documento…</p>
+                <p className="mt-2 text-sm font-semibold text-gray-900">{scanStatusLabel}</p>
               </div>
             </div>
           ) : null}
