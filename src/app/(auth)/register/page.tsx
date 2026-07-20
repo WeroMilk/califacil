@@ -126,18 +126,19 @@ export default function RegisterPage() {
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
       <div
         className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pb-0 sm:px-6 lg:px-10"
-        style={{ paddingTop: 'max(0.35rem, env(safe-area-inset-top, 0px))' }}
+        style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
       >
-        <div className="mx-auto flex w-full max-w-md shrink-0 justify-center sm:max-w-lg md:max-w-xl">
+        <div className="mx-auto flex w-full max-w-md shrink-0 justify-center pt-1 sm:max-w-lg sm:pt-2 md:max-w-xl">
           <BrandWordmark
             priority
             className="translate-x-1.5 justify-center sm:translate-x-2 md:translate-x-2.5"
-            imgClassName="h-[4.25rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
+            imgClassName="h-[4.5rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
           />
         </div>
 
-        <Card className="mt-1 flex min-h-0 w-full max-w-md flex-1 flex-col overflow-hidden rounded-b-none rounded-t-2xl border-0 shadow-xl sm:mx-auto sm:mt-3 sm:max-w-lg md:max-w-xl lg:max-w-2xl">
-            <CardHeader className="shrink-0 space-y-0.5 px-4 pb-2 pt-4 sm:px-6 sm:pb-3 sm:pt-5">
+        <div className="mt-auto flex min-h-0 w-full flex-1 flex-col justify-end sm:mt-3 sm:flex-none sm:justify-start">
+          <Card className="flex max-h-full w-full max-w-md flex-col overflow-hidden rounded-b-none rounded-t-2xl border-0 shadow-xl sm:mx-auto sm:max-h-none sm:max-w-lg sm:flex-1 md:max-w-xl lg:max-w-2xl">
+            <CardHeader className="shrink-0 space-y-0.5 px-4 pb-2 pt-5 sm:px-6 sm:pb-3 sm:pt-5">
               <CardTitle className="text-center text-lg font-bold sm:text-2xl">
                 {pendingVerification ? 'Verificar correo' : 'Crear Cuenta'}
               </CardTitle>
@@ -147,7 +148,10 @@ export default function RegisterPage() {
                   : 'Regístrate como maestro para comenzar'}
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-4 pb-2 pt-0 sm:justify-start sm:px-6 sm:pb-4">
+            <CardContent
+              className="flex min-h-0 flex-col overflow-y-auto px-4 pt-0 sm:flex-1 sm:px-6"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
+            >
               {pendingVerification ? (
                 <form onSubmit={handleVerifyCode} className="flex flex-col gap-3 sm:gap-3.5">
                   <div className="space-y-1">
@@ -299,18 +303,15 @@ export default function RegisterPage() {
                   </Button>
                 </form>
               )}
-              <p className="mt-4 text-center text-xs text-gray-600 sm:mt-5 sm:text-sm">
+              <p className="mt-4 pb-1 text-center text-xs text-gray-600 sm:mt-5 sm:text-sm">
                 ¿Ya tienes cuenta?{' '}
                 <Link href="/login" className="font-medium text-orange-600 hover:underline">
                   Inicia sesión aquí
                 </Link>
               </p>
             </CardContent>
-            <div
-              className="shrink-0"
-              style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
-            />
-        </Card>
+          </Card>
+        </div>
       </div>
     </div>
   );
