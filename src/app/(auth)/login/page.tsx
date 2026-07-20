@@ -77,32 +77,32 @@ export default function LoginPage() {
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
       <div
-        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pb-0 sm:px-6 lg:px-10"
-        style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 sm:px-6 lg:px-10"
+        style={{
+          paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
+          paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+        }}
       >
-        <div className="mx-auto flex w-full max-w-md shrink-0 justify-center pt-1 sm:max-w-lg sm:pt-2 md:max-w-xl">
-          <BrandWordmark
-            priority
-            className="translate-x-1.5 justify-center sm:translate-x-2 md:translate-x-2.5"
-            imgClassName="h-[4.5rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
-          />
-        </div>
+        {/* Bloque logo + tarjeta: compacto y centrado en móvil (sin huecos enormes). */}
+        <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center sm:max-w-lg md:max-w-xl lg:max-w-2xl">
+          <div className="mx-auto flex w-full shrink-0 justify-center">
+            <BrandWordmark
+              priority
+              className="translate-x-1.5 justify-center sm:translate-x-2 md:translate-x-2.5"
+              imgClassName="h-[4.75rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
+            />
+          </div>
 
-        {/* En móvil la tarjeta no se estira: altura natural pegada abajo (sin hueco blanco). */}
-        <div className="mt-auto flex w-full flex-1 flex-col justify-end sm:mt-3 sm:flex-none sm:justify-start">
-          <Card className="flex w-full max-w-md flex-col overflow-hidden rounded-b-none rounded-t-2xl border-0 shadow-xl sm:mx-auto sm:max-w-lg sm:flex-1 md:max-w-xl lg:max-w-2xl">
-            <CardHeader className="shrink-0 space-y-0.5 px-4 pb-2 pt-5 sm:px-6 sm:pb-3 sm:pt-5">
-              <CardTitle className="text-center text-lg font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
+          <Card className="mt-4 w-full shrink-0 overflow-hidden rounded-2xl border-0 shadow-xl sm:mt-5">
+            <CardHeader className="space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
+              <CardTitle className="text-center text-xl font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
               <CardDescription className="text-center text-xs sm:text-sm">
                 Ingresa tus credenciales para acceder a tu cuenta
               </CardDescription>
             </CardHeader>
-            <CardContent
-              className="flex flex-col px-4 pt-0 sm:min-h-0 sm:flex-1 sm:px-6"
-              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
-            >
-              <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-3.5">
-                <div className="space-y-1">
+            <CardContent className="space-y-4 px-4 pb-5 pt-0 sm:space-y-4 sm:px-6 sm:pb-6">
+              <form onSubmit={handleSubmit} className="space-y-3.5 sm:space-y-4">
+                <div className="space-y-1.5">
                   <Label htmlFor="email" className="text-xs sm:text-sm">
                     Correo electrónico
                   </Label>
@@ -114,12 +114,12 @@ export default function LoginPage() {
                       placeholder="maestro@escuela.edu"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="h-10 pl-9 text-sm sm:h-10"
+                      className="h-11 pl-9 text-sm sm:h-10"
                       required
                     />
                   </div>
                 </div>
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <Label htmlFor="password" className="text-xs sm:text-sm">
                     Contraseña
                   </Label>
@@ -131,7 +131,7 @@ export default function LoginPage() {
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="h-10 pl-9 pr-10 text-sm sm:h-10"
+                      className="h-11 pl-9 pr-10 text-sm sm:h-10"
                       required
                     />
                     <button
@@ -150,7 +150,7 @@ export default function LoginPage() {
                 </div>
                 <Button
                   type="submit"
-                  className="h-10 w-full bg-orange-600 text-sm hover:bg-orange-700 sm:h-10"
+                  className="h-11 w-full bg-orange-600 text-sm font-semibold hover:bg-orange-700 sm:h-10"
                   disabled={loading}
                 >
                   {loading ? (
@@ -163,7 +163,7 @@ export default function LoginPage() {
                   )}
                 </Button>
               </form>
-              <p className="mt-4 pb-1 text-center text-xs text-gray-600 sm:mt-5 sm:text-sm">
+              <p className="text-center text-xs text-gray-600 sm:text-sm">
                 ¿No tienes cuenta?{' '}
                 <Link href="/register" className="font-medium text-orange-600 hover:underline">
                   Regístrate aquí
