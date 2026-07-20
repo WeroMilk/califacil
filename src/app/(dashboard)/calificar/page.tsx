@@ -90,7 +90,6 @@ import {
   isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
-  isMobileWarpedAnswerSheetAcceptable,
   syncCalifacilOmrGeometryImageSize,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
@@ -269,7 +268,7 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 1920;
+const MOBILE_CAPTURE_MAX_SIDE = 1280;
 /** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
@@ -469,22 +468,6 @@ function clearMobileScanPreview(
   setters.setPreviewPicks([]);
   setters.setPreviewOrangeFrame(null);
   if (video) resumeLiveVideoAfterScan(video);
-}
-
-/** Un fotograma de video (escaneo instantáneo, sin espera larga). */
-async function grabVideoFrame(video: HTMLVideoElement): Promise<void> {
-  const rvfc = (
-    video as HTMLVideoElement & {
-      requestVideoFrameCallback?: (cb: (now: number, meta: unknown) => void) => number;
-    }
-  ).requestVideoFrameCallback;
-  if (typeof rvfc === 'function') {
-    await new Promise<void>((resolve) => {
-      rvfc.call(video, () => resolve());
-    });
-    return;
-  }
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function CalifacilReviewImageStack({
@@ -919,7 +902,6 @@ export default function CalificarPage() {
         preWarped: true,
         warpAlignment,
       });
-      await yieldForSpinnerPaint();
       const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =
         (meta.geometry
@@ -945,48 +927,6 @@ export default function CalificarPage() {
       clearMobileScanPreview(video, mobileScanPreviewSetters);
     },
     [mobileScanPreviewSetters]
-  );
-
-  const showMobileScanPreviewState = useCallback(
-    (
-      previewDataUrl: string,
-      docCanvas: HTMLCanvasElement,
-      meta: Pick<OmrScanMetaResult, 'geometry' | 'picks'>,
-      orangeFrameNorm: OmrNormRect | null,
-      rowCount: number
-    ) => {
-      let geometry: CalifacilOmrScanGeometry | null = null;
-      if (meta.geometry) {
-        const synced = syncCalifacilOmrGeometryImageSize(
-          meta.geometry,
-          docCanvas.width,
-          docCanvas.height
-        );
-        try {
-          geometry = structuredClone(synced);
-        } catch {
-          geometry = JSON.parse(JSON.stringify(synced)) as CalifacilOmrScanGeometry;
-        }
-      }
-      const orangeFrame =
-        geometry != null
-          ? califacilOmrOrangeFrameRect(geometry, rowCount)
-          : orangeFrameNorm != null
-            ? {
-                x: orangeFrameNorm.x,
-                y: orangeFrameNorm.y,
-                w: orangeFrameNorm.w,
-                h: orangeFrameNorm.h,
-              }
-            : null;
-      flushSync(() => {
-        setMobileScanPreviewUrl(previewDataUrl);
-        setMobileScanPreviewGeometry(geometry);
-        setMobileScanPreviewPicks(meta.picks.slice(0, rowCount));
-        setMobileScanPreviewOrangeFrame(orangeFrame);
-      });
-    },
-    []
   );
 
   useEffect(() => {
@@ -1618,10 +1558,10 @@ export default function CalificarPage() {
         let nameCropUrl: string | null = null;
         const geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement && geom) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 1200, 0.72);
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         } else if (reviewCanvas instanceof HTMLCanvasElement) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY);
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 1200, 0.72);
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         }
         if (geom) {
@@ -2579,35 +2519,36 @@ export default function CalificarPage() {
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
-            if (cornerStableTicksRef.current < MOBILE_CAPTURE_STABLE_TICKS_REQUIRED) {
-              setLiveStatus(
-                autoShutterEnabledRef.current
-                  ? 'Listo — capturando…'
-                  : 'Examen detectado — mantén quieto…'
-              );
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
 
-            if (
+            // Contrato: 4 esquinas + franjas → foto en el mismo tick.
+            const idealLock = stripAligned && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
+            const readyToSnap =
+              idealLock ||
               shouldTriggerAutoCapture({
                 autoShutterEnabled: autoShutterEnabledRef.current,
                 captureBusy: mobileCaptureBusyRef.current,
                 stableTicks: cornerStableTicksRef.current,
                 requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
-              })
+              });
+
+            if (
+              readyToSnap &&
+              autoShutterEnabledRef.current &&
+              !mobileCaptureBusyRef.current
             ) {
-              setLiveStatus('Listo — capturando…');
+              setLiveStatus('Capturando…');
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
               const captureRoi = lastRoiCaptureMetaRef.current;
               cornerStableTicksRef.current = 0;
               setMobileStableTicks(0);
               setShutterFlash(true);
-              window.setTimeout(() => setShutterFlash(false), 220);
+              window.setTimeout(() => setShutterFlash(false), 160);
               triggerMobileSheetCaptureRef.current(video, {
                 roiQuad: captureQuad,
                 roiCapture: captureRoi,
               });
+            } else if (!autoShutterEnabledRef.current) {
+              setLiveStatus('Examen detectado — mantén quieto…');
             }
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
@@ -3466,14 +3407,14 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        // Happy path: warp rápido con el mismo frameQuad; full solo si falla.
+        // Happy path: solo warp fast. Full únicamente si fast no produce canvas.
         const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad,
           maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
         });
         warped = fastWarp.warped;
         alignment = fastWarp.alignment;
-        if (!warped || !isMobileWarpedAnswerSheetAcceptable(warped)) {
+        if (!warped) {
           const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
             frameQuad,
             maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
@@ -3527,7 +3468,7 @@ export default function CalificarPage() {
         setFlashOn(false);
       }
 
-      setLiveStatus('Leyendo respuestas…');
+      setLiveStatus('Calificando…');
       if (video) pauseLiveVideoForScan(video);
 
       let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
@@ -3569,21 +3510,8 @@ export default function CalificarPage() {
         return;
       }
 
-      // Preview ligero solo si vamos a calificar (no mostrar bolitas y luego abortar).
-      const scanPreview = canvasPreviewDataUrl(docCanvas, 1400, MOBILE_PREVIEW_JPEG_QUALITY);
-      if (scanPreview && califacilFastScan) {
-        showMobileScanPreviewState(
-          scanPreview,
-          docCanvas,
-          califacilFastScan.meta,
-          califacilFastScan.orangeFrameNorm,
-          chunkRows
-        );
-        await yieldForSpinnerPaint();
-      } else if (scanPreview && zipPreviewMeta) {
-        showMobileScanPreviewState(scanPreview, docCanvas, zipPreviewMeta, null, chunkRows);
-        await yieldForSpinnerPaint();
-      }
+      // Sin preview JPEG bloqueante: ir directo a finalize → popup.
+      // El preview del modal se genera ligero dentro de finalizeCapturedSheet.
 
       let readingOverride: CalifacilOmrReadingResult | undefined;
       if (sheetKind === 'zipgrade' && zipPreviewMeta) {
@@ -3660,7 +3588,6 @@ export default function CalificarPage() {
       runFastWarpedScan,
       setTorchEnabled,
       sheets,
-      showMobileScanPreviewState,
     ]
   );
 
@@ -3669,10 +3596,9 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
-      setLiveStatus('Escaneando documento…');
+      setLiveStatus('Calificando…');
       playAutoCaptureClickSound();
-      await grabVideoFrame(video);
-
+      // Frame actual directo: sin grabVideoFrame (ahorra CPU/GPU en iPhone).
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         clearMobileScanPreview(video, mobileScanPreviewSetters);
@@ -3902,7 +3828,7 @@ export default function CalificarPage() {
       flushSync(() => {
         setScanBusy(true);
         setMobileScanPreviewUrl(null);
-        setLiveStatus('Escaneando documento…');
+        setLiveStatus('Calificando…');
       });
       setLiveFilterMenuOpen(false);
       void (async () => {
@@ -4695,13 +4621,7 @@ export default function CalificarPage() {
                   />
                 ) : null
               }
-              scanStatusLabel={
-                mobileScanPreviewUrl
-                  ? mobileScanPreviewGeometry
-                    ? 'Leyendo respuestas (vista de referencia)…'
-                    : 'Leyendo respuestas…'
-                  : 'Escaneando documento…'
-              }
+              scanStatusLabel="Calificando…"
               onRetryCamera={() => {
                 setCameraPermissionPhase('requesting');
                 void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {

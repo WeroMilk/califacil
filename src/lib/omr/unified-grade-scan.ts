@@ -7,7 +7,6 @@ import {
   syncCalifacilOmrGeometryImageSize,
   attachAnswerSheetReviewBubbleOverlay,
   sanitizeAnswerSheetOmrMeta,
-  isAnswerSheetOmrMostlyBlank,
   downscaleCanvasForOmrScan,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
@@ -111,18 +110,11 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 80;
-/** Escalate solo en banda útil: ni casi vacío ni casi perfecto. */
-const MOBILE_ESCALATE_MIN_RATIO = 0.4;
-const MOBILE_ESCALATE_MAX_RATIO = 0.9;
-
-function countResolvedPicks(meta: OmrScanMetaResult): number {
-  return meta.picks.filter((p) => p != null).length;
-}
+const MOBILE_FAST_OPTIMIZE_ITERS = 40;
 
 /**
- * Perfil móvil: una pasada fastMode; escalate solo si hay lecturas parciales útiles.
- * Hojas en blanco / casi vacías no hacen 2ª pasada (más rápido + menos FPs).
+ * Perfil móvil ultrarrápido: una sola pasada fastMode (40 iters). Nunca escalate —
+ * los gates de hoja en blanco / umbrales endurecidos cubren falsos positivos.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
@@ -134,30 +126,12 @@ export async function scanWarpedGradeMobileAsync(
     return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
   }
 
-  let unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+  const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
   });
   let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
   meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-
-  const resolved = countResolvedPicks(meta);
-  const ratio = rows > 0 ? resolved / rows : 0;
-  const mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, rows);
-  const needEscalate =
-    rows > 0 &&
-    !mostlyBlank &&
-    ratio >= MOBILE_ESCALATE_MIN_RATIO &&
-    ratio <= MOBILE_ESCALATE_MAX_RATIO;
-
-  if (needEscalate) {
-    unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: 320,
-    });
-    meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
-    meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-  }
   return meta;
 }
 
