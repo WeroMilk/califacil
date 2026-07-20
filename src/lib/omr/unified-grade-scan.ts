@@ -17,7 +17,7 @@ import {
   unifiedResultToMeta,
 } from '@/lib/omr/engine';
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1280;
+const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -28,7 +28,8 @@ function finalizeUnifiedDisplayMeta(
   displayCanvas: HTMLCanvasElement,
   meta: OmrScanMetaResult,
   rows: number,
-  columns: number
+  columns: number,
+  opts?: { skipBubbleReattach?: boolean }
 ): OmrScanMetaResult {
   const geometry = meta.geometry
     ? syncCalifacilOmrGeometryImageSize(
@@ -37,6 +38,20 @@ function finalizeUnifiedDisplayMeta(
         displayCanvas.height
       )
     : null;
+  const hasEngineBubbles =
+    !!geometry?.bubbles &&
+    geometry.bubbles.length >= rows &&
+    geometry.bubbles.some((row) => row?.some((b) => b.r > 0));
+
+  // Móvil: reutilizar bubbles del engine (misma geometría que la lectura). Evita 2ª pasada cara.
+  if (opts?.skipBubbleReattach && hasEngineBubbles) {
+    return {
+      ...meta,
+      geometry,
+      reviewSourceCanvas: displayCanvas,
+    };
+  }
+
   const withOverlay = attachAnswerSheetReviewBubbleOverlay(
     displayCanvas,
     { ...meta, geometry },
@@ -130,7 +145,13 @@ export async function scanWarpedGradeMobileAsync(
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
   });
-  let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+  let meta = finalizeUnifiedDisplayMeta(
+    displayCanvas,
+    unifiedResultToMeta(unified),
+    rows,
+    columns,
+    { skipBubbleReattach: true }
+  );
   meta = sanitizeAnswerSheetOmrMeta(meta, rows);
   return meta;
 }

@@ -12,10 +12,10 @@ import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
 
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
   blankMaxInk: 0.11,
-  minInkFraction: 0.14,
-  minInkGap: 0.06,
-  minFillDarkness: 0.1,
-  minScoreAbsolute: 0.04,
+  minInkFraction: 0.24,
+  minInkGap: 0.075,
+  minFillDarkness: 0.12,
+  minScoreAbsolute: 0.032,
   minScoreGap: 0.035,
 };
 
@@ -206,20 +206,15 @@ function pickRowFromSamples(
       confidence: inkVal + scoreGap,
     };
   }
-  if (!inkOk && !scoreOk) return { pick: null, ambiguous: false, confidence: 0 };
-
-  const ambiguous =
+  // Misma regla que omrScan: sin inkOk&&scoreOk → null (no pick por un solo criterio).
+  if (
     maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
-    (inkOk || scoreOk) &&
-    inkBest !== scoreBest;
-  if (ambiguous) return { pick: null, ambiguous: true, confidence: 0 };
-
-  const pick = scoreOk ? scoreBest : inkOk ? inkBest : null;
-  return {
-    pick,
-    ambiguous: pick !== null && inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.15,
-    confidence: inkVal + scoreGap,
-  };
+    inkOk !== scoreOk &&
+    inkBest !== scoreBest
+  ) {
+    return { pick: null, ambiguous: true, confidence: 0 };
+  }
+  return { pick: null, ambiguous: false, confidence: 0 };
 }
 
 /**
@@ -256,7 +251,9 @@ export function readFrozenGeometry(
     rowLines: geometry.rowLines,
     colEdges: geometry.colEdges,
   };
-  const peaked = refineAnswerSheetGeometryToBubblePeaks(canvas, scanGeom, data);
+  const peaked = refineAnswerSheetGeometryToBubblePeaks(canvas, scanGeom, data, {
+    preferInk: false,
+  });
   const templateRead = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
     peaked,

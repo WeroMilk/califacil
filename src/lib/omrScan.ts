@@ -96,7 +96,7 @@ export const CALIFACIL_OMR_SCAN = {
 
 /** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
-  minInkFraction: 0.28,
+  minInkFraction: 0.24,
   minInkGap: 0.075,
   minFillDarkness: 0.12,
   minScoreAbsolute: 0.032,
@@ -4409,29 +4409,23 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.height
   );
 
+  // Si el engine ya dejó bubbles, no regenerar (misma geometría que la lectura + más rápido).
+  if (
+    geom.bubbles &&
+    geom.bubbles.length >= rows &&
+    geom.bubbles.some((row) => row?.some((b) => b.r > 0))
+  ) {
+    return { ...meta, geometry: geom };
+  }
+
   const data = getOmrCanvasImageData(canvas);
   if (!data) return { ...meta, geometry: geom };
 
   const W = canvas.width;
   const H = canvas.height;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  // Solo regeneramos centros visuales (bubbles). Picks/cells se conservan.
-  const picksAligned = omrGeometryMatchesPicks(canvas, geom, meta.picks, rows, columns);
-  let bubbleBase = geom;
-  if (
-    !picksAligned &&
-    isReferenceGradeExam(rows, columns) &&
-    canvasNearReferenceGrade(canvas.width, canvas.height) &&
-    !isFooterAnswerSheetGeometry(geom, rows)
-  ) {
-    const registered = buildRegisteredAnswerSheetGeometry(canvas, rows, columns);
-    bubbleBase = refineAnswerSheetGeometryToBubblePeaks(canvas, registered, data, {
-      preferInk: false,
-    });
-  }
-  const outputGeom = picksAligned
-    ? geom
-    : syncCalifacilOmrGeometryImageSize(bubbleBase, W, H);
+  // Sin omrGeometryMatchesPicks: regenerar solo centros visuales sobre celdas actuales.
+  const outputGeom = geom;
   const bubbles: CalifacilOmrBubbleSample[][] = [];
 
   for (let r = 0; r < rows; r++) {
@@ -9335,7 +9329,7 @@ export const CALIFACIL_DESKTOP_GRADE_SCAN_OPTS = {
   answerSheetTemplateOnly: false,
 };
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1280;
+const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 async function yieldOmrScanThread(): Promise<void> {

@@ -268,7 +268,7 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 1280;
+const MOBILE_CAPTURE_MAX_SIDE = 1100;
 /** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
@@ -1558,10 +1558,10 @@ export default function CalificarPage() {
         let nameCropUrl: string | null = null;
         const geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement && geom) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 1200, 0.72);
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 900, 0.65);
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         } else if (reviewCanvas instanceof HTMLCanvasElement) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 1200, 0.72);
+          snapUrl = canvasPreviewDataUrl(reviewCanvas, 900, 0.65);
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         }
         if (geom) {
@@ -3468,16 +3468,12 @@ export default function CalificarPage() {
         setFlashOn(false);
       }
 
-      // Actualizar freeze al documento enderezado (sigue visible; no pantalla negra).
+      // Actualizar freeze al documento enderezado (sin 2º yield: el spinner ya pintó).
       const warpedPreview = canvasPreviewDataUrl(warped, 900, 0.62);
-      flushSync(() => {
-        if (warpedPreview) setMobileScanPreviewUrl(warpedPreview);
-        setLiveStatus('Calificando…');
-      });
-      await yieldForSpinnerPaint();
+      if (warpedPreview) setMobileScanPreviewUrl(warpedPreview);
+      setLiveStatus('Calificando…');
 
-      // Pausar video solo después de tener freeze en pantalla (tracks pueden seguir;
-      // el layer de preview tapa la cámara).
+      // Pausar video solo después de tener freeze en pantalla.
       if (video) {
         try {
           video.pause();

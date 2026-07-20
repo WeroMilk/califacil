@@ -129,26 +129,29 @@ export function MobileZipGradeScanCompleteModal({
 
           {showOverlayPreview && sheet ? (
             <div className="mt-4 overflow-hidden rounded-lg border border-orange-100 bg-orange-50/40 p-1">
-              <div
-                className="relative mx-auto overflow-hidden rounded-md bg-white"
-                style={{
-                  width: `min(100%, calc(14rem * ${overlayW} / ${overlayH}))`,
-                  aspectRatio: `${overlayW} / ${overlayH}`,
-                  maxHeight: 'min(38vh, 14rem)',
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={previewSrc!}
-                  alt="Hoja escaneada con clave"
-                  className="absolute inset-0 z-0 h-full w-full object-contain object-center"
-                />
-                <CalifacilOmrReviewOverlay
-                  geometry={sheet.geometry}
-                  picks={sheet.picks}
-                  expectedPicks={sheet.expectedPicks}
-                  rowCount={sheet.rowCount}
-                />
+              <div className="flex w-full justify-center">
+                <div
+                  className="relative overflow-hidden rounded-md bg-white"
+                  style={{
+                    // Conservar aspect bajo maxHeight: no dejar el box más ancho que la hoja.
+                    width: `min(100%, calc(min(38vh, 14rem) * ${overlayW} / ${overlayH}))`,
+                    aspectRatio: `${overlayW} / ${overlayH}`,
+                    maxHeight: 'min(38vh, 14rem)',
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewSrc!}
+                    alt="Hoja escaneada con clave"
+                    className="absolute inset-0 z-0 h-full w-full object-fill"
+                  />
+                  <CalifacilOmrReviewOverlay
+                    geometry={sheet.geometry}
+                    picks={sheet.picks}
+                    expectedPicks={sheet.expectedPicks}
+                    rowCount={sheet.rowCount}
+                  />
+                </div>
               </div>
               <p className="mt-2 px-1 text-center text-[11px] leading-snug text-gray-600">
                 <span className="font-medium text-orange-600">Naranja</span> = clave ·{' '}
@@ -335,7 +338,7 @@ export function MobileZipGradeReviewScreen({
               <div
                 className="relative overflow-hidden bg-white"
                 style={{
-                  width: `min(100%, calc(28rem * ${W} / ${H}))`,
+                  width: `min(100%, calc(min(70vh, 28rem) * ${W} / ${H}))`,
                   aspectRatio: `${W} / ${H}`,
                   maxHeight: 'min(70vh, 28rem)',
                 }}
@@ -344,7 +347,7 @@ export function MobileZipGradeReviewScreen({
                 <img
                   src={sheet.previewUrl}
                   alt="Hoja escaneada"
-                  className="absolute inset-0 z-0 h-full w-full object-contain object-center"
+                  className="absolute inset-0 z-0 h-full w-full object-fill"
                 />
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}
