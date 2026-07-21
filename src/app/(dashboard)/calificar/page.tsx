@@ -954,8 +954,6 @@ export default function CalificarPage() {
           ? snap.columnPicks
           : draftSelectionsToColumnPicks(chunk, snap.selectionsByQuestionId);
       const chunkStats = gradeOmrChunkPicksAgainstVirtualKey(chunk, picks, virtualKeyMaps);
-      const total = chunk.length;
-      const pct = total > 0 ? calculatePercentage(chunkStats.correct, total) : 0;
       return {
         previewUrl: snap.previewUrl,
         nameCropUrl: snap.nameCropUrl,
@@ -964,8 +962,8 @@ export default function CalificarPage() {
         expectedPicks,
         rowCount: chunk.length,
         correct: chunkStats.correct,
-        total,
-        pct,
+        total: chunkStats.total > 0 ? chunkStats.total : chunk.length,
+        pct: chunkStats.pct,
       };
     });
   }, [mobileSheetSnapshots, sheets, virtualKeyMaps, virtualKeyCorrectIndexByQuestionId, mobileResultsDraft]);
@@ -3185,7 +3183,16 @@ export default function CalificarPage() {
 
   const presentInstantCaptureGrade = useCallback(
     async (fullDraft: Record<string, string>, studentIdOverride?: string) => {
-      const stats = gradeMcDraftAgainstVirtualKey(fullDraft, questions, virtualKeyMaps);
+      // Popup móvil: nota de la hoja actual (no del examen completo con vacías = error).
+      const chunk = sheets[sheetIndexRef.current] ?? [];
+      const stats =
+        isMobile && chunk.length > 0
+          ? gradeMcDraftAgainstVirtualKey(
+              Object.fromEntries(chunk.map((q) => [q.id, fullDraft[q.id] ?? ''])),
+              chunk,
+              virtualKeyMaps
+            )
+          : gradeMcDraftAgainstVirtualKey(fullDraft, questions, virtualKeyMaps);
       setAutoGradeStats(stats);
       setMobileResultsDraft({ ...fullDraft });
 
@@ -3250,6 +3257,7 @@ export default function CalificarPage() {
       virtualKeyMaps,
       isMobile,
       questions,
+      sheets,
       selectedStudentId,
       sortedStudents,
       stopLiveCamera,
@@ -4987,11 +4995,13 @@ export default function CalificarPage() {
             previewUrl={currentZipGradeSheet?.previewUrl}
             sheet={currentZipGradeSheet}
             score={
-              autoGradeStats ?? {
-                correct: currentZipGradeSheet?.correct ?? 0,
-                total: currentZipGradeSheet?.total ?? 0,
-                pct: currentZipGradeSheet?.pct ?? 0,
-              }
+              currentZipGradeSheet
+                ? {
+                    correct: currentZipGradeSheet.correct,
+                    total: currentZipGradeSheet.total,
+                    pct: currentZipGradeSheet.pct,
+                  }
+                : autoGradeStats ?? { correct: 0, total: 0, pct: 0 }
             }
             nameCropUrl={currentZipGradeSheet?.nameCropUrl}
             studentName={selectedStudentName}

@@ -133,7 +133,6 @@ export function MobileZipGradeScanCompleteModal({
                 <div
                   className="relative overflow-hidden rounded-md bg-white"
                   style={{
-                    // Altura fija + aspect de geometry (= JPEG) → img y SVG llenan igual.
                     height: 'min(38vh, 14rem)',
                     width: 'auto',
                     aspectRatio: `${overlayW} / ${overlayH}`,
@@ -144,7 +143,7 @@ export function MobileZipGradeScanCompleteModal({
                   <img
                     src={previewSrc!}
                     alt="Hoja escaneada con clave"
-                    className="absolute inset-0 z-0 h-full w-full object-contain"
+                    className="absolute inset-0 z-0 h-full w-full object-fill"
                   />
                   <CalifacilOmrReviewOverlay
                     geometry={sheet.geometry}
@@ -349,7 +348,7 @@ export function MobileZipGradeReviewScreen({
                 <img
                   src={sheet.previewUrl}
                   alt="Hoja escaneada"
-                  className="absolute inset-0 z-0 h-full w-full object-contain"
+                  className="absolute inset-0 z-0 h-full w-full object-fill"
                 />
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}

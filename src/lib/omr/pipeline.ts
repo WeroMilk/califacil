@@ -16,6 +16,7 @@ import {
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
   prepareMobileGradeDocumentCanvas,
+  prepareMobileScannedDocumentCanvasFast,
   refineWarpedCalifacilSheet,
   scaleCanvasToMaxSide,
   scaleQuadToCanvas,
@@ -376,7 +377,13 @@ export function prepareCalifacilGradeScanCanvas(
 ): HTMLCanvasElement {
   let out = canvas;
   if (opts?.preWarped) {
-    out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
+    if (opts.skipReferenceAlign) {
+      // Ultraligero: sin refine/deskew lento (fast: false); canvas ya warpeado.
+      out =
+        prepareMobileScannedDocumentCanvasFast(out, { skipPrintCrop: true }) ?? out;
+    } else {
+      out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
+    }
   }
   if (opts?.skipReferenceAlign) {
     return out;
