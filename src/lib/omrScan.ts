@@ -9937,19 +9937,32 @@ export function downscaleCanvasForOmrScan(
   return drawSourceToCanvas(source, maxSide) ?? source;
 }
 
+/** JPEG en data URL + tamaño real del bitmap (para sync de geometry del overlay). */
+export function canvasPreviewJpeg(
+  source: HTMLCanvasElement,
+  maxSide = 1200,
+  quality = 0.85
+): { dataUrl: string; width: number; height: number } | null {
+  const scaled = drawSourceToCanvas(source, maxSide);
+  if (!scaled) return null;
+  try {
+    return {
+      dataUrl: scaled.toDataURL('image/jpeg', quality),
+      width: scaled.width,
+      height: scaled.height,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** JPEG en data URL para vista previa móvil (síncrono, tamaño acotado). */
 export function canvasPreviewDataUrl(
   source: HTMLCanvasElement,
   maxSide = 1200,
   quality = 0.85
 ): string | null {
-  const scaled = drawSourceToCanvas(source, maxSide);
-  if (!scaled) return null;
-  try {
-    return scaled.toDataURL('image/jpeg', quality);
-  } catch {
-    return null;
-  }
+  return canvasPreviewJpeg(source, maxSide, quality)?.dataUrl ?? null;
 }
 
 /**

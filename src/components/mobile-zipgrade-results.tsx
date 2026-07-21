@@ -133,17 +133,18 @@ export function MobileZipGradeScanCompleteModal({
                 <div
                   className="relative overflow-hidden rounded-md bg-white"
                   style={{
-                    // Conservar aspect bajo maxHeight: no dejar el box más ancho que la hoja.
-                    width: `min(100%, calc(min(38vh, 14rem) * ${overlayW} / ${overlayH}))`,
+                    // Altura fija + aspect de geometry (= JPEG) → img y SVG llenan igual.
+                    height: 'min(38vh, 14rem)',
+                    width: 'auto',
                     aspectRatio: `${overlayW} / ${overlayH}`,
-                    maxHeight: 'min(38vh, 14rem)',
+                    maxWidth: '100%',
                   }}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={previewSrc!}
                     alt="Hoja escaneada con clave"
-                    className="absolute inset-0 z-0 h-full w-full object-fill"
+                    className="absolute inset-0 z-0 h-full w-full object-contain"
                   />
                   <CalifacilOmrReviewOverlay
                     geometry={sheet.geometry}
@@ -338,16 +339,17 @@ export function MobileZipGradeReviewScreen({
               <div
                 className="relative overflow-hidden bg-white"
                 style={{
-                  width: `min(100%, calc(min(70vh, 28rem) * ${W} / ${H}))`,
+                  height: 'min(70vh, 28rem)',
+                  width: 'auto',
                   aspectRatio: `${W} / ${H}`,
-                  maxHeight: 'min(70vh, 28rem)',
+                  maxWidth: '100%',
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={sheet.previewUrl}
                   alt="Hoja escaneada"
-                  className="absolute inset-0 z-0 h-full w-full object-fill"
+                  className="absolute inset-0 z-0 h-full w-full object-contain"
                 />
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}

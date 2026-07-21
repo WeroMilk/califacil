@@ -86,6 +86,7 @@ import {
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
   canvasPreviewDataUrl,
+  canvasPreviewJpeg,
   cropAnswerSheetNameSnippetDataUrl,
   isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
@@ -1558,13 +1559,17 @@ export default function CalificarPage() {
           meta.reviewSourceCanvas ??
           (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null);
         let snapUrl: string | null = null;
+        let snapW = 0;
+        let snapH = 0;
         let nameCropUrl: string | null = null;
         const geom = meta.geometry;
-        if (reviewCanvas instanceof HTMLCanvasElement && geom) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 900, 0.65);
-          nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
-        } else if (reviewCanvas instanceof HTMLCanvasElement) {
-          snapUrl = canvasPreviewDataUrl(reviewCanvas, 900, 0.65);
+        if (reviewCanvas instanceof HTMLCanvasElement) {
+          const preview = canvasPreviewJpeg(reviewCanvas, 900, 0.65);
+          if (preview) {
+            snapUrl = preview.dataUrl;
+            snapW = preview.width;
+            snapH = preview.height;
+          }
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         }
         if (geom) {
@@ -1574,7 +1579,10 @@ export default function CalificarPage() {
           } catch {
             geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
-          if (reviewCanvas instanceof HTMLCanvasElement) {
+          // Mismo aspect/píxeles que el JPEG del popup → bolitas ancladas al preview.
+          if (snapW > 0 && snapH > 0) {
+            geomClone = syncCalifacilOmrGeometryImageSize(geomClone, snapW, snapH);
+          } else if (reviewCanvas instanceof HTMLCanvasElement) {
             geomClone = syncCalifacilOmrGeometryImageSize(
               geomClone,
               reviewCanvas.width,

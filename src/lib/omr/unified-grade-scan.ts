@@ -17,7 +17,7 @@ import {
   unifiedResultToMeta,
 } from '@/lib/omr/engine';
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1100;
+const OMR_GRADE_SCAN_MAX_SIDE = 1280;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -43,7 +43,7 @@ function finalizeUnifiedDisplayMeta(
     geometry.bubbles.length >= rows &&
     geometry.bubbles.some((row) => row?.some((b) => b.r > 0));
 
-  // Móvil: reutilizar bubbles del engine (misma geometría que la lectura). Evita 2ª pasada cara.
+  // Móvil: si el engine no dejó bubbles, re-anclar en display (misma lectura, anillos visibles).
   if (opts?.skipBubbleReattach && hasEngineBubbles) {
     return {
       ...meta,
@@ -125,10 +125,10 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 28;
+const MOBILE_FAST_OPTIMIZE_ITERS = 36;
 
 /**
- * Perfil móvil ágil: una sola pasada fastMode (28 iters). Nunca escalate.
+ * Perfil móvil preciso: una sola pasada fastMode (36 iters). Nunca escalate.
  * Sin warp de referencia (skip en prepare); skipBubbleReattach conserva centros del engine.
  */
 export async function scanWarpedGradeMobileAsync(
