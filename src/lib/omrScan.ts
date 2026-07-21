@@ -3612,7 +3612,7 @@ function finishMobileScannedDocumentCanvas(
 ): HTMLCanvasElement {
   const trimmed = trimCanvasContentBorders(src) ?? src;
   if (opts?.skipPrintCrop) return trimmed;
-  return cropWarpedAnswerSheetToPrintBounds(trimmed);
+  return cropWarpedAnswerSheetToPrintBounds(trimmed) ?? trimmed;
 }
 
 /**
@@ -4409,12 +4409,14 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.height
   );
 
-  // Si el engine ya dejó bubbles, no regenerar (misma geometría que la lectura + más rápido).
-  if (
-    geom.bubbles &&
+  // Si el engine ya dejó bubbles sanos (mismo canvas), no regenerar.
+  const hasSaneBubbles =
+    !!geom.bubbles &&
     geom.bubbles.length >= rows &&
-    geom.bubbles.some((row) => row?.some((b) => b.r > 0))
-  ) {
+    geom.bubbles.some((row) =>
+      row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
+    );
+  if (hasSaneBubbles) {
     return { ...meta, geometry: geom };
   }
 

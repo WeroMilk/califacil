@@ -16,6 +16,7 @@ import {
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
   prepareMobileGradeDocumentCanvas,
+  prepareMobileScannedDocumentCanvasFast,
   refineWarpedCalifacilSheet,
   scaleCanvasToMaxSide,
   scaleQuadToCanvas,
@@ -374,13 +375,18 @@ export function prepareCalifacilGradeScanCanvas(
   opts?: {
     preWarped?: boolean;
     warpAlignment?: WarpAlignmentReport | null;
-    /** Móvil ultrágil: no warp a 1230×1600 (se descarta al bajar maxSide). */
+    /**
+     * Móvil: no warp a 1230×1600, pero SÍ recorte a hoja (documento canónico).
+     * Así preview y geometry comparten el mismo espacio (bolitas sobre negras).
+     */
     skipReferenceAlign?: boolean;
   }
 ): HTMLCanvasElement {
-  // Móvil: canvas ya warpeado — sin segundo refine/deskew.
   if (opts?.skipReferenceAlign) {
-    return canvas;
+    // Documento canónico rápido: refine fast + recorte impresión (sin deskew lento).
+    return (
+      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
+    );
   }
   let out = canvas;
   if (opts?.preWarped) {

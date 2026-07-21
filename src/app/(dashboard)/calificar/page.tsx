@@ -93,6 +93,7 @@ import {
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
   buildAnswerSheetOmrGeometry,
+  attachAnswerSheetReviewBubbleOverlay,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -1584,6 +1585,36 @@ export default function CalificarPage() {
             geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
           geomClone = syncCalifacilOmrGeometryImageSize(geomClone, previewW, previewH);
+          // Re-anclar bubbles al JPEG real si hace falta (mismo docCanvas).
+          if (reviewCanvas instanceof HTMLCanvasElement) {
+            const attached = attachAnswerSheetReviewBubbleOverlay(
+              reviewCanvas,
+              { ...meta, geometry: geomClone },
+              omrCols,
+              chunk.length
+            );
+            if (attached.geometry) {
+              geomClone = syncCalifacilOmrGeometryImageSize(
+                attached.geometry,
+                previewW,
+                previewH
+              );
+            }
+          }
+        } else if (reviewCanvas instanceof HTMLCanvasElement) {
+          // Sin geometry del scan: construir celdas del canvas real y anclar anillos.
+          const base = buildAnswerSheetOmrGeometry(chunk.length, omrCols, previewW, previewH);
+          const attached = attachAnswerSheetReviewBubbleOverlay(
+            reviewCanvas,
+            { ...meta, geometry: base },
+            omrCols,
+            chunk.length
+          );
+          geomClone = syncCalifacilOmrGeometryImageSize(
+            attached.geometry ?? base,
+            previewW,
+            previewH
+          );
         } else {
           geomClone = buildAnswerSheetOmrGeometry(chunk.length, omrCols, previewW, previewH);
         }

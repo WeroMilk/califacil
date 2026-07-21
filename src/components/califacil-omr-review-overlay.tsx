@@ -23,6 +23,26 @@ type Props = {
 type BubbleCircle = { cx: number; cy: number; r: number };
 
 const RADIUS_SCALE = 0.42;
+const SANE_BUBBLE_R_MIN = 0.002;
+const SANE_BUBBLE_R_MAX = 0.06;
+
+function isSaneBubbleR(r: number): boolean {
+  return Number.isFinite(r) && r > SANE_BUBBLE_R_MIN && r < SANE_BUBBLE_R_MAX;
+}
+
+function bubbleSampleToCircle(
+  bubble: { cx: number; cy: number; r: number },
+  imageW: number,
+  imageH: number,
+  maxRPx: number
+): BubbleCircle {
+  const minDim = Math.min(imageW, imageH);
+  return {
+    cx: bubble.cx * imageW,
+    cy: bubble.cy * imageH,
+    r: Math.min(maxRPx, Math.max(6, bubble.r * minDim)),
+  };
+}
 
 function cellToBubbleCircle(
   cell: { x: number; y: number; w: number; h: number },
@@ -39,9 +59,27 @@ function cellToBubbleCircle(
   };
 }
 
+function resolveCircle(
+  bubble: { cx: number; cy: number; r: number } | null | undefined,
+  cell: { x: number; y: number; w: number; h: number } | null | undefined,
+  imageW: number,
+  imageH: number
+): BubbleCircle | null {
+  const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
+  const maxRPx = fromCell?.r ?? Math.min(imageW, imageH) * 0.04;
+  // Preferir anillo del engine si r es sane (mismo canvas que el JPEG).
+  if (bubble && isSaneBubbleR(bubble.r)) {
+    const fromBubble = bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
+    return fromCell
+      ? { cx: fromBubble.cx, cy: fromBubble.cy, r: Math.min(fromBubble.r, fromCell.r) }
+      : fromBubble;
+  }
+  return fromCell;
+}
+
 /**
  * Bolitas naranja (clave del examen) / verde (acierto) / rojo (error).
- * Solo centros de celda — evita manchas por bubbles.r basura.
+ * Coords 0–1 del mismo docCanvas que el preview → encima de las negras.
  */
 export function CalifacilOmrReviewOverlay({
   geometry,
@@ -70,7 +108,7 @@ export function CalifacilOmrReviewOverlay({
     <svg
       className="pointer-events-none absolute left-0 top-0 h-full w-full"
       viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="xMidYMid meet"
+      preserveAspectRatio="none"
       shapeRendering="geometricPrecision"
       aria-hidden
     >
@@ -94,13 +132,14 @@ export function CalifacilOmrReviewOverlay({
             expectedPick < rowCells.length;
 
           const expectedCell = hasExpected ? rowCells[expectedPick] : null;
-          const expectedCircle = expectedCell
-            ? cellToBubbleCircle(expectedCell, W, H)
-            : null;
+          const expectedBubble = hasExpected ? geometry.bubbles?.[row]?.[expectedPick!] : null;
+          const expectedCircle = resolveCircle(expectedBubble, expectedCell, W, H);
 
           const pickCell =
             pick !== null && pick >= 0 && pick < rowCells.length ? rowCells[pick] : null;
-          const pickCircle = pickCell ? cellToBubbleCircle(pickCell, W, H) : null;
+          const pickBubble =
+            pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
+          const pickCircle = resolveCircle(pickBubble, pickCell, W, H);
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
           const isWrong = hasExpected && pick !== null && pick !== expectedPick;
