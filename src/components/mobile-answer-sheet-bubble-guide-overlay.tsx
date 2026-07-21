@@ -50,7 +50,7 @@ export function MobileAnswerSheetAlignGuideOverlay({
     [guideRect]
   );
 
-  const cornerSize = Math.max(22, Math.min(guideRect.width, guideRect.height) * 0.07);
+  const cornerSize = Math.max(40, Math.min(guideRect.width, guideRect.height) * 0.12);
   const cornerPositions = useMemo(
     () => [
       { left: guideRect.left, top: guideRect.top },
