@@ -47,7 +47,7 @@ export {
 
 export type { UnifiedPipelineResult } from '@/lib/omr/engine/run-unified-pipeline';
 
-export { detectCircleGridGeometry, detectPrintedBubbleHits } from '@/lib/omr/engine/detect-circles-grid';
+export { detectCircleGridGeometry, detectPrintedBubbleHits, cropCanvasToPrintedBubbleTable } from '@/lib/omr/engine/detect-circles-grid';
 
 export {
   extractLinesFromGeometry,

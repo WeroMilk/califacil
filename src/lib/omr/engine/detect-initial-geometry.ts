@@ -240,17 +240,12 @@ export function detectInitialGeometry(
 
   const circleGrid = detectCircleGridGeometry(canvas, columns, rows);
 
-  if (circleGrid && circleGrid.bubbleFit >= 0.45 && circleGrid.validationOk) {
-
+  // Prioridad: círculos reales en la imagen (también tabla arriba / foto de monitor).
+  if (circleGrid && circleGrid.bubbleFit >= 0.35) {
     return circleGrid;
-
   }
 
-
-
   const candidates: CalifacilOmrScanGeometry[] = [];
-
-
 
   const footer = pickFooterAnswerSheetGeometryForEngine([], rows, columns, canvas);
 

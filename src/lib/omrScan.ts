@@ -9403,15 +9403,35 @@ function finishGradeScanResult(
       canvasMatchesReferenceGrade(displayCanvas.width, displayCanvas.height)
     );
     if (preferFooterGeometry && !isFooterAnswerSheetGeometry(result.geometry, rows)) {
-      const footerGeom = pickFooterAnswerSheetGeometry([], rows, columns, displayCanvas);
-      const footerRead = omrMetaFromGeometry(displayCanvas, footerGeom, rows, columns);
-      result = {
-        ...result,
-        picks: footerRead.picks,
-        rows: footerRead.rows,
-        maxSameColumnCount: footerRead.maxSameColumnCount,
-        geometry: footerRead.geometry ?? footerGeom,
-      };
+      // Solo forzar pie de hoja si mejora claramente el encaje con bolitas.
+      const imageData = getOmrCanvasImageData(displayCanvas);
+      if (imageData) {
+        const footerGeom = pickFooterAnswerSheetGeometry([], rows, columns, displayCanvas);
+        const currentFit = scoreAnswerSheetGeometryBubbleFit(
+          imageData,
+          displayCanvas.width,
+          displayCanvas.height,
+          result.geometry,
+          rows
+        );
+        const footerFit = scoreAnswerSheetGeometryBubbleFit(
+          imageData,
+          displayCanvas.width,
+          displayCanvas.height,
+          footerGeom,
+          rows
+        );
+        if (footerFit > currentFit + 0.08) {
+          const footerRead = omrMetaFromGeometry(displayCanvas, footerGeom, rows, columns);
+          result = {
+            ...result,
+            picks: footerRead.picks,
+            rows: footerRead.rows,
+            maxSameColumnCount: footerRead.maxSameColumnCount,
+            geometry: footerRead.geometry ?? footerGeom,
+          };
+        }
+      }
     }
     result = finalizeAnswerSheetGeometryForGrade(
       displayCanvas,

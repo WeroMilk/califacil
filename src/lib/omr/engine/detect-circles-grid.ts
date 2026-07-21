@@ -69,7 +69,19 @@ function scorePrintedBubbleRing(
     cy,
     Math.max(1, Math.round(r * 0.42))
   );
-  return ring * 1.35 - center * 0.45;
+  // Anillo vacío (centro claro) o bolita rellena (centro oscuro, papel alrededor).
+  const emptyRing = ring * 1.35 - center * 0.45;
+  const outer = sampleAnnulusDarknessForEngine(
+    data,
+    width,
+    height,
+    cx,
+    cy,
+    Math.max(2, Math.round(r * 1.15)),
+    Math.max(3, Math.round(r * 1.55))
+  );
+  const filledDisk = center * 1.45 - outer * 0.85;
+  return Math.max(emptyRing, filledDisk);
 }
 
 function nonMaxSuppress(hits: CircleHit[], minDistPx: number): CircleHit[] {
@@ -251,9 +263,10 @@ function filterHitsToAnswerTableBand(hits: CircleHit[], height: number): CircleH
     let sum = 0;
     for (let j = i; j < i + windowBins; j++) sum += bins[j]!;
     const centerY = (i + windowBins * 0.5) / binCount;
-    const footerPenalty = centerY > 0.72 ? (centerY - 0.72) * 4 : 0;
-    const headerPenalty = centerY < 0.26 ? (0.26 - centerY) * 3 : 0;
-    const score = sum - (footerPenalty + headerPenalty) * hits.length * 0.12;
+    // No penalizar tablas altas (foto de monitor / hoja en pantalla).
+    const footerPenalty = centerY > 0.78 ? (centerY - 0.78) * 3 : 0;
+    const headerPenalty = centerY < 0.08 ? (0.08 - centerY) * 2 : 0;
+    const score = sum - (footerPenalty + headerPenalty) * hits.length * 0.1;
     if (score > bestScore) {
       bestScore = score;
       bestStart = i;
@@ -686,6 +699,11 @@ export function detectCircleGridGeometry(
   const hits = detectPrintedBubbleHits(canvas);
   const hitsGrid = buildHitsGridResult(canvas, hits, rows, cols, data);
 
+  // Preferir siempre la rejilla de círculos reales (donde estén en la imagen).
+  if (hitsGrid && hitsGrid.bubbleFit >= 0.55) {
+    return hitsGrid;
+  }
+
   const table = detectFullCanvasTableGeometry(canvas, rows, cols);
   if (table?.geometry) {
     const tableLocal = detectLocalBubblesOnStructure(
@@ -696,25 +714,13 @@ export function detectCircleGridGeometry(
       table.geometry,
       table.tableFrame
     );
-    const row1y = table.geometry.cells[0]?.[0]?.y ?? 1;
-    if (tableLocal && tableLocal.bubbleFit >= 0.7 && row1y >= 0.38) {
+    // Aceptar tabla en cualquier altura (no solo pie de hoja carta).
+    if (tableLocal && tableLocal.bubbleFit >= 0.7) {
       return tableLocal;
     }
   }
 
-  if (hitsGrid && hitsGrid.bubbleFit >= 0.85) {
-    const row1y = hitsGrid.geometry.cells[0]?.[0]?.y ?? 0;
-    if (row1y < 0.28 && table?.geometry) {
-      const tableLocal = detectLocalBubblesOnStructure(
-        canvas,
-        rows,
-        cols,
-        data,
-        table.geometry,
-        table.tableFrame
-      );
-      if (tableLocal && tableLocal.bubbleFit >= 0.65) return tableLocal;
-    }
+  if (hitsGrid && hitsGrid.bubbleFit >= 0.35) {
     return hitsGrid;
   }
 
@@ -825,4 +831,58 @@ export function detectCircleGridGeometry(
     bubbleFit,
     validationOk: validation.ok,
   };
+}
+
+/**
+ * Recorta al bbox de la rejilla de bolitas detectadas (quita mesa, taskbar, márgenes).
+ * Así preview + OMR + overlay comparten el mismo espacio centrado en las negras.
+ */
+export function cropCanvasToPrintedBubbleTable(
+  canvas: HTMLCanvasElement,
+  opts?: { minHits?: number }
+): HTMLCanvasElement {
+  if (typeof document === 'undefined') return canvas;
+  const hits = detectPrintedBubbleHits(canvas);
+  const minHits = opts?.minHits ?? 10;
+  if (hits.length < minHits) return canvas;
+
+  const W = canvas.width;
+  const H = canvas.height;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const h of hits) {
+    minX = Math.min(minX, h.x - h.r);
+    minY = Math.min(minY, h.y - h.r);
+    maxX = Math.max(maxX, h.x + h.r);
+    maxY = Math.max(maxY, h.y + h.r);
+  }
+  if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return canvas;
+
+  const gridW = maxX - minX;
+  const gridH = maxY - minY;
+  // Incluir columna de números y un poco de encabezado A–D.
+  const padX = Math.max(8, gridW * 0.28);
+  const padY = Math.max(8, gridH * 0.22);
+  const x0 = Math.max(0, Math.floor(minX - padX));
+  const y0 = Math.max(0, Math.floor(minY - padY));
+  const x1 = Math.min(W, Math.ceil(maxX + padX * 0.45));
+  const y1 = Math.min(H, Math.ceil(maxY + padY * 0.35));
+  const cw = x1 - x0;
+  const ch = y1 - y0;
+  if (cw < 64 || ch < 64) return canvas;
+  // Solo recortar si quitamos márgenes reales (taskbar / bezel).
+  if (cw >= W * 0.94 && ch >= H * 0.94) return canvas;
+  if (cw < W * 0.2 || ch < H * 0.12) return canvas;
+
+  const out = document.createElement('canvas');
+  out.width = cw;
+  out.height = ch;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch);
+  return out;
 }

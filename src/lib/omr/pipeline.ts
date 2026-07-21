@@ -25,6 +25,7 @@ import {
   type MobileGuideRoiCapture,
   type Point,
 } from '@/lib/omrScan';
+import { cropCanvasToPrintedBubbleTable } from '@/lib/omr/engine/detect-circles-grid';
 
 /** Misma resolución que el PDF rasterizado en calificar (referencia visual + OMR). */
 export const CALIFACIL_GRADE_DOCUMENT_MAX_SIDE = 1600;
@@ -383,10 +384,10 @@ export function prepareCalifacilGradeScanCanvas(
   }
 ): HTMLCanvasElement {
   if (opts?.skipReferenceAlign) {
-    // Documento canónico rápido: refine fast + recorte impresión (sin deskew lento).
-    return (
-      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
-    );
+    // Documento canónico: crop impresión + recorte a rejilla de bolitas (sin taskbar).
+    const prepared =
+      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas;
+    return cropCanvasToPrintedBubbleTable(prepared);
   }
   let out = canvas;
   if (opts?.preWarped) {
