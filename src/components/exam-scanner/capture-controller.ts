@@ -1,6 +1,6 @@
 export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
-/** Disparo en el primer tick listo (4 esquinas + franjas). */
-export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 1;
+/** Ticks consecutivos con hoja lista (~150–200 ms) antes del disparo automático. */
+export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 3;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;

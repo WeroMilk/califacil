@@ -268,11 +268,13 @@ const AMBIGUOUS_ROW_WARN_RATIO = CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO;
 /** Resolución máxima usada para escaneo en vivo móvil (menos píxeles = UI más fluida). */
 const MOBILE_SCAN_MAX_WIDTH = 1920;
 /** Resolución máxima al capturar foto final en móvil. */
-const MOBILE_CAPTURE_MAX_SIDE = 960;
+const MOBILE_CAPTURE_MAX_SIDE = 1280;
 /** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
+/** Nitidez mínima del frame live (ROI) antes de disparar. */
+const MOBILE_MIN_LIVE_SHARPNESS = 10;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
-const MOBILE_MIN_WARPED_SHARPNESS = 7;
+const MOBILE_MIN_WARPED_SHARPNESS = 10;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 3;
 /** Asimetría de luminancia izq/der que sugiere sombra fuerte en la hoja. */
@@ -2521,22 +2523,25 @@ export default function CalificarPage() {
               return;
             }
 
-            // Contrato: 4 esquinas + franjas → foto en el mismo tick.
-            const idealLock = stripAligned && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS;
-            const readyToSnap =
-              idealLock ||
-              shouldTriggerAutoCapture({
-                autoShutterEnabled: autoShutterEnabledRef.current,
-                captureBusy: mobileCaptureBusyRef.current,
-                stableTicks: cornerStableTicksRef.current,
-                requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
-              });
+            // Contrato: 4 esquinas + franjas estables N ticks + nitidez → foto.
+            const readyToSnap = shouldTriggerAutoCapture({
+              autoShutterEnabled: autoShutterEnabledRef.current,
+              captureBusy: mobileCaptureBusyRef.current,
+              stableTicks: cornerStableTicksRef.current,
+              requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
+            });
 
             if (
               readyToSnap &&
               autoShutterEnabledRef.current &&
               !mobileCaptureBusyRef.current
             ) {
+              const liveSharpness = estimateCanvasSharpness(roiCanvas);
+              if (liveSharpness < MOBILE_MIN_LIVE_SHARPNESS) {
+                setLiveStatus('Mantén el teléfono quieto');
+                nextDelay = MOBILE_CORNER_LOOP_MS;
+                return;
+              }
               setLiveStatus('Capturando…');
               const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
               const captureRoi = lastRoiCaptureMetaRef.current;
@@ -2550,6 +2555,8 @@ export default function CalificarPage() {
               });
             } else if (!autoShutterEnabledRef.current) {
               setLiveStatus('Examen detectado — mantén quieto…');
+            } else {
+              setLiveStatus('Mantén el teléfono quieto');
             }
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
@@ -3456,6 +3463,15 @@ export default function CalificarPage() {
         return;
       }
 
+      const warpedSharpness = estimateCanvasSharpness(warped);
+      if (warpedSharpness < MOBILE_MIN_WARPED_SHARPNESS) {
+        clearPreview();
+        toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
+        setLiveStatus('Mantén el teléfono quieto al escanear.');
+        if (video) resumeLiveVideoAfterScan(video);
+        return;
+      }
+
       const chunk = sheets[sheetIndexRef.current] ?? [];
       const chunkRows = chunk.length;
       if (chunkRows === 0) {
@@ -3504,20 +3520,11 @@ export default function CalificarPage() {
             )
           : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
 
-      // Con lectura OMR válida: ir directo al popup (sin review manual ni abort por warp flojo).
+      // Con lectura OMR válida: ir directo al popup (sin review manual).
       if (sheetKind === 'califacil' && !hasOmr) {
         clearPreview();
         toast.error('No se pudo leer las burbujas. Encuadra de nuevo e intenta otra vez.');
         setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
-        if (video) resumeLiveVideoAfterScan(video);
-        return;
-      }
-
-      const sharpness = estimateCanvasSharpness(docCanvas);
-      if (sharpness < MOBILE_MIN_WARPED_SHARPNESS && !hasOmr) {
-        clearPreview();
-        toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
-        setLiveStatus('Mantén el teléfono quieto al escanear.');
         if (video) resumeLiveVideoAfterScan(video);
         return;
       }
@@ -3609,7 +3616,17 @@ export default function CalificarPage() {
       _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       playAutoCaptureClickSound();
-      // Frame actual directo: sin grabVideoFrame (ahorra CPU/GPU en iPhone).
+      // Frame fresco del sensor (sin sleep largo).
+      await new Promise<void>((resolve) => {
+        const v = video as HTMLVideoElement & {
+          requestVideoFrameCallback?: (cb: () => void) => number;
+        };
+        if (typeof v.requestVideoFrameCallback === 'function') {
+          v.requestVideoFrameCallback(() => resolve());
+          return;
+        }
+        window.requestAnimationFrame(() => resolve());
+      });
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         clearMobileScanPreview(video, mobileScanPreviewSetters);
