@@ -4902,11 +4902,15 @@ export function deskewWarpedCalifacilSheet(
 export function warpAndValidateCalifacilSheet(
   canvas: HTMLCanvasElement,
   quad: [Point, Point, Point, Point],
-  maxErrorPx = MAX_WARP_ALIGNMENT_ERROR_PX
+  maxErrorPx = MAX_WARP_ALIGNMENT_ERROR_PX,
+  opts?: { fast?: boolean }
 ): WarpCalifacilSheetResult {
   const warped = warpCalifacilSheetFromQuad(canvas, quad);
   if (!warped) return { warped: null, alignment: null };
-  const refined = refineWarpedCalifacilSheet(warped, { maxAllowedPx: maxErrorPx });
+  const refined = refineWarpedCalifacilSheet(warped, {
+    maxAllowedPx: maxErrorPx,
+    fast: opts?.fast,
+  });
   return { warped: refined.canvas, alignment: refined.alignment };
 }
 

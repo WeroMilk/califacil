@@ -92,6 +92,7 @@ import {
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
+  buildAnswerSheetOmrGeometry,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -1567,45 +1568,44 @@ export default function CalificarPage() {
             snapUrl = preview.dataUrl;
             snapW = preview.width;
             snapH = preview.height;
+          } else {
+            snapUrl = canvasPreviewDataUrl(reviewCanvas, 900, 0.65);
+            snapW = reviewCanvas.width;
+            snapH = reviewCanvas.height;
           }
           nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
         }
+        const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
+        const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
+        let geomClone: CalifacilOmrScanGeometry;
         if (geom) {
-          let geomClone: CalifacilOmrScanGeometry;
           try {
             geomClone = structuredClone(geom);
           } catch {
             geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
-          // Mismo aspect/píxeles que el JPEG del popup → bolitas ancladas al preview.
-          if (snapW > 0 && snapH > 0) {
-            geomClone = syncCalifacilOmrGeometryImageSize(geomClone, snapW, snapH);
-          } else if (reviewCanvas instanceof HTMLCanvasElement) {
-            geomClone = syncCalifacilOmrGeometryImageSize(
-              geomClone,
-              reviewCanvas.width,
-              reviewCanvas.height
-            );
-          }
-          setMobileSheetSnapshots((prev) => {
-            const next = [
-              ...prev,
-              {
-                sheetIndex: sheetIndexRef.current,
-                previewUrl: snapUrl ?? '',
-                geometry: geomClone,
-                questionIds: chunk.map((q) => q.id),
-                selectionsByQuestionId: { ...fullChunkDraft },
-                columnPicks: picksInChunk,
-                answerSheetLayout: true,
-                warpAlignment: OMR_DEBUG_ENABLED ? warpAlignment : undefined,
-                nameCropUrl,
-              },
-            ];
-            setResultsSheetIdx(next.length - 1);
-            return next;
-          });
+          geomClone = syncCalifacilOmrGeometryImageSize(geomClone, previewW, previewH);
+        } else {
+          geomClone = buildAnswerSheetOmrGeometry(chunk.length, omrCols, previewW, previewH);
         }
+        setMobileSheetSnapshots((prev) => {
+          const next = [
+            ...prev,
+            {
+              sheetIndex: sheetIndexRef.current,
+              previewUrl: snapUrl ?? '',
+              geometry: geomClone,
+              questionIds: chunk.map((q) => q.id),
+              selectionsByQuestionId: { ...fullChunkDraft },
+              columnPicks: picksInChunk,
+              answerSheetLayout: true,
+              warpAlignment: OMR_DEBUG_ENABLED ? warpAlignment : undefined,
+              nameCropUrl,
+            },
+          ];
+          setResultsSheetIdx(next.length - 1);
+          return next;
+        });
         try {
           await advanceOrPresentMobileGradeRef.current(fullChunkDraft, gradeStudentId || undefined);
         } catch {
@@ -3501,9 +3501,7 @@ export default function CalificarPage() {
         setFlashOn(false);
       }
 
-      // Actualizar freeze al documento enderezado (sin 2º yield: el spinner ya pintó).
-      const warpedPreview = canvasPreviewDataUrl(warped, 900, 0.62);
-      if (warpedPreview) setMobileScanPreviewUrl(warpedPreview);
+      // Mantener freeze de captura; no regenerar JPEG warped (ahorra toDataURL).
       setLiveStatus('Calificando…');
 
       // Pausar video solo después de tener freeze en pantalla.

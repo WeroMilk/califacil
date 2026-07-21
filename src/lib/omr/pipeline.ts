@@ -16,7 +16,6 @@ import {
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
   prepareMobileGradeDocumentCanvas,
-  prepareMobileScannedDocumentCanvasFast,
   refineWarpedCalifacilSheet,
   scaleCanvasToMaxSide,
   scaleQuadToCanvas,
@@ -92,13 +91,15 @@ export function warpCalifacilMobileCaptureFast(
   const fallbackMaxErrorPx = maxErrorPx + 8;
 
   if (opts?.frameQuad) {
-    const frameWarp = warpAndValidateCalifacilSheet(fullCanvas, opts.frameQuad, maxErrorPx);
-    const finalized = finalizeWarpCandidate(frameWarp.warped, frameWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
-      return { ...finalized, source: 'full_res' };
+    const frameWarp = warpAndValidateCalifacilSheet(fullCanvas, opts.frameQuad, maxErrorPx, {
+      fast: true,
+    });
+    // Un solo refine fast (ya hecho en warpAndValidate); sin deskew.
+    if (frameWarp.warped && isMobileWarpedAnswerSheetAcceptable(frameWarp.warped)) {
+      return { warped: frameWarp.warped, alignment: frameWarp.alignment, source: 'full_res' };
     }
-    if (finalized.warped) {
-      return { ...finalized, source: 'full_res' };
+    if (frameWarp.warped) {
+      return { warped: frameWarp.warped, alignment: frameWarp.alignment, source: 'full_res' };
     }
   }
 
@@ -115,10 +116,11 @@ export function warpCalifacilMobileCaptureFast(
       fullCanvas.width,
       fullCanvas.height
     );
-    const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx);
-    const finalized = finalizeWarpCandidate(roiWarp.warped, roiWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
-      return { ...finalized, source: 'roi' };
+    const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx, {
+      fast: true,
+    });
+    if (roiWarp.warped && isMobileWarpedAnswerSheetAcceptable(roiWarp.warped)) {
+      return { warped: roiWarp.warped, alignment: roiWarp.alignment, source: 'roi' };
     }
   }
 
@@ -126,10 +128,11 @@ export function warpCalifacilMobileCaptureFast(
   for (const target of [preprocessed, fullCanvas].filter(Boolean) as HTMLCanvasElement[]) {
     const stripQuad = detectAnswerSheetQuadViaAlignStrips(target);
     if (!stripQuad) continue;
-    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx);
-    const finalized = finalizeWarpCandidate(stripWarp.warped, stripWarp.alignment, maxErrorPx, true);
-    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
-      return { ...finalized, source: 'strips' };
+    const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx, {
+      fast: true,
+    });
+    if (stripWarp.warped && isMobileWarpedAnswerSheetAcceptable(stripWarp.warped)) {
+      return { warped: stripWarp.warped, alignment: stripWarp.alignment, source: 'strips' };
     }
   }
 
@@ -375,18 +378,13 @@ export function prepareCalifacilGradeScanCanvas(
     skipReferenceAlign?: boolean;
   }
 ): HTMLCanvasElement {
+  // Móvil: canvas ya warpeado — sin segundo refine/deskew.
+  if (opts?.skipReferenceAlign) {
+    return canvas;
+  }
   let out = canvas;
   if (opts?.preWarped) {
-    if (opts.skipReferenceAlign) {
-      // Ultraligero: sin refine/deskew lento (fast: false); canvas ya warpeado.
-      out =
-        prepareMobileScannedDocumentCanvasFast(out, { skipPrintCrop: true }) ?? out;
-    } else {
-      out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
-    }
-  }
-  if (opts?.skipReferenceAlign) {
-    return out;
+    out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
   }
   return prepareReferenceGradeCanvas(out, columns, rowCount);
 }

@@ -133,10 +133,9 @@ export function MobileZipGradeScanCompleteModal({
                 <div
                   className="relative overflow-hidden rounded-md bg-white"
                   style={{
-                    height: 'min(38vh, 14rem)',
-                    width: 'auto',
+                    width: `min(100%, calc(min(38vh, 14rem) * ${overlayW} / ${overlayH}))`,
                     aspectRatio: `${overlayW} / ${overlayH}`,
-                    maxWidth: '100%',
+                    maxHeight: 'min(38vh, 14rem)',
                   }}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -338,10 +337,9 @@ export function MobileZipGradeReviewScreen({
               <div
                 className="relative overflow-hidden bg-white"
                 style={{
-                  height: 'min(70vh, 28rem)',
-                  width: 'auto',
+                  width: `min(100%, calc(min(70vh, 28rem) * ${W} / ${H}))`,
                   aspectRatio: `${W} / ${H}`,
-                  maxWidth: '100%',
+                  maxHeight: 'min(70vh, 28rem)',
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
