@@ -123,7 +123,6 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
   prepareCalifacilGradeScanCanvas,
-  warpCalifacilMobileCapture,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
@@ -3431,24 +3430,13 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        // Happy path: solo warp fast. Full únicamente si fast no produce canvas.
+        // Solo warp ultrarrápido — nunca warpCalifacilMobileCapture (deskew lento ~1 min).
         const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad,
           maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
         });
         warped = fastWarp.warped;
         alignment = fastWarp.alignment;
-        if (!warped) {
-          const primaryWarp = warpCalifacilMobileCapture(fullCanvas, {
-            frameQuad,
-            maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-            fallbackMaxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12,
-          });
-          if (primaryWarp.warped) {
-            warped = primaryWarp.warped;
-            alignment = primaryWarp.alignment;
-          }
-        }
         if (!warped) {
           const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
           if (warpedOnly) {

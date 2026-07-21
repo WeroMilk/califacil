@@ -219,7 +219,7 @@ export function runUnifiedOmrPipeline(
   const preCheck = shouldUseStripFallback({ initial, rows, columns: cols, canvas });
 
   if (preCheck.useFallback && !(initial && hasStrongCircleGeometry(initial, rows, cols))) {
-    if (preferDesktopTierRecovery(rows, cols)) {
+    if (!fastMode && preferDesktopTierRecovery(rows, cols)) {
       return buildDesktopTierRecoveryResult(canvas, cols, rows, t0, preCheck.reason ?? 'validation_failed', {
         initial,
       });
@@ -246,7 +246,7 @@ export function runUnifiedOmrPipeline(
   }
 
   if (!initial) {
-    if (preferDesktopTierRecovery(rows, cols)) {
+    if (!fastMode && preferDesktopTierRecovery(rows, cols)) {
       return buildDesktopTierRecoveryResult(canvas, cols, rows, t0, 'initial_geometry_missing');
     }
     const strip = runStripFallback(canvas, cols, rows);
@@ -288,7 +288,10 @@ export function runUnifiedOmrPipeline(
   });
 
   if (!authoritativeOk && !(initial && hasStrongCircleGeometry(initial, rows, cols))) {
-    if (preferDesktopTierRecovery(rows, cols) || isReferenceSizedCanvas || opts?.requireFullOptimize) {
+    if (
+      !fastMode &&
+      (preferDesktopTierRecovery(rows, cols) || isReferenceSizedCanvas || opts?.requireFullOptimize)
+    ) {
       return buildDesktopTierRecoveryResult(
         canvas,
         cols,
@@ -373,7 +376,7 @@ export function runUnifiedOmrPipeline(
     !(initial && hasStrongCircleGeometry(initial, rows, cols)) &&
     !keepFrozen
   ) {
-    if (preferDesktopTierRecovery(rows, cols)) {
+    if (!fastMode && preferDesktopTierRecovery(rows, cols)) {
       return buildDesktopTierRecoveryResult(canvas, cols, rows, t0, postCheck.reason ?? 'low_geometry_quality', {
         initial,
         optimized,

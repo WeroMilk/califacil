@@ -20,17 +20,21 @@ type Props = {
 type BubbleCircle = { cx: number; cy: number; r: number };
 
 const RADIUS_SCALE = 0.42;
+/** Radio normalizado (fracción de minDim) válido para bubbles del engine. */
+const SANE_BUBBLE_R_MIN = 0.002;
+const SANE_BUBBLE_R_MAX = 0.06;
 
 function bubbleSampleToCircle(
   bubble: { cx: number; cy: number; r: number },
   imageW: number,
-  imageH: number
+  imageH: number,
+  maxRPx: number
 ): BubbleCircle {
   const minDim = Math.min(imageW, imageH);
   return {
     cx: bubble.cx * imageW,
     cy: bubble.cy * imageH,
-    r: Math.max(6, bubble.r * minDim),
+    r: Math.min(maxRPx, Math.max(6, bubble.r * minDim)),
   };
 }
 
@@ -49,20 +53,36 @@ function cellToBubbleCircle(
   };
 }
 
+function isSaneBubbleR(r: number): boolean {
+  return Number.isFinite(r) && r > SANE_BUBBLE_R_MIN && r < SANE_BUBBLE_R_MAX;
+}
+
 function resolveCircle(
   bubble: { cx: number; cy: number; r: number } | null | undefined,
   cell: { x: number; y: number; w: number; h: number } | null | undefined,
   imageW: number,
   imageH: number
 ): BubbleCircle | null {
-  if (bubble && bubble.r > 0) return bubbleSampleToCircle(bubble, imageW, imageH);
-  if (cell) return cellToBubbleCircle(cell, imageW, imageH);
-  return null;
+  const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
+  const maxRPx = fromCell?.r ?? Math.min(imageW, imageH) * 0.04;
+  // Bubble solo si r normalizado es sano; si no, centro de celda (evita manchas blancas).
+  if (bubble && isSaneBubbleR(bubble.r)) {
+    const fromBubble = bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
+    if (fromCell) {
+      return {
+        cx: fromBubble.cx,
+        cy: fromBubble.cy,
+        r: Math.min(fromBubble.r, fromCell.r),
+      };
+    }
+    return fromBubble;
+  }
+  return fromCell;
 }
 
 /**
  * Superpone bolitas sólidas: naranja = clave, verde = acierto, rojo = error.
- * Siempre cae a centro de celda si falta bubble sample (p. ej. geometría frozen).
+ * Siempre cae a centro de celda si falta bubble sample o r es inválido.
  */
 export function CalifacilOmrReviewOverlay({
   geometry,
@@ -85,14 +105,14 @@ export function CalifacilOmrReviewOverlay({
       }
     : null;
 
-  const strokeBase = Math.max(2, W * 0.005);
-  const whiteStroke = Math.max(2.2, strokeBase * 1.1);
+  const strokeBase = Math.max(2, Math.min(4, W * 0.004));
+  const whiteStroke = Math.max(2, strokeBase);
 
   return (
     <svg
       className="pointer-events-none absolute left-0 top-0 h-full w-full"
       viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
+      preserveAspectRatio="xMidYMid meet"
       shapeRendering="geometricPrecision"
       aria-hidden
     >

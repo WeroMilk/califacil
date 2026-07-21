@@ -17,7 +17,7 @@ import {
   unifiedResultToMeta,
 } from '@/lib/omr/engine';
 
-const OMR_GRADE_SCAN_MAX_SIDE = 1000;
+const OMR_GRADE_SCAN_MAX_SIDE = 900;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -38,13 +38,15 @@ function finalizeUnifiedDisplayMeta(
         displayCanvas.height
       )
     : null;
-  const hasEngineBubbles =
+  const hasSaneEngineBubbles =
     !!geometry?.bubbles &&
     geometry.bubbles.length >= rows &&
-    geometry.bubbles.some((row) => row?.some((b) => b.r > 0));
+    geometry.bubbles.some((row) =>
+      row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
+    );
 
-  // Móvil: si el engine no dejó bubbles, re-anclar en display (misma lectura, anillos visibles).
-  if (opts?.skipBubbleReattach && hasEngineBubbles) {
+  // Móvil: reutilizar bubbles sanos; si r/cx basura → re-anclar en display.
+  if (opts?.skipBubbleReattach && hasSaneEngineBubbles) {
     return {
       ...meta,
       geometry,
@@ -125,11 +127,11 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 12;
+const MOBILE_FAST_OPTIMIZE_ITERS = 8;
 
 /**
- * Perfil móvil ultrágil: 12 iters, stagnant 5. Nunca escalate.
- * Sin warp de referencia (skip en prepare); skipBubbleReattach conserva centros del engine.
+ * Perfil móvil ultrágil: 8 iters, stagnant 4. Nunca escalate ni desktop recovery.
+ * Sin warp de referencia (skip en prepare); skipBubbleReattach conserva centros sanos.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
@@ -144,7 +146,7 @@ export async function scanWarpedGradeMobileAsync(
   const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
-    stagnantLimit: 5,
+    stagnantLimit: 4,
   });
   let meta = finalizeUnifiedDisplayMeta(
     displayCanvas,
