@@ -846,8 +846,8 @@ export default function ExamResultsPage() {
                   No hay resultados aún
                 </div>
               ) : (
-                <div className="w-full min-w-0">
-                  <table className="w-full table-fixed text-sm">
+                <div className="w-full min-w-0 overflow-x-auto">
+                  <table className="w-full min-w-[18rem] table-fixed text-sm">
                     <thead>
                       <tr className="border-b">
                         <th className="w-[36%] py-2 pl-0 pr-2 text-left font-semibold sm:w-auto sm:py-3 sm:px-4 sm:pl-4">

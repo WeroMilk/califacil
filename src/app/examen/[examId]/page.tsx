@@ -1113,7 +1113,8 @@ export default function StudentExamPage() {
 
       <div
         className={cn(
-          'app-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pb-28 pt-5 sm:px-4 sm:pt-8',
+          'app-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 pt-5 sm:px-4 sm:pt-8',
+          'pb-[max(7rem,calc(5.5rem+env(safe-area-inset-bottom,0px)))]',
           (mobileImmersive || fullscreenMode === 'pseudo') && 'exam-pseudo-fullscreen-scroll'
         )}
       >

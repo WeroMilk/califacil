@@ -36,6 +36,46 @@ type ScanCompleteModalProps = {
   onBackToCalificar: () => void;
 };
 
+function SheetPreviewBox({
+  previewSrc,
+  sheet,
+  maxHeight,
+  className,
+}: {
+  previewSrc: string;
+  sheet: ZipGradeSheetData;
+  maxHeight: string;
+  className?: string;
+}) {
+  const W = Math.max(1, sheet.geometry.imageWidth);
+  const H = Math.max(1, sheet.geometry.imageHeight);
+  return (
+    <div className={cn('flex w-full justify-center', className)}>
+      <div
+        className="relative mx-auto overflow-hidden rounded-md bg-white"
+        style={{
+          width: `min(100%, calc(${maxHeight} * ${W} / ${H}))`,
+          aspectRatio: `${W} / ${H}`,
+          maxHeight,
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={previewSrc}
+          alt="Hoja escaneada con clave"
+          className="absolute inset-0 z-0 h-full w-full object-contain"
+        />
+        <CalifacilOmrReviewOverlay
+          geometry={sheet.geometry}
+          picks={sheet.picks}
+          expectedPicks={sheet.expectedPicks}
+          rowCount={sheet.rowCount}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function MobileZipGradeScanCompleteModal({
   open,
   examTitle,
@@ -52,123 +92,99 @@ export function MobileZipGradeScanCompleteModal({
 }: ScanCompleteModalProps) {
   const showOverlayPreview = Boolean(sheet?.geometry && (sheet.previewUrl || previewUrl));
   const previewSrc = sheet?.previewUrl || previewUrl;
-  const overlayW = sheet ? Math.max(1, sheet.geometry.imageWidth) : 1;
-  const overlayH = sheet ? Math.max(1, sheet.geometry.imageHeight) : 1;
 
   if (!open || typeof document === 'undefined') return null;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[300] flex flex-col bg-black"
+      className="fixed inset-0 z-[300] flex flex-col bg-orange-50"
       style={{
         paddingTop: 'env(safe-area-inset-top)',
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
     >
-      {previewSrc && !showOverlayPreview ? (
-        <div className="pointer-events-none absolute inset-0 z-0 flex items-center justify-center overflow-hidden bg-orange-50/90">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={previewSrc}
-            alt=""
-            className="max-h-full max-w-full object-contain shadow-sm"
-          />
-        </div>
-      ) : null}
-
       <header className="relative z-10 flex shrink-0 items-center justify-between bg-orange-600 px-2 py-2.5 text-white">
         <button
           type="button"
-          className="flex min-w-[5.5rem] items-center gap-0.5 px-2 py-1 text-[17px] font-normal active:opacity-70"
+          className="flex min-h-11 min-w-[5.5rem] items-center gap-0.5 px-2 py-1 text-[17px] font-normal active:opacity-70"
           onClick={onBackToCalificar}
         >
           <ChevronLeft className="h-6 w-6" strokeWidth={2.25} />
           Calificar
         </button>
-        <span className="truncate px-2 text-center text-[13px] font-semibold uppercase tracking-[0.2em] opacity-95">
-          {examTitle ? examTitle.slice(0, 18) : 'CaliFácil'}
+        <span className="min-w-0 flex-1 truncate px-2 text-center text-[13px] font-semibold uppercase tracking-[0.2em] opacity-95">
+          {examTitle ? examTitle.slice(0, 22) : 'CaliFácil'}
         </span>
-        <span className="w-16" aria-hidden />
+        <span className="w-16 shrink-0" aria-hidden />
       </header>
 
-      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 py-4">
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-y-auto overscroll-contain px-4 py-4">
         <div
-          className="my-auto w-full max-w-sm animate-fade-in rounded-xl bg-white px-5 pb-4 pt-5 shadow-2xl ring-1 ring-black/5"
+          className="my-auto flex w-full max-w-sm flex-col rounded-xl bg-white shadow-2xl ring-1 ring-black/5"
           role="dialog"
           aria-labelledby="zipgrade-scan-title"
         >
-          <p id="zipgrade-scan-title" className="text-[13px] font-medium text-gray-500">
-            Nombre
-          </p>
-          <div className="mt-1 min-h-[2.75rem] rounded-lg border border-gray-200 bg-gray-50/80 px-2 py-1.5">
-            {nameCropUrl ? (
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={nameCropUrl}
-                alt="Nombre del alumno"
-                className="h-10 max-w-full object-contain object-left"
-              />
-            ) : studentName ? (
-              <p className="text-lg font-semibold text-gray-900">{studentName}</p>
-            ) : (
-              <p className="text-sm italic text-gray-400">Sin nombre detectado</p>
-            )}
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2 pt-5">
+            <p id="zipgrade-scan-title" className="text-[13px] font-medium text-gray-500">
+              Nombre
+            </p>
+            <div className="mt-1 flex min-h-11 items-center rounded-lg border border-gray-200 bg-gray-50/80 px-2 py-1.5">
+              {nameCropUrl ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={nameCropUrl}
+                  alt="Nombre del alumno"
+                  className="h-10 max-w-full object-contain object-left"
+                />
+              ) : studentName ? (
+                <p className="text-lg font-semibold text-gray-900">{studentName}</p>
+              ) : (
+                <p className="text-sm italic text-gray-400">Sin nombre detectado</p>
+              )}
+            </div>
+
+            <p className="mt-4 text-[13px] font-medium text-gray-500">Calificación</p>
+            <p className="mt-0.5 text-[2rem] font-bold leading-tight tracking-tight text-gray-950">
+              {score.correct}/{score.total} = {score.pct}%
+            </p>
+
+            <p className="mt-2 text-sm text-gray-500">
+              ID:{' '}
+              <span className="font-semibold text-gray-800 tabular-nums">
+                {controlNumber ?? '—'}
+              </span>
+            </p>
+
+            {showOverlayPreview && sheet && previewSrc ? (
+              <div className="mt-4 overflow-hidden rounded-lg border border-orange-100 bg-orange-50/40 p-2">
+                <SheetPreviewBox
+                  previewSrc={previewSrc}
+                  sheet={sheet}
+                  maxHeight="min(42dvh, 18rem)"
+                />
+                <p className="mt-2 px-1 text-center text-[11px] leading-snug text-gray-600">
+                  <span className="font-medium text-orange-600">Naranja</span> = clave ·{' '}
+                  <span className="font-medium text-green-700">Verde</span> = acierto ·{' '}
+                  <span className="font-medium text-red-600">Rojo</span> = error
+                </p>
+              </div>
+            ) : null}
           </div>
 
-          <p className="mt-4 text-[13px] font-medium text-gray-500">Calificación</p>
-          <p className="mt-0.5 text-[2rem] font-bold leading-tight tracking-tight text-gray-950">
-            {score.correct}/{score.total} = {score.pct}%
-          </p>
-
-          <p className="mt-2 text-sm text-gray-500">
-            ID:{' '}
-            <span className="font-semibold text-gray-800 tabular-nums">
-              {controlNumber ?? '—'}
-            </span>
-          </p>
-
-          {showOverlayPreview && sheet ? (
-            <div className="mt-4 overflow-hidden rounded-lg border border-orange-100 bg-orange-50/40 p-1">
-              <div className="flex w-full justify-center">
-                <div
-                  className="relative overflow-hidden rounded-md bg-white"
-                  style={{
-                    width: `min(100%, calc(min(38vh, 14rem) * ${overlayW} / ${overlayH}))`,
-                    aspectRatio: `${overlayW} / ${overlayH}`,
-                    maxHeight: 'min(38vh, 14rem)',
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewSrc!}
-                    alt="Hoja escaneada con clave"
-                    className="absolute inset-0 z-0 h-full w-full object-fill"
-                  />
-                  <CalifacilOmrReviewOverlay
-                    geometry={sheet.geometry}
-                    picks={sheet.picks}
-                    expectedPicks={sheet.expectedPicks}
-                    rowCount={sheet.rowCount}
-                  />
-                </div>
-              </div>
-              <p className="mt-2 px-1 text-center text-[11px] leading-snug text-gray-600">
-                <span className="font-medium text-orange-600">Naranja</span> = clave ·{' '}
-                <span className="font-medium text-green-700">Verde</span> = acierto ·{' '}
-                <span className="font-medium text-red-600">Rojo</span> = error
-              </p>
-            </div>
-          ) : null}
-
-          <div className="mt-5 space-y-2 border-t border-gray-100 pt-4">
+          <div className="shrink-0 space-y-2 border-t border-gray-100 px-5 py-4">
             <Button
               type="button"
-              className="w-full bg-orange-600 hover:bg-orange-700"
+              className="h-11 w-full bg-orange-600 hover:bg-orange-700"
               onClick={onRetake}
             >
               Calificar de nuevo
             </Button>
-            <Button type="button" variant="outline" className="w-full" onClick={onBackToCalificar}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full"
+              onClick={onBackToCalificar}
+            >
               Calificar otro examen
             </Button>
           </div>
@@ -228,9 +244,6 @@ export function MobileZipGradeReviewScreen({
 
   if (!open || !sheet || typeof document === 'undefined') return null;
 
-  const W = Math.max(1, sheet.geometry.imageWidth);
-  const H = Math.max(1, sheet.geometry.imageHeight);
-
   return createPortal(
     <div
       className="fixed inset-0 z-[290] flex flex-col bg-orange-50/40"
@@ -242,7 +255,7 @@ export function MobileZipGradeReviewScreen({
       <header className="flex shrink-0 items-center justify-between bg-orange-600 px-2 py-2.5 text-white shadow-sm">
         <button
           type="button"
-          className="flex min-w-[4.5rem] items-center gap-0.5 px-2 py-1 text-[17px] font-normal active:opacity-70"
+          className="flex min-h-11 min-w-[4.5rem] items-center gap-0.5 px-2 py-1 text-[17px] font-normal active:opacity-70"
           onClick={onBack}
         >
           <ChevronLeft className="h-6 w-6" strokeWidth={2.25} />
@@ -251,7 +264,7 @@ export function MobileZipGradeReviewScreen({
         <h1 className="text-[15px] font-semibold tracking-[0.12em]">REVISIÓN</h1>
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-lg active:bg-white/10"
+          className="flex h-11 w-11 items-center justify-center rounded-lg active:bg-white/10"
           aria-label="Menú"
           onClick={() => setMenuOpen((o) => !o)}
         >
@@ -265,7 +278,7 @@ export function MobileZipGradeReviewScreen({
             {onPickStudent ? (
               <button
                 type="button"
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
+                className="min-h-11 rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
                 onClick={() => {
                   setMenuOpen(false);
                   onPickStudent();
@@ -277,7 +290,7 @@ export function MobileZipGradeReviewScreen({
             {onExport ? (
               <button
                 type="button"
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
+                className="min-h-11 rounded-lg px-3 py-2 text-sm font-medium text-gray-800 active:bg-gray-100"
                 onClick={() => {
                   setMenuOpen(false);
                   onExport();
@@ -316,9 +329,11 @@ export function MobileZipGradeReviewScreen({
               className="max-h-12 max-w-[min(100%,18rem)] object-contain"
             />
           ) : studentName ? (
-            <p className="text-lg font-semibold text-gray-900">{studentName}</p>
+            <p className="truncate text-center text-lg font-semibold text-gray-900">
+              {studentName}
+            </p>
           ) : null}
-          <p className="text-xs text-gray-500">
+          <p className="max-w-full truncate text-center text-xs text-gray-500">
             {examTitle}
             {controlNumber ? (
               <>
@@ -330,35 +345,19 @@ export function MobileZipGradeReviewScreen({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-orange-50/50">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-orange-50/50">
         {tab === 'imagen' ? (
-          <div className="flex justify-center p-3">
-            <div className="flex w-full max-w-lg justify-center overflow-hidden rounded-lg border bg-white p-1 shadow-sm">
-              <div
-                className="relative overflow-hidden bg-white"
-                style={{
-                  width: `min(100%, calc(min(70vh, 28rem) * ${W} / ${H}))`,
-                  aspectRatio: `${W} / ${H}`,
-                  maxHeight: 'min(70vh, 28rem)',
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={sheet.previewUrl}
-                  alt="Hoja escaneada"
-                  className="absolute inset-0 z-0 h-full w-full object-fill"
-                />
-                <CalifacilOmrReviewOverlay
-                  geometry={sheet.geometry}
-                  picks={sheet.picks}
-                  expectedPicks={sheet.expectedPicks}
-                  rowCount={sheet.rowCount}
-                />
-              </div>
+          <div className="flex min-h-full items-center justify-center p-3">
+            <div className="w-full max-w-lg overflow-hidden rounded-lg border bg-white p-2 shadow-sm">
+              <SheetPreviewBox
+                previewSrc={sheet.previewUrl}
+                sheet={sheet}
+                maxHeight="min(58dvh, 28rem)"
+              />
             </div>
           </div>
         ) : (
-          <div className="space-y-3 p-4">{questionsContent}</div>
+          <div className="mx-auto max-w-lg space-y-3 p-4">{questionsContent}</div>
         )}
       </div>
 
@@ -385,7 +384,7 @@ export function MobileZipGradeReviewScreen({
                 key={id}
                 type="button"
                 className={cn(
-                  'rounded-full px-5 py-2 text-[13px] font-medium transition-all',
+                  'min-h-10 rounded-full px-5 py-2 text-[13px] font-medium transition-all',
                   tab === id
                     ? 'bg-white text-gray-900 shadow-sm'
                     : 'text-gray-600 active:bg-white/50'
@@ -409,12 +408,12 @@ export function MobileZipGradeReviewScreen({
         </div>
 
         <div className="flex gap-2 border-t border-gray-200 px-4 py-3">
-          <Button type="button" variant="outline" className="flex-1" onClick={onRetake}>
+          <Button type="button" variant="outline" className="h-11 flex-1" onClick={onRetake}>
             Otra foto
           </Button>
           <Button
             type="button"
-            className="flex-1 bg-orange-600 hover:bg-orange-700"
+            className="h-11 flex-1 bg-orange-600 hover:bg-orange-700"
             onClick={onSave}
           >
             Guardar
@@ -449,18 +448,21 @@ export function MobileZipGradeStudentPicker({
 
   return createPortal(
     <div className="fixed inset-0 z-[310] flex flex-col justify-end bg-black/40">
-      <button type="button" className="flex-1" aria-label="Cerrar" onClick={onClose} />
-      <div className="max-h-[70vh] overflow-hidden rounded-t-2xl bg-white shadow-2xl">
-        <div className="border-b border-gray-100 bg-orange-50/60 px-4 py-3">
+      <button type="button" className="min-h-0 flex-1" aria-label="Cerrar" onClick={onClose} />
+      <div
+        className="flex max-h-[min(75dvh,calc(100dvh-2rem))] flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="shrink-0 border-b border-gray-100 bg-orange-50/60 px-4 py-3.5">
           <p className="text-center text-[15px] font-semibold text-gray-900">Alumno</p>
         </div>
-        <ul className="max-h-[55vh] overflow-y-auto">
+        <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {autoOptionId !== undefined && autoOptionLabel !== undefined ? (
             <li>
               <button
                 type="button"
                 className={cn(
-                  'flex w-full items-center justify-between border-b border-gray-50 px-4 py-3.5 text-left text-[17px] active:bg-gray-50',
+                  'flex min-h-12 w-full items-center justify-between border-b border-gray-50 px-4 py-3.5 text-left text-[17px] active:bg-gray-50',
                   selectedId === autoOptionId && 'bg-orange-50 font-semibold text-orange-900'
                 )}
                 onClick={() => {
@@ -477,7 +479,7 @@ export function MobileZipGradeStudentPicker({
               <button
                 type="button"
                 className={cn(
-                  'flex w-full items-center justify-between border-b border-gray-50 px-4 py-3.5 text-left text-[17px] active:bg-gray-50',
+                  'flex min-h-12 w-full items-center justify-between gap-3 border-b border-gray-50 px-4 py-3.5 text-left text-[17px] active:bg-gray-50',
                   selectedId === s.id && 'bg-orange-50 font-semibold text-orange-900'
                 )}
                 onClick={() => {
@@ -485,9 +487,11 @@ export function MobileZipGradeStudentPicker({
                   onClose();
                 }}
               >
-                <span>{s.name}</span>
+                <span className="min-w-0 flex-1 truncate">{s.name}</span>
                 {s.control_number ? (
-                  <span className="text-sm tabular-nums text-gray-500">{s.control_number}</span>
+                  <span className="shrink-0 text-sm tabular-nums text-gray-500">
+                    {s.control_number}
+                  </span>
                 ) : null}
               </button>
             </li>

@@ -132,7 +132,13 @@ export default function BillingPage() {
   if (!user) return null;
 
   return (
-    <div className="app-scroll flex h-full overflow-y-auto px-4 py-6 sm:py-8 md:px-8">
+    <div
+      className="app-scroll flex h-full overflow-y-auto overscroll-contain px-4 py-6 sm:py-8 md:px-8"
+      style={{
+        paddingTop: 'max(1.5rem, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 0px))',
+      }}
+    >
       <div className="mx-auto flex w-full max-w-6xl flex-col items-center">
         <div className="mb-6 flex w-full max-w-5xl items-center justify-end sm:mb-8">
           <Button

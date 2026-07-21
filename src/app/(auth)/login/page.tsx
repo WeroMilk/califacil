@@ -75,7 +75,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-white/35 backdrop-blur-[2px]">
+    <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain bg-white/35 backdrop-blur-[2px]">
       <div
         className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 sm:px-6 lg:px-10"
         style={{

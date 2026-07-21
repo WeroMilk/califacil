@@ -200,8 +200,8 @@ export default function DashboardLayout({
           className={cn(
             'mx-auto min-h-0 w-full max-w-[1500px] flex-1 overscroll-contain sm:px-5 sm:pt-4 lg:px-6 lg:pb-4 xl:px-8',
             isCalificarRoute
-              ? 'px-0 pt-0 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:px-6 lg:pt-4 lg:pb-4'
-              : 'px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3',
+              ? 'flex flex-col px-0 pt-0 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))] lg:px-6 lg:pt-4 lg:pb-4'
+              : 'px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-5',
             dashboardHome
               ? 'flex flex-col max-sm:overflow-y-auto max-sm:app-scroll sm:overflow-hidden'
               : 'app-scroll overflow-y-auto'
@@ -216,7 +216,7 @@ export default function DashboardLayout({
           style={{ paddingBottom: 'max(0.35rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label="Navegación principal"
         >
-          <div className="mx-auto flex max-w-lg items-stretch justify-around pt-1">
+          <div className="mx-auto flex max-w-lg items-stretch justify-around px-1 pt-1">
             {navItems.map((item) => {
               const active = navActive(pathname, item.href);
               return (
@@ -226,12 +226,12 @@ export default function DashboardLayout({
                   onClick={() => router.push(item.href)}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex min-w-0 flex-1 cursor-pointer touch-manipulation flex-col items-center justify-center gap-0.5 rounded-lg border-0 bg-transparent py-2 text-[11px] font-medium leading-tight transition-colors',
+                    'flex min-h-12 min-w-0 flex-1 cursor-pointer touch-manipulation flex-col items-center justify-center gap-0.5 rounded-lg border-0 bg-transparent py-1.5 text-[11px] font-medium leading-tight transition-colors',
                     active ? 'text-orange-600' : 'text-gray-500 active:bg-gray-50'
                   )}
                 >
                   <item.icon className="h-5 w-5 shrink-0" strokeWidth={active ? 2.5 : 2} />
-                  <span className="truncate px-0.5">{item.label}</span>
+                  <span className="max-w-full truncate px-0.5 text-center">{item.label}</span>
                 </button>
               );
             })}

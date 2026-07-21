@@ -603,8 +603,8 @@ export function MobileSheetScanReview({
           <div className="flex h-full flex-col items-center justify-center">
             <div
               ref={alignSurfaceRef}
-              className="relative w-full max-w-md touch-none overflow-hidden rounded-lg bg-black/40 shadow-2xl"
-              style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(70vh, 32rem)' }}
+              className="relative mx-auto w-full max-w-md touch-none overflow-hidden rounded-lg bg-black/40 shadow-2xl"
+              style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(58dvh, 32rem)' }}
               onPointerMove={handleOrangePointerMove}
               onPointerUp={handleOrangePointerUp}
               onPointerCancel={handleOrangePointerUp}

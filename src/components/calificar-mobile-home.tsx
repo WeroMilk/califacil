@@ -119,8 +119,8 @@ export function CalificarMobileHome({
     !examLoading;
 
   return (
-    <div className="calificar-mobile-enter flex min-h-full flex-col lg:hidden">
-      <div className="mx-auto w-full max-w-7xl flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-2">
+    <div className="calificar-mobile-enter flex min-h-0 flex-1 flex-col lg:hidden">
+      <div className="mx-auto w-full max-w-lg flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 pb-4 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
           <p className="mt-1 text-sm text-gray-600">
@@ -199,7 +199,7 @@ export function CalificarMobileHome({
         className="shrink-0 border-t border-orange-100/90 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-md"
         style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
       >
-        <div className="mx-auto w-full max-w-7xl space-y-2">
+        <div className="mx-auto w-full max-w-lg space-y-2">
           <Button
             type="button"
             disabled={!readyToScan || scanBusy}
@@ -235,11 +235,14 @@ export function CalificarMobileHome({
             aria-label="Cerrar"
             onClick={() => setExamPickerOpen(false)}
           />
-          <div className="max-h-[70vh] overflow-hidden rounded-t-2xl bg-white shadow-2xl">
-            <div className="border-b border-orange-100 bg-orange-50/60 px-4 py-3.5">
+          <div
+            className="flex max-h-[min(75dvh,calc(100dvh-2rem))] flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="shrink-0 border-b border-orange-100 bg-orange-50/60 px-4 py-3.5">
               <p className="text-center text-sm font-semibold text-gray-900">Elegir examen</p>
             </div>
-            <ul className="max-h-[55vh] overflow-y-auto">
+            <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {exams.length === 0 ? (
                 <li className="px-4 py-8 text-center text-sm text-gray-500">
                   No hay exámenes publicados.
@@ -250,7 +253,7 @@ export function CalificarMobileHome({
                     <button
                       type="button"
                       className={cn(
-                        'flex w-full items-center gap-3 border-b border-gray-100 px-4 py-3.5 text-left active:bg-orange-50/60',
+                        'flex min-h-12 w-full items-center gap-3 border-b border-gray-100 px-4 py-3.5 text-left active:bg-orange-50/60',
                         examId === e.id && 'bg-orange-50 text-orange-900'
                       )}
                       onClick={() => {
