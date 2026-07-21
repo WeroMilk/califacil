@@ -17,7 +17,7 @@ import {
   unifiedResultToMeta,
 } from '@/lib/omr/engine';
 
-const OMR_GRADE_SCAN_MAX_SIDE = 900;
+const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -127,11 +127,11 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 8;
+const MOBILE_FAST_OPTIMIZE_ITERS = 40;
 
 /**
- * Perfil móvil ultrágil: 8 iters, stagnant 4. Nunca escalate ni desktop recovery.
- * Sin warp de referencia (skip en prepare); skipBubbleReattach conserva centros sanos.
+ * Perfil móvil: 40 iters, stagnant 8. Sin escalate ni strip full.
+ * Clave del examen (expectedPicks) se aplica en el popup, no aquí.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
@@ -146,14 +146,14 @@ export async function scanWarpedGradeMobileAsync(
   const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
-    stagnantLimit: 4,
+    stagnantLimit: 8,
   });
   let meta = finalizeUnifiedDisplayMeta(
     displayCanvas,
     unifiedResultToMeta(unified),
     rows,
     columns,
-    { skipBubbleReattach: true }
+    { skipBubbleReattach: false }
   );
   meta = sanitizeAnswerSheetOmrMeta(meta, rows);
   return meta;

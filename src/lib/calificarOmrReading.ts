@@ -633,7 +633,11 @@ export function buildCalifacilOmrReadingOverride(
   liveLockedAnswers: Record<string, string>,
   warpAlignment: WarpAlignmentReport | null = null
 ): CalifacilOmrReadingResult {
-  const sanitized = isAnswerSheetOmrMostlyBlank(meta, chunk.length)
+  const resolvedBefore = meta.picks.slice(0, chunk.length).filter((p) => p != null).length;
+  // Clave del examen se aplica después; aquí solo no borrar lecturas útiles.
+  const mostlyBlank =
+    isAnswerSheetOmrMostlyBlank(meta, chunk.length) && resolvedBefore < 3;
+  const sanitized = mostlyBlank
     ? {
         ...meta,
         picks: Array(chunk.length).fill(null) as (number | null)[],
@@ -646,14 +650,9 @@ export function buildCalifacilOmrReadingOverride(
         needsVisionAssist: false,
       }
     : meta;
-  let raw = [...sanitized.picks];
-  let mapped = mapRawToDraftDetailed(raw, chunk);
+  const raw = [...sanitized.picks];
+  const mapped = mapRawToDraftDetailed(raw, chunk);
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
-  const mostlyBlank = isAnswerSheetOmrMostlyBlank(sanitized, chunk.length);
-  if (mostlyBlank) {
-    raw = raw.map(() => null);
-    mapped = mapRawToDraftDetailed(raw, chunk);
-  }
 
   const ambiguousIdx = sanitized.rows
     .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))

@@ -7,7 +7,10 @@ type Props = {
   geometry: CalifacilOmrScanGeometry;
   /** Índice de columna elegido por fila (0 = A), null si no hay lectura. */
   picks: (number | null)[];
-  /** Índice de columna correcta esperada por fila (0 = A), null si no aplica. */
+  /**
+   * Índice de columna correcta esperada por fila (clave DEL EXAMEN ACTIVO).
+   * Viene de correct_answer en BD — distinta por cada examen.
+   */
   expectedPicks?: (number | null)[];
   /** Opacidad visual del overlay esperado (0..1). */
   expectedOpacity?: number;
@@ -20,23 +23,6 @@ type Props = {
 type BubbleCircle = { cx: number; cy: number; r: number };
 
 const RADIUS_SCALE = 0.42;
-/** Radio normalizado (fracción de minDim) válido para bubbles del engine. */
-const SANE_BUBBLE_R_MIN = 0.002;
-const SANE_BUBBLE_R_MAX = 0.06;
-
-function bubbleSampleToCircle(
-  bubble: { cx: number; cy: number; r: number },
-  imageW: number,
-  imageH: number,
-  maxRPx: number
-): BubbleCircle {
-  const minDim = Math.min(imageW, imageH);
-  return {
-    cx: bubble.cx * imageW,
-    cy: bubble.cy * imageH,
-    r: Math.min(maxRPx, Math.max(6, bubble.r * minDim)),
-  };
-}
 
 function cellToBubbleCircle(
   cell: { x: number; y: number; w: number; h: number },
@@ -53,36 +39,9 @@ function cellToBubbleCircle(
   };
 }
 
-function isSaneBubbleR(r: number): boolean {
-  return Number.isFinite(r) && r > SANE_BUBBLE_R_MIN && r < SANE_BUBBLE_R_MAX;
-}
-
-function resolveCircle(
-  bubble: { cx: number; cy: number; r: number } | null | undefined,
-  cell: { x: number; y: number; w: number; h: number } | null | undefined,
-  imageW: number,
-  imageH: number
-): BubbleCircle | null {
-  const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
-  const maxRPx = fromCell?.r ?? Math.min(imageW, imageH) * 0.04;
-  // Bubble solo si r normalizado es sano; si no, centro de celda (evita manchas blancas).
-  if (bubble && isSaneBubbleR(bubble.r)) {
-    const fromBubble = bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
-    if (fromCell) {
-      return {
-        cx: fromBubble.cx,
-        cy: fromBubble.cy,
-        r: Math.min(fromBubble.r, fromCell.r),
-      };
-    }
-    return fromBubble;
-  }
-  return fromCell;
-}
-
 /**
- * Superpone bolitas sólidas: naranja = clave, verde = acierto, rojo = error.
- * Siempre cae a centro de celda si falta bubble sample o r es inválido.
+ * Bolitas naranja (clave del examen) / verde (acierto) / rojo (error).
+ * Solo centros de celda — evita manchas por bubbles.r basura.
  */
 export function CalifacilOmrReviewOverlay({
   geometry,
@@ -105,8 +64,7 @@ export function CalifacilOmrReviewOverlay({
       }
     : null;
 
-  const strokeBase = Math.max(2, Math.min(4, W * 0.004));
-  const whiteStroke = Math.max(2, strokeBase);
+  const whiteStroke = 2.5;
 
   return (
     <svg
@@ -136,14 +94,13 @@ export function CalifacilOmrReviewOverlay({
             expectedPick < rowCells.length;
 
           const expectedCell = hasExpected ? rowCells[expectedPick] : null;
-          const expectedBubble = hasExpected ? geometry.bubbles?.[row]?.[expectedPick!] : null;
-          const expectedCircle = resolveCircle(expectedBubble, expectedCell, W, H);
+          const expectedCircle = expectedCell
+            ? cellToBubbleCircle(expectedCell, W, H)
+            : null;
 
           const pickCell =
             pick !== null && pick >= 0 && pick < rowCells.length ? rowCells[pick] : null;
-          const pickBubble =
-            pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
-          const pickCircle = resolveCircle(pickBubble, pickCell, W, H);
+          const pickCircle = pickCell ? cellToBubbleCircle(pickCell, W, H) : null;
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
           const isWrong = hasExpected && pick !== null && pick !== expectedPick;
@@ -151,7 +108,6 @@ export function CalifacilOmrReviewOverlay({
 
           return (
             <g key={row}>
-              {/* Clave naranja (si no es acierto: el acierto se pinta verde encima). */}
               {expectedCircle && !isCorrect ? (
                 <circle
                   cx={expectedCircle.cx}
@@ -160,11 +116,10 @@ export function CalifacilOmrReviewOverlay({
                   fill={`rgba(234,88,12,${Math.max(0, Math.min(1, expectedOpacity))})`}
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
-                  strokeDasharray={isUnread ? `${strokeBase * 2.5} ${strokeBase * 1.6}` : undefined}
+                  strokeDasharray={isUnread ? '6 4' : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {/* Acierto: verde sobre la burbuja seleccionada (= clave). */}
               {isCorrect && (pickCircle || expectedCircle) ? (
                 <circle
                   cx={(pickCircle ?? expectedCircle)!.cx}
@@ -176,7 +131,6 @@ export function CalifacilOmrReviewOverlay({
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {/* Error: rojo sobre la burbuja que marcó el alumno. */}
               {isWrong && pickCircle ? (
                 <circle
                   cx={pickCircle.cx}
@@ -188,7 +142,6 @@ export function CalifacilOmrReviewOverlay({
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {/* Sin clave: verde en la lectura. */}
               {!hasExpected && pickCircle ? (
                 <circle
                   cx={pickCircle.cx}

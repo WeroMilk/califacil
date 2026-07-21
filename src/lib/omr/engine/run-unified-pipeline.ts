@@ -7,6 +7,7 @@ import {
 import {
   shouldUseStripFallback,
   runStripFallback,
+  runStripFallbackFast,
   isStripGeometryMisaligned,
   hasStrongCircleGeometry,
   FALLBACK_THRESHOLDS,
@@ -25,6 +26,7 @@ import {
   attachConvergenceToQuality,
   shouldKeepFrozenOverStrip,
   canRunAuthoritativeRead,
+  FREEZE_GATE,
 } from '@/lib/omr/engine/freeze-gate';
 import type { OptimizeResult } from '@/lib/omr/engine/optimize-geometry';
 import type { InitialGeometryResult } from '@/lib/omr/engine/detect-initial-geometry';
@@ -224,7 +226,9 @@ export function runUnifiedOmrPipeline(
         initial,
       });
     }
-    const strip = runStripFallback(canvas, cols, rows);
+    const strip = fastMode
+      ? runStripFallbackFast(canvas, cols, rows)
+      : runStripFallback(canvas, cols, rows);
     const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
     const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
     return {
@@ -249,7 +253,9 @@ export function runUnifiedOmrPipeline(
     if (!fastMode && preferDesktopTierRecovery(rows, cols)) {
       return buildDesktopTierRecoveryResult(canvas, cols, rows, t0, 'initial_geometry_missing');
     }
-    const strip = runStripFallback(canvas, cols, rows);
+    const strip = fastMode
+      ? runStripFallbackFast(canvas, cols, rows)
+      : runStripFallback(canvas, cols, rows);
     const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
     const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
     return {
@@ -281,11 +287,16 @@ export function runUnifiedOmrPipeline(
       initial.bubbleFit >= FALLBACK_THRESHOLDS.minGeometryQuality,
   });
 
-  const authoritativeOk = canRunAuthoritativeRead({
-    skipOptimizeUsed: false,
-    converged: optimized.converged,
-    meanCenterErrorPx: optimized.meanCenterErrorPx,
-  });
+  const resolvedAfterOptimize = optimized.read.picks.filter((p) => p != null).length;
+  const authoritativeOk =
+    canRunAuthoritativeRead({
+      skipOptimizeUsed: false,
+      converged: optimized.converged,
+      meanCenterErrorPx: optimized.meanCenterErrorPx,
+    }) ||
+    (fastMode &&
+      optimized.meanCenterErrorPx <= FREEZE_GATE.maxMeanCenterErrorPx * 3 &&
+      resolvedAfterOptimize >= Math.ceil(rows * 0.5));
 
   if (!authoritativeOk && !(initial && hasStrongCircleGeometry(initial, rows, cols))) {
     if (
@@ -301,25 +312,28 @@ export function runUnifiedOmrPipeline(
         { initial, optimized }
       );
     }
-    const strip = runStripFallback(canvas, cols, rows);
-    const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
-    const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-    return {
-      meta: {
-        ...strip,
-        controlNumberDigits: strip.controlNumberDigits.length
-          ? strip.controlNumberDigits
-          : control.digits,
-        controlNumber: strip.controlNumber ?? control.controlNumber,
-        reviewSourceCanvas: canvas,
-        usedFallback: true,
-        unifiedEngine: true,
-      },
-      fallbackReason: optimized.converged ? 'low_geometry_quality' : 'optimization_not_converged',
-      processingMs,
-      meanCenterErrorPx: optimized.meanCenterErrorPx,
-      geometryQuality: optimized.bestScore,
-    };
+    // fastMode: no strip full — usar mejor frozen del optimize más abajo.
+    if (!fastMode) {
+      const strip = runStripFallback(canvas, cols, rows);
+      const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
+      const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+      return {
+        meta: {
+          ...strip,
+          controlNumberDigits: strip.controlNumberDigits.length
+            ? strip.controlNumberDigits
+            : control.digits,
+          controlNumber: strip.controlNumber ?? control.controlNumber,
+          reviewSourceCanvas: canvas,
+          usedFallback: true,
+          unifiedEngine: true,
+        },
+        fallbackReason: optimized.converged ? 'low_geometry_quality' : 'optimization_not_converged',
+        processingMs,
+        meanCenterErrorPx: optimized.meanCenterErrorPx,
+        geometryQuality: optimized.bestScore,
+      };
+    }
   }
 
   let frozen: FrozenOmrGeometry = optimized.geometry;
@@ -382,30 +396,42 @@ export function runUnifiedOmrPipeline(
         optimized,
       });
     }
-    const strip = runStripFallback(canvas, cols, rows);
-    const stripMisaligned =
-      strip.geometry && isStripGeometryMisaligned(canvas, strip.geometry, rows);
-    if (!stripMisaligned) {
-      const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
-      const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-      return {
-        meta: {
-          ...strip,
-          controlNumberDigits: strip.controlNumberDigits.length
-            ? strip.controlNumberDigits
-            : control.digits,
-          controlNumber: strip.controlNumber ?? control.controlNumber,
-          reviewSourceCanvas: canvas,
-          usedFallback: true,
-          unifiedEngine: true,
+    if (fastMode) {
+      // Mantener frozen; no strip full en móvil.
+      frozen = {
+        ...frozen,
+        quality: {
+          ...frozen.quality,
+          issues: [...frozen.quality.issues, 'strip_fallback_skipped:fast_mode'],
         },
-        fallbackReason: postCheck.reason,
-        processingMs,
-        meanCenterErrorPx: optimized.meanCenterErrorPx,
-        geometryQuality: frozen.quality.score,
       };
+      read = readFrozenGeometry(canvas, frozen, rows, cols);
+    } else {
+      const strip = runStripFallback(canvas, cols, rows);
+      const stripMisaligned =
+        strip.geometry && isStripGeometryMisaligned(canvas, strip.geometry, rows);
+      if (!stripMisaligned) {
+        const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
+        const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+        return {
+          meta: {
+            ...strip,
+            controlNumberDigits: strip.controlNumberDigits.length
+              ? strip.controlNumberDigits
+              : control.digits,
+            controlNumber: strip.controlNumber ?? control.controlNumber,
+            reviewSourceCanvas: canvas,
+            usedFallback: true,
+            unifiedEngine: true,
+          },
+          fallbackReason: postCheck.reason,
+          processingMs,
+          meanCenterErrorPx: optimized.meanCenterErrorPx,
+          geometryQuality: frozen.quality.score,
+        };
+      }
+      read = readFrozenGeometry(canvas, frozen, rows, cols);
     }
-    read = readFrozenGeometry(canvas, frozen, rows, cols);
   } else if (postCheck.useFallback && keepFrozen) {
     frozen = {
       ...frozen,

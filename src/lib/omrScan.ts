@@ -8334,8 +8334,10 @@ export function sanitizeAnswerSheetOmrMeta(
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
   const blankInk = CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.2;
+  const resolved = meta.picks.slice(0, rows).filter((p) => p != null).length;
 
-  if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
+  // No borrar lecturas útiles (≥3 filas) por blank-check agresivo.
+  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) {
     return {
       ...meta,
       picks: Array(rows).fill(null),

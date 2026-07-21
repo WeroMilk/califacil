@@ -163,3 +163,18 @@ export function runStripFallback(
     rowCount: rows,
   });
 }
+
+/** Strip rápido para móvil (sin barrido full — evita ~45s). */
+export function runStripFallbackFast(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount?: number
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  return scanCalifacilOmrSheetWithMeta(canvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    qnumSweep: 'live',
+    columnShiftSweep: 'live',
+    rowCount: rows,
+  });
+}

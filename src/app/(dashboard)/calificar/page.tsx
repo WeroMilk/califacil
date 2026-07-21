@@ -273,9 +273,9 @@ const MOBILE_CAPTURE_MAX_SIDE = 1280;
 /** Calidad JPEG de vista previa y resultados móvil (ligera para no bloquear el popup). */
 const MOBILE_PREVIEW_JPEG_QUALITY = 0.82;
 /** Nitidez mínima del frame live (ROI) antes de disparar. */
-const MOBILE_MIN_LIVE_SHARPNESS = 10;
+const MOBILE_MIN_LIVE_SHARPNESS = 14;
 /** Nitidez mínima del fotograma enderezado (Laplaciano). */
-const MOBILE_MIN_WARPED_SHARPNESS = 10;
+const MOBILE_MIN_WARPED_SHARPNESS = 12;
 /** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
 const LOW_VISIBILITY_AUTOTORCH_TICKS = 3;
 /** Asimetría de luminancia izq/der que sugiere sombra fuerte en la hoja. */
@@ -1562,7 +1562,7 @@ export default function CalificarPage() {
         let nameCropUrl: string | null = null;
         const geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
-          const preview = canvasPreviewJpeg(reviewCanvas, 900, 0.65);
+          const preview = canvasPreviewJpeg(reviewCanvas, 900, 0.78);
           if (preview) {
             snapUrl = preview.dataUrl;
             snapW = preview.width;

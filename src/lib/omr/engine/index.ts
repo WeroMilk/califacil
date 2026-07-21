@@ -34,6 +34,7 @@ export {
 export {
   shouldUseStripFallback,
   runStripFallback,
+  runStripFallbackFast,
   FALLBACK_THRESHOLDS,
 } from '@/lib/omr/engine/fallback-strip';
 

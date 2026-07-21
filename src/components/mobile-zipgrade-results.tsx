@@ -142,7 +142,7 @@ export function MobileZipGradeScanCompleteModal({
                   <img
                     src={previewSrc!}
                     alt="Hoja escaneada con clave"
-                    className="absolute inset-0 z-0 h-full w-full object-fill"
+                    className="absolute inset-0 z-0 h-full w-full object-contain"
                   />
                   <CalifacilOmrReviewOverlay
                     geometry={sheet.geometry}
@@ -346,7 +346,7 @@ export function MobileZipGradeReviewScreen({
                 <img
                   src={sheet.previewUrl}
                   alt="Hoja escaneada"
-                  className="absolute inset-0 z-0 h-full w-full object-fill"
+                  className="absolute inset-0 z-0 h-full w-full object-contain"
                 />
                 <CalifacilOmrReviewOverlay
                   geometry={sheet.geometry}
