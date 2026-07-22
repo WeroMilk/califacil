@@ -533,14 +533,25 @@ function countDarkCornerPatches(
   ctx: CanvasRenderingContext2D,
   corners: { x: number; y: number }[],
   patchW: number,
-  patchH: number
+  patchH: number,
+  opts?: {
+    /** Por esquina [TL, TR, BL, BR]: junto a franja lateral. */
+    nearStripEdge?: boolean[];
+    /** Por esquina [TL, TR, BL, BR]: brillo en esquina superior. */
+    topCornerGlare?: boolean[];
+  }
 ): number {
   let darkCorners = 0;
-  for (const { x, y } of corners) {
+  for (let i = 0; i < corners.length; i++) {
+    const { x, y } = corners[i]!;
     const px = Math.max(0, Math.round(x));
     const py = Math.max(0, Math.round(y));
     const id = ctx.getImageData(px, py, patchW, patchH);
-    if (isPrintedCornerFiducialPatch(id, patchW, patchH)) darkCorners++;
+    const nearStrip = opts?.nearStripEdge?.[i] ?? false;
+    const topGlare = opts?.topCornerGlare?.[i] ?? false;
+    if (isPrintedCornerFiducialPatch(id, patchW, patchH, nearStrip, topGlare)) {
+      darkCorners++;
+    }
   }
   return darkCorners;
 }
@@ -579,8 +590,9 @@ function printedFiducialCornerPatches(
   W: number,
   H: number
 ): { corners: { x: number; y: number }[]; patchW: number; patchH: number } {
-  const patchW = Math.max(8, Math.round(W * 0.068));
-  const patchH = Math.max(8, Math.round(H * 0.068));
+  // Parches un poco más grandes: mejor con brillo / foto de monitor.
+  const patchW = Math.max(10, Math.round(W * 0.082));
+  const patchH = Math.max(10, Math.round(H * 0.082));
   const ids = ['tl', 'tr', 'bl', 'br'] as const;
   const corners = ids.map((id) => {
     const c = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
@@ -612,7 +624,12 @@ export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
 
   const patches = cornerMarkerPatchesForCanvas(W, H);
   if (patches) {
-    return countDarkCornerPatches(ctx, patches.corners, patches.patchW, patches.patchH);
+    const letter = isWarpedLetterCanvas(W, H);
+    // Misma tolerancia que el gate live: glare arriba + franja en derecha.
+    return countDarkCornerPatches(ctx, patches.corners, patches.patchW, patches.patchH, {
+      nearStripEdge: letter ? [false, true, false, true] : undefined,
+      topCornerGlare: letter ? [true, true, false, false] : undefined,
+    });
   }
 
   const patchW = Math.max(5, Math.round(W * 0.06));
@@ -625,7 +642,10 @@ export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
     { x: ix, y: H - patchH - iy },
     { x: W - patchW - ix, y: H - patchH - iy },
   ];
-  return countDarkCornerPatches(ctx, corners, patchW, patchH);
+  return countDarkCornerPatches(ctx, corners, patchW, patchH, {
+    nearStripEdge: [false, true, false, true],
+    topCornerGlare: [true, true, false, false],
+  });
 }
 
 function meanPatchDarkFraction(
@@ -3165,17 +3185,18 @@ function isPrintedCornerFiducialPatch(
   const innerMean = innerLumSum / innerCount;
   const outerMean = outerLumSum / outerCount;
 
-  const minDarkFrac = topCornerGlare ? 0.52 : nearStripEdge ? 0.58 : 0.65;
+  // Defaults más cercanos al gate live (antes 0.65 / 65 / 28 — demasiado estrictos post-warp).
+  const minDarkFrac = topCornerGlare ? 0.5 : nearStripEdge ? 0.54 : 0.55;
   if (innerDarkFrac < minDarkFrac) return false;
-  if (innerMean > (topCornerGlare ? 78 : nearStripEdge ? 68 : 65)) return false;
+  if (innerMean > (topCornerGlare ? 82 : nearStripEdge ? 74 : 72)) return false;
 
   const contrast = outerMean - innerMean;
-  if (contrast >= (topCornerGlare ? 18 : 28)) return true;
+  if (contrast >= (topCornerGlare ? 16 : nearStripEdge ? 18 : 22)) return true;
   // Junto a franjas negras laterales el anillo exterior también es oscuro.
-  if (innerDarkFrac >= 0.72 && innerMean <= 58) return true;
-  if (innerDarkFrac >= 0.8 && innerMean <= 48) return true;
-  if (nearStripEdge && innerDarkFrac >= 0.68 && innerMean <= 62) return true;
-  if (topCornerGlare && innerDarkFrac >= 0.58 && innerMean <= 72) return true;
+  if (innerDarkFrac >= 0.68 && innerMean <= 62) return true;
+  if (innerDarkFrac >= 0.75 && innerMean <= 52) return true;
+  if (nearStripEdge && innerDarkFrac >= 0.62 && innerMean <= 68) return true;
+  if (topCornerGlare && innerDarkFrac >= 0.55 && innerMean <= 76) return true;
 
   return false;
 }

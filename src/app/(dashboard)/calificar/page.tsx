@@ -72,6 +72,10 @@ import {
   MOBILE_LIVE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
   isMobileExamSheetReadyForCapture,
+  isCalifacilWarpedLetterCanvas,
+  isMobileWarpedAnswerSheetAcceptable,
+  countCalifacilCornerMarkers,
+  hasCalifacilAlignStrips,
   mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
@@ -903,19 +907,35 @@ export default function CalificarPage() {
 
   const runFastWarpedScan = useCallback(
     async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
-      // Carta fija 850×1100 + refine/crop impresión (mismas 4 esquinas siempre).
-      if (!isMobileLetterGradeCanvasReady(warped)) {
-        return {
-          meta: null as OmrScanMetaResult | null,
-          orangeFrameNorm: null as OmrNormRect | null,
-          docCanvas: warped,
-          rejectedCorners: true as const,
-        };
-      }
+      // Refine primero: a veces recupera una esquina; luego re-evaluar Acceptable.
       const docCanvas = prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
         preWarped: true,
         warpAlignment,
       });
+      const acceptable =
+        isMobileLetterGradeCanvasReady(docCanvas) ||
+        isMobileWarpedAnswerSheetAcceptable(warped);
+      if (!acceptable) {
+        const corners = Math.max(
+          countCalifacilCornerMarkers(docCanvas),
+          countCalifacilCornerMarkers(warped)
+        );
+        const strips =
+          hasCalifacilAlignStrips(docCanvas) || hasCalifacilAlignStrips(warped);
+        const letterOk =
+          isCalifacilWarpedLetterCanvas(docCanvas) ||
+          isCalifacilWarpedLetterCanvas(warped);
+        // Evita toast falso si hay franjas + ≥2 esquinas útiles (casi Acceptable).
+        const softOk = letterOk && strips && corners >= 2;
+        if (!softOk) {
+          return {
+            meta: null as OmrScanMetaResult | null,
+            orangeFrameNorm: null as OmrNormRect | null,
+            docCanvas,
+            rejectedCorners: true as const,
+          };
+        }
+      }
       const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =
         (meta.geometry
@@ -2489,6 +2509,10 @@ export default function CalificarPage() {
                 setLiveStatus(
                   'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
                 );
+              } else if (stripAligned) {
+                setLiveStatus(
+                  `Esquinas: ${fiducialCount}/4. Con franjas: basta 3 esquinas negras (o las 4).`
+                );
               } else {
                 setLiveStatus(
                   `Esquinas: ${fiducialCount}/4. Encuadra la hoja con las 4 esquinas negras visibles.`
@@ -2559,7 +2583,7 @@ export default function CalificarPage() {
                       !fiducialCorners[1] &&
                       (fiducialCorners[2] || fiducialCorners[3])
                       ? 'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
-                      : `Esquinas detectadas: ${fiducialCount}/4. Encuadra las esquinas negras del examen.`
+                      : `Esquinas: ${fiducialCount}/4. Con franjas laterales bastan 3 esquinas negras.`
                     : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
                       ? 'Acerca el teléfono hasta ver la hoja completa.'
                       : 'Ajusta la hoja — el interior debe verse blanco y nítido.'
@@ -3484,8 +3508,17 @@ export default function CalificarPage() {
               maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
               fast: true,
             });
-            warped = refined.canvas;
-            alignment = refined.alignment;
+            // No devolver warp débil: solo Acceptable (o carta + franjas + ≥2).
+            const cand = refined.canvas;
+            const corners = countCalifacilCornerMarkers(cand);
+            const soft =
+              isCalifacilWarpedLetterCanvas(cand) &&
+              hasCalifacilAlignStrips(cand) &&
+              corners >= 2;
+            if (isMobileWarpedAnswerSheetAcceptable(cand) || soft) {
+              warped = cand;
+              alignment = refined.alignment;
+            }
           }
         }
       }
@@ -3501,9 +3534,9 @@ export default function CalificarPage() {
       if (!warped) {
         clearPreview();
         toast.error(
-          'No se detectó la hoja. Usa hoja CaliFacil impresa o hoja estilo ZipGrade con esquinas negras.'
+          'No se detectó la hoja. Centra 3 esquinas + franjas laterales (o las 4 esquinas), con buena luz.'
         );
-        setLiveStatus('Centra la hoja completa con las 4 esquinas negras visibles.');
+        setLiveStatus('Centra la hoja: 3 esquinas negras + franjas laterales, o las 4.');
         return;
       }
 
@@ -3550,10 +3583,18 @@ export default function CalificarPage() {
         docCanvas = califacilFastScan.docCanvas;
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
+          const corners = countCalifacilCornerMarkers(warped);
+          const glareLikely = corners >= 2 && corners < 4;
           toast.error(
-            'Centra la hoja con las 4 esquinas negras visibles e intenta de nuevo.'
+            glareLikely
+              ? 'Mejora la luz y evita el brillo en las esquinas. Luego centra de nuevo.'
+              : 'Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.'
           );
-          setLiveStatus('Centra la hoja completa con las 4 esquinas negras visibles.');
+          setLiveStatus(
+            glareLikely
+              ? 'Reduce el brillo arriba y acerca las esquinas negras.'
+              : 'Centra la hoja: 3 esquinas + franjas laterales, o las 4.'
+          );
           if (video) resumeLiveVideoAfterScan(video);
           return;
         }
@@ -3758,8 +3799,8 @@ export default function CalificarPage() {
         );
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
-          setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
-          toast.error('Centra la hoja con las 4 esquinas negras visibles.');
+          setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
+          toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3822,7 +3863,7 @@ export default function CalificarPage() {
         );
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
-          setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
+          setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
@@ -3874,8 +3915,8 @@ export default function CalificarPage() {
         mobileReviewAlign.alignment
       );
       if (rejectedCorners || !meta) {
-        setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
-        toast.error('Centra la hoja con las 4 esquinas negras visibles.');
+        setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
+        toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
         return;
       }
       const readingOverride = isStrongMobileOmrMeta(meta, chunk.length)

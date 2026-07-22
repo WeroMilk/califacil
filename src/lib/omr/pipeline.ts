@@ -77,6 +77,7 @@ function finalizeWarpCandidate(
 /**
  * Warp rápido para captura móvil: un solo camino, sin barrido full-res.
  * Estilo ZipGrade: foto → documento enderezado en <1 s.
+ * Solo devuelve warped Acceptable (4 esquinas, o 3 + franjas) — evita doble rechazo al calificar.
  */
 export function warpCalifacilMobileCaptureFast(
   fullCanvas: HTMLCanvasElement,
@@ -91,17 +92,21 @@ export function warpCalifacilMobileCaptureFast(
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
 
+  const tryAccept = (
+    warped: HTMLCanvasElement | null,
+    alignment: WarpAlignmentReport | null,
+    source: MobileWarpPipelineResult['source']
+  ): MobileWarpPipelineResult | null => {
+    if (!warped || !isMobileWarpedAnswerSheetAcceptable(warped)) return null;
+    return { warped, alignment, source };
+  };
+
   if (opts?.frameQuad) {
     const frameWarp = warpAndValidateCalifacilSheet(fullCanvas, opts.frameQuad, maxErrorPx, {
       fast: true,
     });
-    // Un solo refine fast (ya hecho en warpAndValidate); sin deskew.
-    if (frameWarp.warped && isMobileWarpedAnswerSheetAcceptable(frameWarp.warped)) {
-      return { warped: frameWarp.warped, alignment: frameWarp.alignment, source: 'full_res' };
-    }
-    if (frameWarp.warped) {
-      return { warped: frameWarp.warped, alignment: frameWarp.alignment, source: 'full_res' };
-    }
+    const ok = tryAccept(frameWarp.warped, frameWarp.alignment, 'full_res');
+    if (ok) return ok;
   }
 
   const roiQuad = opts?.roiQuad;
@@ -120,9 +125,8 @@ export function warpCalifacilMobileCaptureFast(
     const roiWarp = warpAndValidateCalifacilSheet(fullCanvas, scaledQuad, maxErrorPx, {
       fast: true,
     });
-    if (roiWarp.warped && isMobileWarpedAnswerSheetAcceptable(roiWarp.warped)) {
-      return { warped: roiWarp.warped, alignment: roiWarp.alignment, source: 'roi' };
-    }
+    const ok = tryAccept(roiWarp.warped, roiWarp.alignment, 'roi');
+    if (ok) return ok;
   }
 
   const preprocessed = preprocessForSheetDetection(fullCanvas);
@@ -132,9 +136,8 @@ export function warpCalifacilMobileCaptureFast(
     const stripWarp = warpAndValidateCalifacilSheet(fullCanvas, stripQuad, maxErrorPx, {
       fast: true,
     });
-    if (stripWarp.warped && isMobileWarpedAnswerSheetAcceptable(stripWarp.warped)) {
-      return { warped: stripWarp.warped, alignment: stripWarp.alignment, source: 'strips' };
-    }
+    const ok = tryAccept(stripWarp.warped, stripWarp.alignment, 'strips');
+    if (ok) return ok;
   }
 
   const cornerWarped = warpCalifacilSheetFromCornerMarkers(fullCanvas);
@@ -145,12 +148,8 @@ export function warpCalifacilMobileCaptureFast(
       fallbackMaxErrorPx,
       true
     );
-    if (finalized.warped && isMobileWarpedAnswerSheetAcceptable(finalized.warped)) {
-      return { ...finalized, source: 'corner_markers' };
-    }
-    if (finalized.warped) {
-      return { ...finalized, source: 'corner_markers' };
-    }
+    const ok = tryAccept(finalized.warped, finalized.alignment, 'corner_markers');
+    if (ok) return ok;
   }
 
   return { warped: null, alignment: null, source: 'none' };
