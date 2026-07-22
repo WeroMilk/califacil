@@ -126,7 +126,7 @@ import {
   prepareCalifacilGradeScanCanvas,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
-import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
+import { scanWarpedGradeMobileAsync, isStrongMobileOmrMeta } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -902,10 +902,10 @@ export default function CalificarPage() {
 
   const runFastWarpedScan = useCallback(
     async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
+      // Misma prep que desktop: crop rápido + prepareReferenceGradeCanvas (30×4).
       const docCanvas = prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
         preWarped: true,
         warpAlignment,
-        skipReferenceAlign: true,
       });
       const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
       const orangeFrameNorm =
@@ -3590,24 +3590,27 @@ export default function CalificarPage() {
         );
       } else if (sheetKind === 'califacil' && califacilFastScan) {
         const warpMeta = califacilFastScan.meta;
-        readingOverride = buildCalifacilOmrReadingOverride(
-          {
-            ...warpMeta,
-            reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
-            geometry:
-              warpMeta.geometry != null
-                ? syncCalifacilOmrGeometryImageSize(
-                    warpMeta.geometry,
-                    docCanvas.width,
-                    docCanvas.height
-                  )
-                : null,
-          },
-          chunk,
-          docCanvas,
-          liveLockedAnswersRef.current,
-          alignment
-        );
+        // Solo override si la lectura es fuerte; si no, finalize usa el pipeline completo.
+        if (isStrongMobileOmrMeta(warpMeta, chunkRows)) {
+          readingOverride = buildCalifacilOmrReadingOverride(
+            {
+              ...warpMeta,
+              reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
+              geometry:
+                warpMeta.geometry != null
+                  ? syncCalifacilOmrGeometryImageSize(
+                      warpMeta.geometry,
+                      docCanvas.width,
+                      docCanvas.height
+                    )
+                  : null,
+            },
+            chunk,
+            docCanvas,
+            liveLockedAnswersRef.current,
+            alignment
+          );
+        }
       }
 
       const result = await finalizeCapturedSheet(docCanvas, undefined, {
@@ -3840,24 +3843,26 @@ export default function CalificarPage() {
         mobileReviewAlign.warped,
         mobileReviewAlign.alignment
       );
-      const readingOverride = buildCalifacilOmrReadingOverride(
-        {
-          ...meta,
-          reviewSourceCanvas: docCanvas,
-          geometry:
-            meta.geometry != null
-              ? syncCalifacilOmrGeometryImageSize(
-                  meta.geometry,
-                  docCanvas.width,
-                  docCanvas.height
-                )
-              : null,
-        },
-        chunk,
-        docCanvas,
-        liveLockedAnswersRef.current,
-        mobileReviewAlign.alignment
-      );
+      const readingOverride = isStrongMobileOmrMeta(meta, chunk.length)
+        ? buildCalifacilOmrReadingOverride(
+            {
+              ...meta,
+              reviewSourceCanvas: docCanvas,
+              geometry:
+                meta.geometry != null
+                  ? syncCalifacilOmrGeometryImageSize(
+                      meta.geometry,
+                      docCanvas.width,
+                      docCanvas.height
+                    )
+                  : null,
+            },
+            chunk,
+            docCanvas,
+            liveLockedAnswersRef.current,
+            mobileReviewAlign.alignment
+          )
+        : undefined;
       const result = await finalizeCapturedSheet(docCanvas, undefined, {
         preWarped: true,
         warpAlignment: mobileReviewAlign.alignment,

@@ -397,12 +397,37 @@ export function runUnifiedOmrPipeline(
       });
     }
     if (fastMode) {
-      // Mantener frozen; no strip full en móvil.
+      // Recovery barato en móvil: strip live (no full).
+      const strip = runStripFallbackFast(canvas, cols, rows);
+      const stripMisaligned =
+        strip.geometry && isStripGeometryMisaligned(canvas, strip.geometry, rows);
+      const stripResolved = strip.picks.filter((p) => p != null).length;
+      const frozenResolved = read.picks.filter((p) => p != null).length;
+      if (!stripMisaligned && stripResolved > frozenResolved) {
+        const control = readAnswerSheetControlNumberFromCanvas(canvas, rows);
+        const processingMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+        return {
+          meta: {
+            ...strip,
+            controlNumberDigits: strip.controlNumberDigits.length
+              ? strip.controlNumberDigits
+              : control.digits,
+            controlNumber: strip.controlNumber ?? control.controlNumber,
+            reviewSourceCanvas: canvas,
+            usedFallback: true,
+            unifiedEngine: true,
+          },
+          fallbackReason: postCheck.reason,
+          processingMs,
+          meanCenterErrorPx: optimized.meanCenterErrorPx,
+          geometryQuality: frozen.quality.score,
+        };
+      }
       frozen = {
         ...frozen,
         quality: {
           ...frozen.quality,
-          issues: [...frozen.quality.issues, 'strip_fallback_skipped:fast_mode'],
+          issues: [...frozen.quality.issues, 'strip_fallback_fast:kept_frozen'],
         },
       };
       read = readFrozenGeometry(canvas, frozen, rows, cols);

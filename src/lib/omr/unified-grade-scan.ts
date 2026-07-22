@@ -8,6 +8,7 @@ import {
   attachAnswerSheetReviewBubbleOverlay,
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
+  isAnswerSheetOmrMostlyBlank,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
 } from '@/lib/omrScan';
@@ -15,13 +16,41 @@ import {
   isUnifiedOmrEngineEnabled,
   runUnifiedOmrPipeline,
   unifiedResultToMeta,
+  runStripFallbackFast,
 } from '@/lib/omr/engine';
 
 const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
+/** Presupuesto móvil: cerca del default fast (80), sin llegar a los 320 de desktop. */
+const MOBILE_FAST_OPTIMIZE_ITERS = 100;
+const MOBILE_FAST_STAGNANT = 12;
+const MOBILE_RECOVERY_OPTIMIZE_ITERS = 160;
+
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
+}
+
+function countResolvedPicks(meta: OmrScanMetaResult, rows: number): number {
+  return meta.picks.slice(0, rows).filter((p) => p != null).length;
+}
+
+/** Lectura débil: pocos picks, blank falso o sesgo de columna. */
+export function isWeakMobileOmrMeta(meta: OmrScanMetaResult, rows: number): boolean {
+  const resolved = countResolvedPicks(meta, rows);
+  if (resolved < Math.ceil(rows * 0.45)) return true;
+  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) return true;
+  if (meta.maxSameColumnCount > Math.max(4, Math.round(rows * 0.35))) return true;
+  return false;
+}
+
+/** Lectura suficientemente buena para confiar en readingOverride (sin re-pipeline). */
+export function isStrongMobileOmrMeta(meta: OmrScanMetaResult, rows: number): boolean {
+  const resolved = countResolvedPicks(meta, rows);
+  if (resolved < Math.ceil(rows * 0.55)) return false;
+  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) return false;
+  if (meta.maxSameColumnCount > Math.max(4, Math.round(rows * 0.4))) return false;
+  return true;
 }
 
 function finalizeUnifiedDisplayMeta(
@@ -65,6 +94,21 @@ function finalizeUnifiedDisplayMeta(
     geometry: withOverlay.geometry,
     reviewSourceCanvas: displayCanvas,
   };
+}
+
+function pickBetterOmrMeta(
+  a: OmrScanMetaResult,
+  b: OmrScanMetaResult,
+  rows: number
+): OmrScanMetaResult {
+  const ra = countResolvedPicks(a, rows);
+  const rb = countResolvedPicks(b, rows);
+  if (rb !== ra) return rb > ra ? b : a;
+  // Preferir menos sesgo de columna.
+  if (b.maxSameColumnCount !== a.maxSameColumnCount) {
+    return b.maxSameColumnCount < a.maxSameColumnCount ? b : a;
+  }
+  return a;
 }
 
 export function scanDesktopGradeUnifiedOrLegacy(
@@ -127,10 +171,8 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
 
-const MOBILE_FAST_OPTIMIZE_ITERS = 40;
-
 /**
- * Perfil móvil: 40 iters, stagnant 8. Sin escalate ni strip full.
+ * Perfil móvil: ~100 iters + recovery (strip fast / optimize medio) si la lectura es débil.
  * Clave del examen (expectedPicks) se aplica en el popup, no aquí.
  */
 export async function scanWarpedGradeMobileAsync(
@@ -146,7 +188,7 @@ export async function scanWarpedGradeMobileAsync(
   const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
     maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
-    stagnantLimit: 8,
+    stagnantLimit: MOBILE_FAST_STAGNANT,
   });
   let meta = finalizeUnifiedDisplayMeta(
     displayCanvas,
@@ -156,7 +198,38 @@ export async function scanWarpedGradeMobileAsync(
     { skipBubbleReattach: false }
   );
   meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-  return meta;
+
+  if (!isWeakMobileOmrMeta(meta, rows)) {
+    return meta;
+  }
+
+  // Recovery barato: strip live sweeps.
+  const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+  let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
+    skipBubbleReattach: false,
+  });
+  stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+  meta = pickBetterOmrMeta(meta, stripMeta, rows);
+
+  if (!isWeakMobileOmrMeta(meta, rows)) {
+    return meta;
+  }
+
+  // Segundo pase: optimize más serio (sin fastMode) acotado a 160 iters.
+  const recovery = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+    fastMode: false,
+    maxOptimizeIterations: MOBILE_RECOVERY_OPTIMIZE_ITERS,
+    stagnantLimit: 16,
+  });
+  let recoveryMeta = finalizeUnifiedDisplayMeta(
+    displayCanvas,
+    unifiedResultToMeta(recovery),
+    rows,
+    columns,
+    { skipBubbleReattach: false }
+  );
+  recoveryMeta = sanitizeAnswerSheetOmrMeta(recoveryMeta, rows);
+  return pickBetterOmrMeta(meta, recoveryMeta, rows);
 }
 
 export function scanLiveOmrUnifiedOrLegacy(

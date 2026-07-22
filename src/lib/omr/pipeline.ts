@@ -377,21 +377,23 @@ export function prepareCalifacilGradeScanCanvas(
     preWarped?: boolean;
     warpAlignment?: WarpAlignmentReport | null;
     /**
-     * Móvil: no warp a 1230×1600, pero SÍ recorte a hoja (documento canónico).
-     * Así preview y geometry comparten el mismo espacio (bolitas sobre negras).
+     * Solo preview/debug: crop rápido sin alineación a referencia.
+     * La calificación final NO debe usar esto (desktop y móvil alinean igual).
      */
     skipReferenceAlign?: boolean;
   }
 ): HTMLCanvasElement {
   if (opts?.skipReferenceAlign) {
-    // Documento canónico: crop impresión + recorte a rejilla de bolitas (sin taskbar).
     const prepared =
       prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas;
     return cropCanvasToPrintedBubbleTable(prepared);
   }
   let out = canvas;
   if (opts?.preWarped) {
-    out = prepareMobileGradeDocumentCanvas(out, opts.warpAlignment);
+    // Rápido (sin deskew lento) + crop a bolitas; luego misma referencia que desktop.
+    out =
+      prepareMobileScannedDocumentCanvasFast(out, { skipPrintCrop: false }) ?? out;
+    out = cropCanvasToPrintedBubbleTable(out);
   }
   return prepareReferenceGradeCanvas(out, columns, rowCount);
 }
