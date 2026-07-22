@@ -25,7 +25,6 @@ import {
   type MobileGuideRoiCapture,
   type Point,
 } from '@/lib/omrScan';
-import { cropCanvasToPrintedBubbleTable } from '@/lib/omr/engine/detect-circles-grid';
 
 /** Misma resolución que el PDF rasterizado en calificar (referencia visual + OMR). */
 export const CALIFACIL_GRADE_DOCUMENT_MAX_SIDE = 1600;
@@ -368,6 +367,9 @@ export function normalizeCalifacilGradeDocumentCanvas(
 /**
  * Prepara cualquier captura (cámara, galería, PDF, escaneo) al mismo espacio de referencia
  * antes de leer burbujas OMR.
+ *
+ * Móvil preWarped: carta 850×1100 refinada + recorte a marco de impresión (sin crop a bbox
+ * de bolitas: así todas las capturas quedan orientadas igual, 4 esquinas fijas).
  */
 export function prepareCalifacilGradeScanCanvas(
   canvas: HTMLCanvasElement,
@@ -377,23 +379,31 @@ export function prepareCalifacilGradeScanCanvas(
     preWarped?: boolean;
     warpAlignment?: WarpAlignmentReport | null;
     /**
-     * Solo preview/debug: crop rápido sin alineación a referencia.
-     * La calificación final NO debe usar esto (desktop y móvil alinean igual).
+     * Solo preview/debug: crop impresión sin alineación a referencia 30×4.
      */
     skipReferenceAlign?: boolean;
   }
 ): HTMLCanvasElement {
   if (opts?.skipReferenceAlign) {
-    const prepared =
-      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas;
-    return cropCanvasToPrintedBubbleTable(prepared);
+    return (
+      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
+    );
   }
   let out = canvas;
   if (opts?.preWarped) {
-    // Rápido (sin deskew lento) + crop a bolitas; luego misma referencia que desktop.
+    // Refine fiduciales fast + crop marco impresión (sin deskew lento ni crop a bolitas).
     out =
       prepareMobileScannedDocumentCanvasFast(out, { skipPrintCrop: false }) ?? out;
-    out = cropCanvasToPrintedBubbleTable(out);
   }
+  // Bonus 30×4: homografía a canvas de referencia desktop.
   return prepareReferenceGradeCanvas(out, columns, rowCount);
+}
+
+/**
+ * True si la hoja warpeada tiene esquinas/fiduciales suficientes para calificar
+ * con orientación carta estable.
+ */
+export function isMobileLetterGradeCanvasReady(canvas: HTMLCanvasElement): boolean {
+  if (!isCalifacilWarpedLetterCanvas(canvas)) return false;
+  return isMobileWarpedAnswerSheetAcceptable(canvas);
 }

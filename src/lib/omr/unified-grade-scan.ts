@@ -22,10 +22,9 @@ import {
 const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
-/** Presupuesto móvil: cerca del default fast (80), sin llegar a los 320 de desktop. */
-const MOBILE_FAST_OPTIMIZE_ITERS = 100;
-const MOBILE_FAST_STAGNANT = 12;
-const MOBILE_RECOVERY_OPTIMIZE_ITERS = 160;
+/** Presupuesto móvil: un pase rápido (~70 iters). Sin recovery 160. */
+const MOBILE_FAST_OPTIMIZE_ITERS = 70;
+const MOBILE_FAST_STAGNANT = 10;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
@@ -172,7 +171,8 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
 }
 
 /**
- * Perfil móvil: ~100 iters + recovery (strip fast / optimize medio) si la lectura es débil.
+ * Perfil móvil: ~70 iters + strip fast solo si la lectura es débil.
+ * Sin segundo pase de 160 iters (evita «Calificando…» eterno).
  * Clave del examen (expectedPicks) se aplica en el popup, no aquí.
  */
 export async function scanWarpedGradeMobileAsync(
@@ -203,33 +203,13 @@ export async function scanWarpedGradeMobileAsync(
     return meta;
   }
 
-  // Recovery barato: strip live sweeps.
+  // Recovery barato: solo strip live sweeps (sin optimize 160).
   const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
   let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
     skipBubbleReattach: false,
   });
   stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
-  meta = pickBetterOmrMeta(meta, stripMeta, rows);
-
-  if (!isWeakMobileOmrMeta(meta, rows)) {
-    return meta;
-  }
-
-  // Segundo pase: optimize más serio (sin fastMode) acotado a 160 iters.
-  const recovery = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-    fastMode: false,
-    maxOptimizeIterations: MOBILE_RECOVERY_OPTIMIZE_ITERS,
-    stagnantLimit: 16,
-  });
-  let recoveryMeta = finalizeUnifiedDisplayMeta(
-    displayCanvas,
-    unifiedResultToMeta(recovery),
-    rows,
-    columns,
-    { skipBubbleReattach: false }
-  );
-  recoveryMeta = sanitizeAnswerSheetOmrMeta(recoveryMeta, rows);
-  return pickBetterOmrMeta(meta, recoveryMeta, rows);
+  return pickBetterOmrMeta(meta, stripMeta, rows);
 }
 
 export function scanLiveOmrUnifiedOrLegacy(

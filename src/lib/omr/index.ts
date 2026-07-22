@@ -8,6 +8,7 @@ export {
   normalizeCalifacilGradeDocumentCanvas,
   CALIFACIL_GRADE_DOCUMENT_MAX_SIDE,
   prepareCalifacilGradeScanCanvas,
+  isMobileLetterGradeCanvasReady,
   type MobileWarpPipelineResult,
   type NormalizeGradeDocumentResult,
   type RoiQuad,

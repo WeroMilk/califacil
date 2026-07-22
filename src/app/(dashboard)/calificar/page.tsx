@@ -124,6 +124,7 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
   prepareCalifacilGradeScanCanvas,
+  isMobileLetterGradeCanvasReady,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import { scanWarpedGradeMobileAsync, isStrongMobileOmrMeta } from '@/lib/omr/unified-grade-scan';
@@ -902,7 +903,15 @@ export default function CalificarPage() {
 
   const runFastWarpedScan = useCallback(
     async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
-      // Misma prep que desktop: crop rápido + prepareReferenceGradeCanvas (30×4).
+      // Carta fija 850×1100 + refine/crop impresión (mismas 4 esquinas siempre).
+      if (!isMobileLetterGradeCanvasReady(warped)) {
+        return {
+          meta: null as OmrScanMetaResult | null,
+          orangeFrameNorm: null as OmrNormRect | null,
+          docCanvas: warped,
+          rejectedCorners: true as const,
+        };
+      }
       const docCanvas = prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
         preWarped: true,
         warpAlignment,
@@ -912,7 +921,7 @@ export default function CalificarPage() {
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
           : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
-      return { meta, orangeFrameNorm, docCanvas };
+      return { meta, orangeFrameNorm, docCanvas, rejectedCorners: false as const };
     },
     [omrCols, omrRowCount]
   );
@@ -3539,6 +3548,15 @@ export default function CalificarPage() {
       if (sheetKind === 'califacil') {
         califacilFastScan = await runFastWarpedScan(warped, alignment);
         docCanvas = califacilFastScan.docCanvas;
+        if (califacilFastScan.rejectedCorners) {
+          clearPreview();
+          toast.error(
+            'Centra la hoja con las 4 esquinas negras visibles e intenta de nuevo.'
+          );
+          setLiveStatus('Centra la hoja completa con las 4 esquinas negras visibles.');
+          if (video) resumeLiveVideoAfterScan(video);
+          return;
+        }
       } else {
         const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, chunkRows);
         zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
@@ -3548,8 +3566,8 @@ export default function CalificarPage() {
       const hasOmr =
         sheetKind === 'califacil'
           ? Boolean(
-              califacilFastScan?.meta.geometry ||
-                califacilFastScan?.meta.picks.some((p) => p != null)
+              califacilFastScan?.meta?.geometry ||
+                califacilFastScan?.meta?.picks.some((p) => p != null)
             )
           : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
 
@@ -3588,7 +3606,7 @@ export default function CalificarPage() {
           liveLockedAnswersRef.current,
           alignment
         );
-      } else if (sheetKind === 'califacil' && califacilFastScan) {
+      } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
         // Solo override si la lectura es fuerte; si no, finalize usa el pipeline completo.
         if (isStrongMobileOmrMeta(warpMeta, chunkRows)) {
@@ -3734,8 +3752,16 @@ export default function CalificarPage() {
         if (scanGen !== reviewScanGenRef.current) return;
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
-        const { meta, orangeFrameNorm, docCanvas } = await runFastWarpedScan(warped, alignment);
+        const { meta, orangeFrameNorm, docCanvas, rejectedCorners } = await runFastWarpedScan(
+          warped,
+          alignment
+        );
         if (scanGen !== reviewScanGenRef.current) return;
+        if (rejectedCorners || !meta) {
+          setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
+          toast.error('Centra la hoja con las 4 esquinas negras visibles.');
+          return;
+        }
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
           setReviewStatus('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
@@ -3755,7 +3781,7 @@ export default function CalificarPage() {
           picks: [...meta.picks],
           draft: mapped.draft,
           previewUrl,
-          orangeFrameNorm,
+          orangeFrameNorm: orangeFrameNorm!,
         });
         setReviewStatus(null);
       } catch {
@@ -3790,11 +3816,15 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const { meta, orangeFrameNorm, docCanvas } = await runFastWarpedScan(
+        const { meta, orangeFrameNorm, docCanvas, rejectedCorners } = await runFastWarpedScan(
           mobileReviewAlign.warped,
           mobileReviewAlign.alignment
         );
         if (scanGen !== reviewScanGenRef.current) return;
+        if (rejectedCorners || !meta) {
+          setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
+          return;
+        }
         const mapped = mapRawToDraft([...meta.picks], chunk);
         if (!meta.geometry) {
           setReviewStatus('No se pudo leer con ese marco. Ajusta las esquinas.');
@@ -3839,10 +3869,15 @@ export default function CalificarPage() {
         setReviewStatus('No hay preguntas en esta hoja.');
         return;
       }
-      const { meta, docCanvas } = await runFastWarpedScan(
+      const { meta, docCanvas, rejectedCorners } = await runFastWarpedScan(
         mobileReviewAlign.warped,
         mobileReviewAlign.alignment
       );
+      if (rejectedCorners || !meta) {
+        setReviewStatus('Centra la hoja con las 4 esquinas negras visibles.');
+        toast.error('Centra la hoja con las 4 esquinas negras visibles.');
+        return;
+      }
       const readingOverride = isStrongMobileOmrMeta(meta, chunk.length)
         ? buildCalifacilOmrReadingOverride(
             {
