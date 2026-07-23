@@ -42,7 +42,7 @@ import {
   scaleReferenceLineYs,
 } from '@/lib/omr/reference-grade-merge';
 
-export const CALIFACIL_OMR_DEFAULT_ROWS = 10;
+export const CALIFACIL_OMR_DEFAULT_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
 
 export function clampCalifacilOmrRowCount(raw?: number): number {
@@ -6136,7 +6136,7 @@ export function hasCalifacilPrintedTableGrid(
   void columns;
   const rowCountsToTry = rowCount
     ? [clampCalifacilOmrRowCount(rowCount)]
-    : [10, 20, 30, CALIFACIL_OMR_DEFAULT_ROWS];
+    : [30, 20, 15, 10, CALIFACIL_OMR_DEFAULT_ROWS];
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
   const { width, height } = canvas;

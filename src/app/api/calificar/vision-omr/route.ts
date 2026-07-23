@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
+import { CALIFACIL_PRINT_MAX_QUESTIONS } from '@/lib/printExam';
 
 export const maxDuration = 60;
 
@@ -44,8 +45,11 @@ export async function POST(request: NextRequest) {
     if (!imageBase64 || typeof imageBase64 !== 'string') {
       return NextResponse.json({ error: 'Falta imageBase64' }, { status: 400 });
     }
-    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 10) {
-      return NextResponse.json({ error: 'rows inválido (1–10)' }, { status: 400 });
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > CALIFACIL_PRINT_MAX_QUESTIONS) {
+      return NextResponse.json(
+        { error: `rows inválido (1–${CALIFACIL_PRINT_MAX_QUESTIONS})` },
+        { status: 400 }
+      );
     }
 
     const focusSet =

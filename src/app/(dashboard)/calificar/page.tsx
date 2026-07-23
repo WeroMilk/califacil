@@ -1473,7 +1473,8 @@ export default function CalificarPage() {
           setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
           return { success: false };
         }
-        toast.message('Lectura parcial: se muestra el resultado con lo detectado.');
+        // Sin geometría del motor: se usará plantilla impresa (printExam) para el overlay.
+        toast.message('Lectura parcial: se muestra el resultado con la plantilla de la hoja.');
       }
 
       const {
@@ -1533,9 +1534,16 @@ export default function CalificarPage() {
           );
           return { success: false };
         }
-        toast.message(
-          `Lectura parcial (${mergedResolved}/${chunk.length}). Se abrió revisión para corregir manualmente.`
-        );
+        // skipReviewUi: no abrir revisión; en móvil cámara se califica con parciales = incorrectas.
+        if (isMobileCamera) {
+          toast.message(
+            `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
+          );
+        } else {
+          toast.message(
+            `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
+          );
+        }
       } else if (!isMobileCamera && mergedResolved < minResolved) {
         toast.message(
           `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
@@ -3291,18 +3299,23 @@ export default function CalificarPage() {
               toast.success('Calificación guardada.');
             }
           } catch (err: unknown) {
+            setAutoGradePersisted(false);
             const code = err instanceof Error ? err.message : '';
             if (code === 'incomplete_key') {
               toast.error('Clave automática incompleta. No se pudo guardar en la nube.');
             } else {
-              toast.error('No se pudo guardar en la nube. El resultado se muestra igual.');
+              toast.error(
+                isMobile
+                  ? 'No se pudo guardar la calificación. Revisa la conexión e inténtalo de nuevo desde Resultados.'
+                  : 'No se pudo guardar en la nube. El resultado se muestra igual.'
+              );
             }
           }
         })();
       } else {
         toast.message(
           studentId
-            ? 'Resultado calculado.'
+            ? 'Resultado calculado (no se guardó: sin permiso de clave o alumno).'
             : 'Resultado calculado. Elige al alumno manualmente si no se identificó en la hoja.'
         );
       }

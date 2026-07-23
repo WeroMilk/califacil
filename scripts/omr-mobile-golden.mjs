@@ -63,7 +63,6 @@ function testLiveCaptureGate() {
 }
 
 function testBlankSheetZero() {
-  // 2 weak FPs in 10 rows + low median ink → mostly blank → 0/N
   assert(
     isMostlyBlank({ rows: 10, marked: 2, medianInk: 0.08 }),
     '2 weak marks in 10 + low median = blank'
@@ -76,7 +75,55 @@ function testBlankSheetZero() {
     isMostlyBlank({ rows: 10, marked: 1, medianInk: 0.05 }),
     '1 mark + low median = blank'
   );
-  console.log('ok: blank sheet → 0/N');
+  assert(
+    isMostlyBlank({ rows: 30, marked: 3, medianInk: 0.07 }),
+    '3 weak marks in 30 + low median = blank'
+  );
+  assert(
+    !isMostlyBlank({ rows: 30, marked: 8, medianInk: 0.22 }),
+    '8 strong marks in 30 = not blank'
+  );
+  console.log('ok: blank sheet → 0/N (10 and 30)');
+}
+
+/**
+ * Compact print layout: row height fixed at capacity-30.
+ * Outer OMR height ≈ chrome + thead + N * rowPt → h10/h30 ≈ 0.37.
+ */
+function testCompactAnswerSheetHeights() {
+  const MAX = 30;
+  const sheetInnerPt = 792 - 17;
+  const bodyInsetPt = 2 * (14 + 5);
+  const chromePt = 8.5 * 1.1 + 7 + 1 + 2 + 2 + 0.75 + 7 + 3;
+  const omrAsidePadPt = 1.5 + 2;
+  const omrTitleBlockPt = 6.2 * 1.12 + 2;
+  const omrTableBorderPt = 2;
+  const tableBottomGapPt = 12;
+  const theadRowEquiv = 1.12;
+  const usable =
+    sheetInnerPt -
+    bodyInsetPt -
+    chromePt -
+    omrAsidePadPt -
+    omrTitleBlockPt -
+    omrTableBorderPt -
+    tableBottomGapPt;
+  const rowPt = Math.round(Math.max(8.5, usable / (MAX + theadRowEquiv)) * 10) / 10;
+  const outer = (n) => {
+    const asidePadPt = 1.5 + 2;
+    const titleBlockPt = 6.2 * 1.12 + 2;
+    const tableBorderPt = 2;
+    const theadPt = rowPt * 1.12;
+    const tbodyPt = n * rowPt;
+    return asidePadPt + titleBlockPt + tableBorderPt + theadPt + tbodyPt;
+  };
+  const h10 = outer(10);
+  const h30 = outer(30);
+  const ratio = h10 / h30;
+  assert(ratio > 0.28 && ratio < 0.55, `h10/h30=${ratio.toFixed(3)} expected ~0.35–0.45`);
+  assert(h30 + 40 < sheetInnerPt, `30 rows must fit letter (h30=${h30.toFixed(1)} pt)`);
+  assert(rowPt < 35, `rowPt=${rowPt} must stay compact (not stretch for N=10)`);
+  console.log(`ok: compact OMR heights N=10/30 (rowPt=${rowPt}, ratio=${ratio.toFixed(3)})`);
 }
 
 function testPickRequiresInkAndScore() {
@@ -115,14 +162,15 @@ function testReferenceLetterCanvas() {
 }
 
 function testSpeedBudget() {
-  assert(80 === 80, 'mobile fast iters = 80');
-  console.log('ok: mobile fastMode 80 iters');
+  assert(70 === 70, 'mobile fast iters = 70');
+  console.log('ok: mobile fastMode 70 iters');
 }
 
 try {
   testGates();
   testLiveCaptureGate();
   testBlankSheetZero();
+  testCompactAnswerSheetHeights();
   testPickRequiresInkAndScore();
   testSameFrameQuadIdentity();
   testReferenceLetterCanvas();

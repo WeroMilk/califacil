@@ -49,7 +49,8 @@ const ANSWER_SHEET_LAYOUT = {
   alignStripWidthPt: 12,
   /** Separación entre franjas/cuerpo y el borde de la tabla OMR (más aire = tabla de reactivos más pequeña). */
   tableMarginXPt: 26,
-  tableMarginBottomPt: 32,
+  /** Margen inferior compacto: 30 filas deben caber en 1 carta sin estirar. */
+  tableMarginBottomPt: 12,
 } as const;
 
 /** Medidas del bloque OMR de número de control (8 columnas × dígitos 0–9). */
@@ -87,14 +88,28 @@ function answerSheetControlBlockTotalPt(denseOmr: boolean): number {
   return marginBot + blockInner;
 }
 
-/** Alto exterior de `.califacil-omr` (borde a borde) para N filas. */
+/**
+ * Alto de fila compacto: siempre el de capacidad 30 (nunca estira N<30 a página completa).
+ * Examen de 10 → 10 filas pequeñas; de 30 → 30 filas en 1 carta.
+ */
+function answerSheetCompactRowHeightPt(_rowCount?: number): number {
+  return answerSheetCapacityRowHeightPt();
+}
+
+/** Alto de fila cuando la hoja está llena al máximo (30 reactivos). */
+function answerSheetCapacityRowHeightPt(): number {
+  return answerSheetFillRowHeightPt(CALIFACIL_PRINT_MAX_QUESTIONS);
+}
+
+/** Alto exterior de `.califacil-omr` (borde a borde) para N filas compactas. */
 function answerSheetCalifacilOmrOuterHeightPt(rowCount: number): number {
-  const rowPt = answerSheetFillRowHeightPt(rowCount);
+  const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(1, Math.round(rowCount)));
+  const rowPt = answerSheetCompactRowHeightPt(rows);
   const asidePadPt = 1.5 + 2;
   const titleBlockPt = 6.2 * 1.12 + 2;
   const tableBorderPt = 2;
   const theadPt = rowPt * 1.12;
-  const tbodyPt = rowCount * rowPt;
+  const tbodyPt = rows * rowPt;
   return Math.round((asidePadPt + titleBlockPt + tableBorderPt + theadPt + tbodyPt) * 10) / 10;
 }
 
@@ -488,14 +503,14 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       --corner-gap: 5pt;
       --align-strip-width: 12pt;
       --omr-table-margin-x: 26pt;
-      --omr-table-margin-bottom: 32pt;
+      --omr-table-margin-bottom: 12pt;
       --omr-body-inset: calc(var(--corner-size) + var(--corner-gap));
       position: relative;
       width: 100%;
       max-width: none;
-      min-height: 0;
-      height: auto;
-      overflow: visible;
+      min-height: var(--sheet-inner-height);
+      height: var(--sheet-inner-height);
+      overflow: hidden;
       page-break-after: always;
       break-after: page;
     }
@@ -668,14 +683,15 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       box-sizing: border-box;
       display: inline-block;
     }
-    /** Tabla OMR: más compacta dentro del cuerpo para alinear con franjas y esquinas. */
+    /** Tabla OMR compacta: altura = N filas (no estira a llenar la carta). */
     .print-page--omr-answer-sheet .califacil-omr {
       position: relative;
-      flex: 0 1 auto;
+      flex: 0 0 auto;
       display: flex;
       flex-direction: column;
       min-height: 0;
-      max-height: calc(100% - var(--omr-table-margin-bottom));
+      height: auto;
+      max-height: none;
       width: calc(100% - 2 * var(--omr-table-margin-x));
       margin: 0 auto var(--omr-table-margin-bottom);
       padding: 1.5pt 2pt 2pt;
@@ -696,18 +712,18 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
       line-height: 1.12;
     }
     .print-page--omr-answer-sheet .omr-table {
-      flex: 1 1 auto;
+      flex: 0 0 auto;
       width: 100%;
       min-height: 0;
-      height: 100%;
+      height: auto;
       font-size: 7.2pt;
       border: 1pt solid #000;
       border-collapse: collapse;
       table-layout: fixed;
     }
     .print-page--omr-answer-sheet tbody tr.omr-tr {
-      break-inside: auto;
-      page-break-inside: auto;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
     .print-page--omr-answer-sheet .omr-tr--head .omr-th {
       border: 0.75pt solid #000;
@@ -785,8 +801,8 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
     }
     .print-page--omr-answer-sheet.print-page--dense-omr .omr-table {
       font-size: 6.6pt;
-      flex: 1 1 auto;
-      height: 100%;
+      flex: 0 0 auto;
+      height: auto;
       min-height: 0;
     }
     .print-page--omr-answer-sheet.print-page--dense-omr tbody .omr-tr .omr-qnum {
@@ -1136,9 +1152,10 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
         overflow: hidden;
       }
       .print-page--omr-only {
-        height: auto;
-        max-height: none;
-        overflow: visible;
+        height: var(--sheet-inner-height);
+        min-height: var(--sheet-inner-height);
+        max-height: var(--sheet-inner-height);
+        overflow: hidden;
       }
       .print-page--omr-only .print-page-omr-sheet-body {
         height: calc(var(--sheet-inner-height) - 2 * var(--omr-body-inset));
@@ -1146,7 +1163,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
         overflow: visible;
       }
       .print-page--omr-answer-sheet .califacil-omr {
-        flex: 1 1 auto;
+        flex: 0 0 auto;
         min-height: 0;
         height: auto;
         max-height: none;
@@ -1155,8 +1172,8 @@ const PRINT_STYLES = `    @page { size: letter; margin: 3mm 4mm; }
         flex-direction: column;
       }
       .print-page--omr-answer-sheet .omr-table {
-        flex: 1 1 auto;
-        height: 100%;
+        flex: 0 0 auto;
+        height: auto;
         min-height: 0;
       }
     }`;
@@ -1290,7 +1307,9 @@ const ANSWER_SHEET_TABLE_TOP_NUDGE_PT = -16;
 const ANSWER_SHEET_TABLE_HEIGHT_NUDGE_PT = 4;
 
 function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
-  const denseOmr = rowCount > 15;
+  const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(1, Math.round(rowCount)));
+  /** Compacto = siempre tipografía dense (fila = capacidad 30). */
+  const denseOmr = true;
   const pageWPt = CALIFACIL_ANSWER_SHEET_PAGE.widthPt;
   const pageHPt = CALIFACIL_ANSWER_SHEET_PAGE.innerHeightPt;
   const { cornerSizePt, cornerGapPt, alignStripWidthPt, tableMarginXPt } = ANSWER_SHEET_LAYOUT;
@@ -1301,14 +1320,14 @@ function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetO
   const controlTotalPt = CALIFACIL_ANSWER_SHEET_INCLUDES_CONTROL_NUMBER
     ? answerSheetControlBlockTotalPt(denseOmr)
     : 0;
-  const omrHeightPt = answerSheetCalifacilOmrOuterHeightPt(rowCount);
+  const omrHeightPt = answerSheetCalifacilOmrOuterHeightPt(rows);
 
   const tableTopPt = bodyInsetPt + chromePt + controlTotalPt + ANSWER_SHEET_TABLE_TOP_NUDGE_PT;
   const tableLeftPt = sideMarginPt + tableMarginXPt;
   const tableWidthPt = pageWPt - 2 * sideMarginPt - 2 * tableMarginXPt;
   const tableHeightPt = omrHeightPt + ANSWER_SHEET_TABLE_HEIGHT_NUDGE_PT;
 
-  const rowPt = answerSheetFillRowHeightPt(rowCount);
+  const rowPt = answerSheetCompactRowHeightPt(rows);
   const titleStripPt = 1.5 + 6.2 * 1.12 + 2 + 1 + rowPt * 1.12;
   const titleStripRatio = Math.max(
     0.028,
@@ -1559,12 +1578,40 @@ export type CalifacilAnswerSheetOmrTemplate = {
 /**
  * Plantilla OMR normalizada (0–1) alineada con la hoja de respuestas impresa.
  * Debe usarse tras enderezar la captura con los 4 fiduciales de esquina.
+ * Altura de tabla = N filas compactas (capacidad 30), no stretch a página completa.
  */
 export function buildCalifacilAnswerSheetOmrTemplate(
   rowCount: number
 ): CalifacilAnswerSheetOmrTemplate {
   const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(2, Math.round(rowCount)));
   return computeAnswerSheetPageTemplate(rows);
+}
+
+/**
+ * Ratios de marco OMR para regressión: N=10 debe ser ~1/3 de la altura de N=30
+ * (misma fila compacta; solo N filas dibujadas).
+ */
+export function assertCompactAnswerSheetLayoutRatios(): {
+  t10: CalifacilAnswerSheetOmrTemplate;
+  t30: CalifacilAnswerSheetOmrTemplate;
+} {
+  const t10 = buildCalifacilAnswerSheetOmrTemplate(10);
+  const t30 = buildCalifacilAnswerSheetOmrTemplate(30);
+  const heightRatio = t10.tableHeightRatio / Math.max(1e-6, t30.tableHeightRatio);
+  if (!(heightRatio > 0.28 && heightRatio < 0.55)) {
+    throw new Error(
+      `Compact layout broken: h10/h30=${heightRatio.toFixed(3)} (expected ~0.35–0.45)`
+    );
+  }
+  if (t30.tableHeightRatio > 0.92) {
+    throw new Error(
+      `30-row table too tall for one letter page: ${t30.tableHeightRatio.toFixed(3)}`
+    );
+  }
+  if (Math.abs(t10.tableLeftRatio - t30.tableLeftRatio) > 0.001) {
+    throw new Error('tableLeftRatio must match for 10 and 30');
+  }
+  return { t10, t30 };
 }
 
 function omrSheetMetaRowHtml(): string {
@@ -1583,10 +1630,11 @@ function buildOmrAnswerSheetSection(
 ): string {
   const omrHtml = answerSheetOmrTableHtml(questions, omrCols);
   const rowCount = questions.length;
-  const denseOmrClass = rowCount > 15 ? ' print-page--dense-omr' : '';
+  /** Filas siempre a tamaño capacidad-30 → tipografía dense. */
+  const denseOmrClass = ' print-page--dense-omr';
   const sheetNote = `Hoja de respuestas · Reactivos 1–${rowCount}`;
 
-  const rowPt = answerSheetFillRowHeightPt(rowCount);
+  const rowPt = answerSheetCompactRowHeightPt(rowCount);
   const bubblePt = Math.round(Math.min(rowPt - 3, Math.max(5.5, rowPt * 0.5)) * 10) / 10;
 
   return `
