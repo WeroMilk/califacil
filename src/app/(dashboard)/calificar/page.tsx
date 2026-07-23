@@ -33,6 +33,7 @@ import {
   chunkQuestions,
   CALIFACIL_PRINT_MAX_QUESTIONS,
   examSupportsCalifacilOmr,
+  getCalifacilOmrSheetQuestions,
 } from '@/lib/printExam';
 import {
   classifyAnswerSheetFormat,
@@ -765,18 +766,20 @@ export default function CalificarPage() {
   );
 
   const questions = useMemo(() => exam?.questions ?? [], [exam]);
+  const omrQuestions = useMemo(() => getCalifacilOmrSheetQuestions(questions), [questions]);
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
   const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
   const virtualKeyCorrectIndexByQuestionId = virtualKeyMaps.indexByQuestionId;
+  /** Mismas hojas MC que la impresión (N filas de bolitas por carta, máx. 30). */
   const sheets = useMemo(
     () =>
-      questions.length > 0
-        ? chunkQuestions(questions, CALIFACIL_PRINT_MAX_QUESTIONS)
+      omrQuestions.length > 0
+        ? chunkQuestions(omrQuestions, CALIFACIL_PRINT_MAX_QUESTIONS)
         : [],
-    [questions]
+    [omrQuestions]
   );
   const totalSheets = sheets.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);

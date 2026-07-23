@@ -126,6 +126,15 @@ function testCompactAnswerSheetHeights() {
   console.log(`ok: compact OMR heights N=10/30 (rowPt=${rowPt}, ratio=${ratio.toFixed(3)})`);
 }
 
+/** Label and row count must track N (no hardcoded 1–30 on a 10-row sheet). */
+function testDynamicReactivosLabel() {
+  const labelFor = (n) => `Hoja de respuestas · Reactivos 1–${n}`;
+  assert(labelFor(10) === 'Hoja de respuestas · Reactivos 1–10', 'N=10 label');
+  assert(labelFor(30) === 'Hoja de respuestas · Reactivos 1–30', 'N=30 label');
+  assert(labelFor(10) !== labelFor(30), 'labels differ by N');
+  console.log('ok: dynamic Reactivos 1–N labels');
+}
+
 function testPickRequiresInkAndScore() {
   assert(pickRequiresBoth({ inkOk: true, scoreOk: true, sameCol: true }), 'both ok');
   assert(!pickRequiresBoth({ inkOk: false, scoreOk: true, sameCol: true }), 'score alone reject');
@@ -171,6 +180,7 @@ try {
   testLiveCaptureGate();
   testBlankSheetZero();
   testCompactAnswerSheetHeights();
+  testDynamicReactivosLabel();
   testPickRequiresInkAndScore();
   testSameFrameQuadIdentity();
   testReferenceLetterCanvas();

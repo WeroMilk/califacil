@@ -237,14 +237,20 @@ export function examSupportsCalifacilOmr(questions: Question[]): boolean {
   return questions.some(isGradableMultipleChoiceQuestion);
 }
 
+/**
+ * Preguntas MC que van a la hoja de bolitas / Calificar (mismo orden).
+ * Una hoja carta soporta hasta {@link CALIFACIL_PRINT_MAX_QUESTIONS} filas.
+ */
+export function getCalifacilOmrSheetQuestions(questions: Question[]): Question[] {
+  return questions.filter(isGradableMultipleChoiceQuestion);
+}
+
 export function califacilOmrColumnCount(questions: Question[]): number {
-  const mc = questions.filter(isGradableMultipleChoiceQuestion);
+  const mc = getCalifacilOmrSheetQuestions(questions);
   if (!mc.length) return 0;
   return Math.min(
     5,
-    Math.max(
-      ...mc.map((q) => Math.min(5, normalizeQuestionOptions(q.options).length))
-    )
+    Math.max(...mc.map((q) => Math.min(5, normalizeQuestionOptions(q.options).length)))
   );
 }
 
@@ -284,8 +290,12 @@ function answerSheetControlNumberHtml(
     </div>`;
 }
 
-function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string {
-  const rowCount = questions.length;
+function answerSheetOmrTableHtml(
+  questions: Question[],
+  omrCols: number,
+  questionOffset = 0
+): string {
+  const rowCount = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, questions.length);
   const headerCells: string[] = [
     `<th class="omr-qnum omr-th" scope="col"><span class="omr-th-num">N.º</span></th>`,
   ];
@@ -300,13 +310,8 @@ function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string
   const rows: string[] = [];
   for (let i = 0; i < rowCount; i++) {
     const q = questions[i];
-    const qNum = i + 1;
-    if (!q || !isGradableMultipleChoiceQuestion(q)) {
-      rows.push(
-        `<tr class="omr-tr omr-tr--inactive"><td class="omr-qnum">${qNum}</td><td class="omr-inactive" colspan="${omrCols}">—</td></tr>`
-      );
-      continue;
-    }
+    const qNum = questionOffset + i + 1;
+    if (!q || !isGradableMultipleChoiceQuestion(q)) continue;
     const nOpts = Math.min(omrCols, normalizeQuestionOptions(q.options).length);
     const cells: string[] = [];
     for (let c = 0; c < omrCols; c++) {
@@ -324,7 +329,7 @@ function answerSheetOmrTableHtml(questions: Question[], omrCols: number): string
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
       <p class="omr-title">Marca <strong>un círculo</strong> por reactivo con bolígrafo <strong>azul o negro</strong> (tinta oscura).</p>
-      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-version="9">
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rows.length}" data-califacil-omr-version="9">
         ${thead}
         <tbody>${rows.join('')}</tbody>
       </table>
@@ -1626,13 +1631,22 @@ function omrSheetMetaRowHtml(): string {
 function buildOmrAnswerSheetSection(
   questions: Question[],
   title: string,
-  omrCols: number
+  omrCols: number,
+  questionOffset = 0
 ): string {
-  const omrHtml = answerSheetOmrTableHtml(questions, omrCols);
-  const rowCount = questions.length;
-  /** Filas siempre a tamaño capacidad-30 → tipografía dense. */
+  const sheetQs = getCalifacilOmrSheetQuestions(questions).slice(
+    0,
+    CALIFACIL_PRINT_MAX_QUESTIONS
+  );
+  const rowCount = sheetQs.length;
+  if (rowCount === 0 || omrCols <= 0) return '';
+
+  const omrHtml = answerSheetOmrTableHtml(sheetQs, omrCols, questionOffset);
+  /** Filas a tamaño capacidad-30: N=10 compacta arriba; N=30 llena la carta. */
   const denseOmrClass = ' print-page--dense-omr';
-  const sheetNote = `Hoja de respuestas · Reactivos 1–${rowCount}`;
+  const startNum = questionOffset + 1;
+  const endNum = questionOffset + rowCount;
+  const sheetNote = `Hoja de respuestas · Reactivos ${startNum}–${endNum}`;
 
   const rowPt = answerSheetCompactRowHeightPt(rowCount);
   const bubblePt = Math.round(Math.min(rowPt - 3, Math.max(5.5, rowPt * 0.5)) * 10) / 10;
@@ -1666,11 +1680,20 @@ export function buildPrintExamHtml(
 
   const omrCols = califacilOmrColumnCount(exam.questions);
   const questions = exam.questions;
+  const omrQuestions = getCalifacilOmrSheetQuestions(questions);
+  const omrChunks = chunkQuestions(omrQuestions, CALIFACIL_PRINT_MAX_QUESTIONS);
 
   const questionPagesHtml = buildQuestionPageSection(questions, title, includeAnswerKey);
 
-  const omrPagesHtml =
-    omrCols > 0 ? buildOmrAnswerSheetSection(questions, title, omrCols) : '';
+  let omrPagesHtml = '';
+  if (omrCols > 0 && omrQuestions.length > 0) {
+    let offset = 0;
+    for (const chunk of omrChunks) {
+      if (!chunk.length) continue;
+      omrPagesHtml += buildOmrAnswerSheetSection(chunk, title, omrCols, offset);
+      offset += chunk.length;
+    }
+  }
 
   const pagesHtml = questionPagesHtml + omrPagesHtml;
 
