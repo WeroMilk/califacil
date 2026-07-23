@@ -78,8 +78,8 @@ export default function LoginPage() {
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain bg-white/35 backdrop-blur-[2px]">
       <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
         <div
-          className="mx-auto flex w-full max-w-5xl items-center justify-center px-4 pb-2.5 sm:px-6 sm:pb-3 lg:px-8"
-          style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+          className="mx-auto flex w-full max-w-5xl items-center justify-center px-4 pb-1.5 sm:px-6 sm:pb-2 lg:px-8"
+          style={{ paddingTop: 'max(0.25rem, env(safe-area-inset-top, 0px))' }}
         >
           <BrandWordmark
             priority
@@ -90,7 +90,7 @@ export default function LoginPage() {
       </header>
 
       <main
-        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center justify-start px-4 pt-4 sm:px-6 sm:pt-6 lg:px-8 lg:pt-8"
+        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center justify-start px-4 pt-2 sm:px-6 sm:pt-3 lg:px-8 lg:pt-4"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
       >
         <Card className="w-full max-w-md shrink-0 overflow-hidden rounded-2xl border-0 shadow-xl sm:max-w-lg">
