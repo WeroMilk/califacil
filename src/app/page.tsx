@@ -33,7 +33,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-        <section className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
+        <section className="mx-auto flex min-h-full w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
           <div className="flex w-full max-w-3xl shrink-0 flex-col items-center self-center text-center">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-xs lg:text-sm">
               Plataforma para Docentes
@@ -68,45 +68,46 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Cajas centradas en el espacio vertical entre CTAs y footer */}
-          <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center py-4 sm:py-5">
-            <div className="grid w-full max-w-4xl grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
-              <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
-                  <Sparkles className="h-4 w-4" />
-                </div>
-                <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
-                  Preguntas con IA
-                </h2>
-                <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
-                  Genera reactivos a partir de temas y tipos de pregunta que elijas.
-                </p>
-              </article>
-              <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
-                  <QrCode className="h-4 w-4" />
-                </div>
-                <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
-                  Acceso por QR
-                </h2>
-                <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
-                  Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
-                  aula.
-                </p>
-              </article>
-              <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-200/70 text-orange-800">
-                  <BarChart3 className="h-4 w-4" />
-                </div>
-                <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
-                  Resultados claros
-                </h2>
-                <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
-                  Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
-                </p>
-              </article>
-            </div>
+          <div className="min-h-0 flex-1" aria-hidden />
+
+          <div className="grid w-full max-w-4xl shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Preguntas con IA
+              </h2>
+              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+                Genera reactivos a partir de temas y tipos de pregunta que elijas.
+              </p>
+            </article>
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
+                <QrCode className="h-4 w-4" />
+              </div>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Acceso por QR
+              </h2>
+              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+                Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
+                aula.
+              </p>
+            </article>
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-200/70 text-orange-800">
+                <BarChart3 className="h-4 w-4" />
+              </div>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Resultados claros
+              </h2>
+              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+                Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
+              </p>
+            </article>
           </div>
+
+          <div className="min-h-0 flex-1" aria-hidden />
         </section>
       </main>
 

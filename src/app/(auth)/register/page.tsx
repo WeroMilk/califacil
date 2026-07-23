@@ -126,7 +126,7 @@ export default function RegisterPage() {
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain bg-white/35 backdrop-blur-[2px]">
       <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
         <div
-          className="mx-auto flex w-full max-w-5xl items-center justify-center px-4 pb-1.5 sm:px-6 sm:pb-2 lg:px-8"
+          className="mx-auto flex w-full max-w-5xl items-center justify-center px-4 pb-1 sm:px-6 sm:pb-1.5 lg:px-8"
           style={{ paddingTop: 'max(0.25rem, env(safe-area-inset-top, 0px))' }}
         >
           <BrandWordmark
@@ -138,10 +138,10 @@ export default function RegisterPage() {
       </header>
 
       <main
-        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center justify-start px-4 pt-2 sm:px-6 sm:pt-3 lg:px-8 lg:pt-4"
+        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center px-4 pt-1 sm:px-6 sm:pt-2 lg:px-8"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
       >
-        <Card className="flex max-h-[min(100%,calc(100dvh-7.5rem))] w-full max-w-md shrink-0 flex-col overflow-hidden rounded-2xl border-0 shadow-xl sm:max-h-none sm:max-w-lg">
+        <Card className="flex max-h-[min(100%,calc(100dvh-6.5rem))] w-full max-w-md shrink-0 flex-col overflow-hidden rounded-2xl border-0 shadow-xl sm:max-h-none sm:max-w-lg">
           <CardHeader className="shrink-0 space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
             <CardTitle className="text-center text-xl font-bold sm:text-2xl">
               {pendingVerification ? 'Verificar correo' : 'Crear Cuenta'}
@@ -314,6 +314,7 @@ export default function RegisterPage() {
             </p>
           </CardContent>
         </Card>
+        <div className="min-h-0 flex-1" aria-hidden />
       </main>
     </div>
   );
