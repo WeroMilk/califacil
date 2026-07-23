@@ -33,20 +33,20 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-        <section className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+        <section className="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center gap-5 px-4 py-5 sm:gap-6 sm:px-6 sm:py-7 lg:gap-7 lg:px-8 lg:py-8">
           <div className="flex w-full max-w-3xl flex-col items-center text-center">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-xs lg:text-sm">
               Plataforma para Docentes
             </p>
-            <h1 className="mt-2 max-w-[22ch] text-balance text-[clamp(1.55rem,5.2vw,2.75rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:mt-3 sm:max-w-none">
+            <h1 className="mt-2 max-w-[22ch] text-balance text-[clamp(1.55rem,5.2vw,2.75rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:mt-2.5 sm:max-w-none">
               Crea tus exámenes, imprime y califica TODO el mismo día.
             </h1>
-            <p className="mx-auto mt-3 max-w-xl text-pretty text-[clamp(0.95rem,2vw,1.15rem)] leading-relaxed text-gray-600 sm:mt-4">
+            <p className="mx-auto mt-2.5 max-w-xl text-pretty text-[clamp(0.95rem,2vw,1.15rem)] leading-relaxed text-gray-600 sm:mt-3">
               Crea evaluaciones personalizadas, compártelas con tus grupos y revisa resultados en un solo
               lugar. Sin complicaciones.
             </p>
 
-            <div className="mt-5 flex w-full max-w-md flex-col items-stretch gap-2.5 sm:mt-6 sm:max-w-none sm:flex-row sm:items-center sm:justify-center sm:gap-3">
+            <div className="mt-4 flex w-full max-w-md flex-col items-stretch gap-2.5 sm:mt-5 sm:max-w-none sm:flex-row sm:items-center sm:justify-center sm:gap-3">
               <Button
                 size="sm"
                 className="h-11 w-full text-sm font-semibold sm:h-11 sm:w-auto sm:min-w-[11.5rem] sm:px-6 lg:h-12 lg:min-w-[12.5rem] lg:text-base"
@@ -68,30 +68,37 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mt-8 grid w-full max-w-4xl grid-cols-1 gap-3 sm:mt-10 sm:grid-cols-3 sm:gap-4">
-            <article className="flex flex-col items-center rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-center shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+          <div className="grid w-full max-w-4xl grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
                 <Sparkles className="h-4 w-4" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">Preguntas con IA</h2>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Preguntas con IA
+              </h2>
               <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
                 Genera reactivos a partir de temas y tipos de pregunta que elijas.
               </p>
             </article>
-            <article className="flex flex-col items-center rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-center shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
                 <QrCode className="h-4 w-4" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">Acceso por QR</h2>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Acceso por QR
+              </h2>
               <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
-                Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el aula.
+                Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
+                aula.
               </p>
             </article>
-            <article className="flex flex-col items-center rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-center shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
+            <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-200/70 text-orange-800">
                 <BarChart3 className="h-4 w-4" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">Resultados claros</h2>
+              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+                Resultados claros
+              </h2>
               <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
                 Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
               </p>
@@ -100,7 +107,7 @@ export default function LandingPage() {
         </section>
       </main>
 
-      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-6 sm:pt-3 sm:pb-6 lg:px-8">
+      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-6 sm:pt-3 sm:pb-5 lg:px-8">
         <div className="mx-auto flex max-w-5xl flex-col items-center">
           <BrandWordmark
             href={false}
