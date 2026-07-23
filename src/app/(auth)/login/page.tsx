@@ -76,103 +76,102 @@ export default function LoginPage() {
 
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-x-hidden overflow-y-auto overscroll-contain bg-white/35 backdrop-blur-[2px]">
-      <div
-        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 sm:px-6 lg:px-10"
-        style={{
-          paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))',
-          paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
-        }}
-      >
-        {/* Bloque logo + tarjeta: compacto y centrado en móvil (sin huecos enormes). */}
-        <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center sm:max-w-lg md:max-w-xl lg:max-w-2xl">
-          <div className="mx-auto flex w-full shrink-0 justify-center">
-            <BrandWordmark
-              priority
-              className="translate-x-1.5 justify-center sm:translate-x-2 md:translate-x-2.5"
-              imgClassName="h-[4.75rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
-            />
-          </div>
-
-          <Card className="mt-4 w-full shrink-0 overflow-hidden rounded-2xl border-0 shadow-xl sm:mt-5">
-            <CardHeader className="space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
-              <CardTitle className="text-center text-xl font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
-              <CardDescription className="text-center text-xs sm:text-sm">
-                Ingresa tus credenciales para acceder a tu cuenta
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 px-4 pb-5 pt-0 sm:space-y-4 sm:px-6 sm:pb-6">
-              <form onSubmit={handleSubmit} className="space-y-3.5 sm:space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="email" className="text-xs sm:text-sm">
-                    Correo electrónico
-                  </Label>
-                  <div className="relative">
-                    <Mail className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
-                    <Input
-                      id="email"
-                      type="email"
-                      placeholder="maestro@escuela.edu"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="h-11 pl-9 text-sm sm:h-10"
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="password" className="text-xs sm:text-sm">
-                    Contraseña
-                  </Label>
-                  <div className="relative">
-                    <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
-                    <Input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="h-11 pl-9 pr-10 text-sm sm:h-10"
-                      required
-                    />
-                    <button
-                      type="button"
-                      aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-                      onClick={() => setShowPassword((prev) => !prev)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-orange-500 transition-colors hover:text-orange-600"
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4" />
-                      ) : (
-                        <Eye className="h-4 w-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-                <Button
-                  type="submit"
-                  className="h-11 w-full bg-orange-600 text-sm font-semibold hover:bg-orange-700 sm:h-10"
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Iniciando sesión...
-                    </>
-                  ) : (
-                    'Iniciar Sesión'
-                  )}
-                </Button>
-              </form>
-              <p className="text-center text-xs text-gray-600 sm:text-sm">
-                ¿No tienes cuenta?{' '}
-                <Link href="/register" className="font-medium text-orange-600 hover:underline">
-                  Regístrate aquí
-                </Link>
-              </p>
-            </CardContent>
-          </Card>
+      <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
+        <div
+          className="mx-auto flex w-full max-w-5xl items-center justify-center px-4 pb-2 sm:px-6 sm:pb-2.5 lg:px-8"
+          style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
+        >
+          <BrandWordmark
+            priority
+            className="justify-center"
+            imgClassName="h-8 w-auto max-w-[min(100%,14rem)] object-contain sm:h-11 sm:max-w-[22rem] lg:h-12 lg:max-w-[26rem]"
+          />
         </div>
-      </div>
+      </header>
+
+      <main
+        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center justify-start px-4 pt-5 sm:px-6 sm:pt-8 lg:px-8 lg:pt-10"
+        style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
+      >
+        <Card className="w-full max-w-md shrink-0 overflow-hidden rounded-2xl border-0 shadow-xl sm:max-w-lg">
+          <CardHeader className="space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
+            <CardTitle className="text-center text-xl font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
+            <CardDescription className="text-center text-xs sm:text-sm">
+              Ingresa tus credenciales para acceder a tu cuenta
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 px-4 pb-5 pt-0 sm:space-y-4 sm:px-6 sm:pb-6">
+            <form onSubmit={handleSubmit} className="space-y-3.5 sm:space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="email" className="text-xs sm:text-sm">
+                  Correo electrónico
+                </Label>
+                <div className="relative">
+                  <Mail className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="maestro@escuela.edu"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="h-11 pl-9 text-sm sm:h-10"
+                    required
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="password" className="text-xs sm:text-sm">
+                  Contraseña
+                </Label>
+                <div className="relative">
+                  <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="h-11 pl-9 pr-10 text-sm sm:h-10"
+                    required
+                  />
+                  <button
+                    type="button"
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-orange-500 transition-colors hover:text-orange-600"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+              <Button
+                type="submit"
+                className="h-11 w-full bg-orange-600 text-sm font-semibold hover:bg-orange-700 sm:h-10"
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Iniciando sesión...
+                  </>
+                ) : (
+                  'Iniciar Sesión'
+                )}
+              </Button>
+            </form>
+            <p className="text-center text-xs text-gray-600 sm:text-sm">
+              ¿No tienes cuenta?{' '}
+              <Link href="/register" className="font-medium text-orange-600 hover:underline">
+                Regístrate aquí
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      </main>
     </div>
   );
 }
